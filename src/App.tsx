@@ -560,7 +560,7 @@ function HomeScreen({
         <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Active worksheet</p>
           <h2 className="mt-1 text-xl font-bold text-slate-900">{definition.title}</h2>
-          <p className="mt-1 text-sm text-slate-600">{definition.id} · version {definition.version} · {definition.pages.length} pages</p>
+          <p className="mt-1 text-sm text-slate-600">{definition.id} -� version {definition.version} -� {definition.pages.length} pages</p>
           <p className="mt-2 text-sm text-slate-600">{definitionStatus}</p>
           <div className="mt-4 flex flex-wrap gap-3">
             <button onClick={clearWorksheetDefinition} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400">
@@ -1091,29 +1091,29 @@ function SystemGuidePage() {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-bold text-slate-900">What the system does</h2>
           <ul className="mt-4 space-y-3 text-sm text-slate-600">
-            <li>• Builds interactive worksheets from structured JSON.</li>
-            <li>• Supports sequential or free navigation through pages.</li>
-            <li>• Captures student responses and persists autosave sessions.</li>
-            <li>• Exports worksheet definitions and response JSON.</li>
-            <li>• Can export the learner JSON automatically on Finish and show a teacher-authored completion popup.</li>
-            <li>• Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
-            <li>• Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
-            <li>• Organises synthesis and report output into page-based sections using the worksheet's existing page structure.</li>
-            <li>• Supports radar, quadrant, SWOT, and media-based prompts.</li>
+            <li>��� Builds interactive worksheets from structured JSON.</li>
+            <li>��� Supports sequential or free navigation through pages.</li>
+            <li>��� Captures student responses and persists autosave sessions.</li>
+            <li>��� Exports worksheet definitions and response JSON.</li>
+            <li>��� Can export the learner JSON automatically on Finish and show a teacher-authored completion popup.</li>
+            <li>��� Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
+            <li>��� Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
+            <li>��� Organises synthesis and report output into page-based sections using the worksheet's existing page structure.</li>
+            <li>��� Supports radar, quadrant, SWOT, and media-based prompts.</li>
           </ul>
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-bold text-slate-900">AI authoring guidance</h2>
           <ul className="mt-4 space-y-3 text-sm text-slate-600">
-            <li>• Keep each page in a clear learning sequence.</li>
-            <li>• Use descriptive IDs like block-intro or block-matrix-1.</li>
-            <li>• Prefer stable labels and simple option arrays for choice blocks.</li>
-            <li>• Put media URLs in config.videoUrl or config.imageUrl.</li>
-            <li>• Configure `synthesis.groupByBlockId` and `synthesis.responseLabelBlockId` when you want grouped synthesis output.</li>
-            <li>• Configure `settings.completionMessage` when learners need a custom hand-in or next-step popup after finishing.</li>
-            <li>• For synthesis, use radar, quadrant, matrix, SWOT, or verdict blocks where possible.</li>
-            <li>• Keep definitions versioned for future schema updates.</li>
+            <li>��� Keep each page in a clear learning sequence.</li>
+            <li>��� Use descriptive IDs like block-intro or block-matrix-1.</li>
+            <li>��� Prefer stable labels and simple option arrays for choice blocks.</li>
+            <li>��� Put media URLs in config.videoUrl or config.imageUrl.</li>
+            <li>��� Configure `synthesis.groupByBlockId` and `synthesis.responseLabelBlockId` when you want grouped synthesis output.</li>
+            <li>��� Configure `settings.completionMessage` when learners need a custom hand-in or next-step popup after finishing.</li>
+            <li>��� For synthesis, use radar, quadrant, matrix, SWOT, or verdict blocks where possible.</li>
+            <li>��� Keep definitions versioned for future schema updates.</li>
           </ul>
         </section>
       </div>
@@ -1124,17 +1124,17 @@ function SystemGuidePage() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Learner flow</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>• Finish exports the current response JSON automatically.</li>
-              <li>• After export, the learner sees a completion popup.</li>
-              <li>• The popup can tell learners where to upload or hand in the JSON file.</li>
+              <li>��� Finish exports the current response JSON automatically.</li>
+              <li>��� After export, the learner sees a completion popup.</li>
+              <li>��� The popup can tell learners where to upload or hand in the JSON file.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Worksheet setting</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>• Store custom popup copy in `settings.completionMessage`.</li>
-              <li>• Leave it blank to use the default completion text.</li>
-              <li>• This is a worksheet-level setup option, not a page-level option.</li>
+              <li>��� Store custom popup copy in `settings.completionMessage`.</li>
+              <li>��� Leave it blank to use the default completion text.</li>
+              <li>��� This is a worksheet-level setup option, not a page-level option.</li>
             </ul>
           </div>
         </div>
@@ -1146,22 +1146,22 @@ function SystemGuidePage() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Builder settings</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>• Group responses by: selects the response-producing block used as the synthesis grouping key.</li>
-              <li>• Group label: sets the human-readable name used across synthesis and report views.</li>
-              <li>• Label individual responses by: chooses the block used to name each submission inside a synthesis group.</li>
-              <li>• If a referenced block is deleted, the builder warns first and clears the broken synthesis setting if deletion proceeds.</li>
-              <li>• Report hierarchy stays schema-light: grouped responses render first by synthesis key, then by worksheet page, then by block.</li>
+              <li>��� Group responses by: selects the response-producing block used as the synthesis grouping key.</li>
+              <li>��� Group label: sets the human-readable name used across synthesis and report views.</li>
+              <li>��� Label individual responses by: chooses the block used to name each submission inside a synthesis group.</li>
+              <li>��� If a referenced block is deleted, the builder warns first and clears the broken synthesis setting if deletion proceeds.</li>
+              <li>��� Report hierarchy stays schema-light: grouped responses render first by synthesis key, then by worksheet page, then by block.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Import behavior</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>• Multiple responses with the same grouping value stay separate and also generate an aggregate view.</li>
-              <li>• Grouping values are normalized by trimming and collapsing whitespace and comparing case-insensitively.</li>
-              <li>• Missing grouping values are placed under Unspecified.</li>
-              <li>• If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
-              <li>• Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
-              <li>• Only worksheet pages with meaningful response data become report sections; procedural-only pages remain hidden unless they contain evidence worth showing.</li>
+              <li>��� Multiple responses with the same grouping value stay separate and also generate an aggregate view.</li>
+              <li>��� Grouping values are normalized by trimming and collapsing whitespace and comparing case-insensitively.</li>
+              <li>��� Missing grouping values are placed under Unspecified.</li>
+              <li>��� If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
+              <li>��� Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
+              <li>��� Only worksheet pages with meaningful response data become report sections; procedural-only pages remain hidden unless they contain evidence worth showing.</li>
             </ul>
           </div>
         </div>
@@ -1173,19 +1173,19 @@ function SystemGuidePage() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Hierarchy</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>• Level 1: synthesis group, such as an AI tool or other configured grouping value.</li>
-              <li>• Level 2: worksheet page heading pulled from `page.title`.</li>
-              <li>• Level 3: response block cards shown inside the owning page section.</li>
-              <li>• This preserves conceptual grouping without adding new report schema.</li>
+              <li>��� Level 1: synthesis group, such as an AI tool or other configured grouping value.</li>
+              <li>��� Level 2: worksheet page heading pulled from `page.title`.</li>
+              <li>��� Level 3: response block cards shown inside the owning page section.</li>
+              <li>��� This preserves conceptual grouping without adding new report schema.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Rendering rules</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>• Content, section, and URL blocks are used only as optional context, not as response cards.</li>
-              <li>• Related matrix blocks stay together inside the same worksheet page section.</li>
-              <li>• SWOT stays grouped as one conceptual block rather than four unrelated cards.</li>
-              <li>• The class PDF export follows the same group → page section → block hierarchy.</li>
+              <li>��� Content, section, and URL blocks are used only as optional context, not as response cards.</li>
+              <li>��� Related matrix blocks stay together inside the same worksheet page section.</li>
+              <li>��� SWOT stays grouped as one conceptual block rather than four unrelated cards.</li>
+              <li>��� The class PDF export follows the same group ��� page section ��� block hierarchy.</li>
             </ul>
           </div>
         </div>
@@ -1222,11 +1222,11 @@ function SystemGuidePage() {
         <div className="mt-4 space-y-3 text-sm text-slate-600">
           <p>Load the AI Tool Lab worksheet JSON first, then import the sample student response files from the grouped comparison folder.</p>
           <ul className="space-y-2">
-            <li>• Worksheet: public/worksheets/ai-tool-lab.json</li>
-            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-1.json</li>
-            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-4.json</li>
-            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-2.json</li>
-            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-5.json</li>
+            <li>��� Worksheet: public/worksheets/ai-tool-lab.json</li>
+            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-1.json</li>
+            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-4.json</li>
+            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-2.json</li>
+            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-5.json</li>
           </ul>
           <p>This set creates two synthesis groups, Diffit and NotebookLM, each with two individual evaluations and one aggregate view.</p>
         </div>
@@ -1358,7 +1358,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     const labels = missingRequiredBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
     const remainingCount = Math.max(0, missingRequiredBlocks.length - labels.length)
     return `Please complete the required items before continuing:
-${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
+${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
   }, [currentPage, missingRequiredBlocks])
 
   useEffect(() => {
@@ -1520,42 +1520,192 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
   const handleExportPdf = () => {
     const document = buildDocument()
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
-    let y = 52
-    pdf.setFontSize(21)
-    pdf.text(definition.title, 52, y)
-    y += 30
-    pdf.setFontSize(11)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}`, 52, y)
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    const generatedAt = new Date().toLocaleString()
+    const responseBlocks = getResponseProducingBlocks(definition).filter((block) => getBlockAudience(block) === 'student')
+    const answeredCount = responseBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id])).length
+    let y = 42
+
+    const ensurePdfSpace = (height: number) => {
+      if (y + height <= pageHeight - 42) return
+      pdf.addPage()
+      y = 52
+    }
+
+    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
+      const lines = pdf.splitTextToSize(text, width)
+      pdf.text(lines, x, top)
+      return lines.length * lineHeight
+    }
+
+    const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
+      const innerWidth = pageWidth - 104
+      const lineHeight = 12
+      const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
+      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
+      ensurePdfSpace(cardHeight + 10)
+      if (tone === 'section') {
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(203, 213, 225)
+      } else {
+        pdf.setFillColor(255, 255, 255)
+        pdf.setDrawColor(226, 232, 240)
+      }
+      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(11)
+      pdf.text(title, 64, y + 18)
+      pdf.setTextColor(71, 85, 105)
+      pdf.setFontSize(9)
+      pdf.text(wrappedLines, 64, y + 34)
+      y += cardHeight + 10
+    }
+
+    pdf.setFillColor(15, 23, 42)
+    pdf.rect(0, 0, pageWidth, 82, 'F')
+    pdf.setTextColor(255, 255, 255)
+    pdf.setFontSize(22)
+    pdf.text(`${definition.title} — Worksheet Response`, 52, 42)
+    pdf.setFontSize(10)
+    pdf.setTextColor(191, 219, 254)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   •   Answered items: ${answeredCount}/${responseBlocks.length}   •   Generated: ${generatedAt}`, 52, 62)
+
+    y = 106
+    pdf.setTextColor(15, 23, 42)
+    pdf.setFontSize(14)
+    pdf.text('Response overview', 52, y)
     y += 18
-    pdf.text(`Subject: ${document.subject || 'Not recorded'}`, 52, y)
-    y += 18
-    pdf.text(`Group: ${document.group || 'Not recorded'}`, 52, y)
-    y += 18
-    pdf.text(`Generated: ${new Date().toLocaleString()}`, 52, y)
-    y += 24
+
+    const overviewCards = [
+      { label: 'Subject', value: document.subject || 'Not recorded' },
+      { label: 'Group', value: document.group || 'Not recorded' },
+      { label: 'Response ID', value: document.responseId.slice(0, 12) },
+    ]
+    overviewCards.forEach((card, index) => {
+      const width = 160
+      const x = 52 + index * (width + 18)
+      pdf.setFillColor(248, 250, 252)
+      pdf.setDrawColor(226, 232, 240)
+      pdf.roundedRect(x, y, width, 46, 8, 8, 'FD')
+      pdf.setTextColor(100, 116, 139)
+      pdf.setFontSize(8)
+      pdf.text(card.label.toUpperCase(), x + 12, y + 15)
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(11)
+      const valueLines = pdf.splitTextToSize(card.value, width - 24).slice(0, 2)
+      pdf.text(valueLines, x + 12, y + 30)
+    })
+    y += 68
 
     definition.pages.forEach((page) => {
-      if (y > 700) {
-        pdf.addPage()
-        y = 52
+      const visibleBlocks = page.blocks.filter((block) => getBlockAudience(block) === 'student' && isResponseProducingBlock(block))
+      const answeredBlocks = visibleBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
+      const contextText = getPageContextText(page)
+
+      if (answeredBlocks.length === 0 && !contextText) return
+
+      ensurePdfSpace(80)
+      pdf.setFillColor(248, 250, 252)
+      pdf.setDrawColor(203, 213, 225)
+      pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(13)
+      pdf.text(page.title, 64, y + 20)
+      if (contextText) {
+        pdf.setFontSize(9)
+        pdf.setTextColor(71, 85, 105)
+        drawWrappedText(contextText, 64, y + 36, pageWidth - 136)
       }
-      pdf.setFontSize(14)
-      pdf.text(page.title, 52, y)
-      y += 18
-      pdf.setFontSize(10)
-      page.blocks.filter((block) => getBlockAudience(block) === 'student').forEach((block) => {
+      y += 72
+
+      if (answeredBlocks.length === 0) {
+        drawPdfCard('Responses', ['No recorded responses on this page.'])
+        return
+      }
+
+      answeredBlocks.forEach((block) => {
         const value = document.responses[block.id]
-        const text = formatBlockValue(block, value)
-        if (!text) return
-        const lines = pdf.splitTextToSize(text, 500)
-        pdf.text(lines, 52, y)
-        y += lines.length * 12
-        if (y > 760) {
-          pdf.addPage()
-          y = 52
+
+        if (block.type === 'radar' && value && typeof value === 'object') {
+          const scores = value as Record<string, number>
+          const scoreEntries = Object.entries(scores).filter(([, score]) => Number.isFinite(Number(score)))
+          if (!scoreEntries.length) return
+          ensurePdfSpace(132)
+          pdf.setFillColor(255, 255, 255)
+          pdf.setDrawColor(226, 232, 240)
+          pdf.roundedRect(52, y, pageWidth - 104, 122, 10, 10, 'FD')
+          pdf.setTextColor(15, 23, 42)
+          pdf.setFontSize(11)
+          pdf.text(getBlockDisplayLabel(block), 64, y + 18)
+          drawPdfRadar(pdf, 118, y + 72, 34, scores)
+          pdf.setFontSize(9)
+          pdf.setTextColor(71, 85, 105)
+          scoreEntries.forEach(([label, score], index) => {
+            pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
+          })
+          y += 134
+          return
         }
+
+        if (block.type === 'quadrant' && value && typeof value === 'object') {
+          const point = value as Record<string, unknown>
+          const rationale = typeof point.rationale === 'string' && point.rationale.trim() ? String(point.rationale).trim() : 'No rationale recorded.'
+          ensurePdfSpace(144)
+          pdf.setFillColor(255, 255, 255)
+          pdf.setDrawColor(226, 232, 240)
+          pdf.roundedRect(52, y, pageWidth - 104, 134, 10, 10, 'FD')
+          pdf.setTextColor(15, 23, 42)
+          pdf.setFontSize(11)
+          pdf.text(getBlockDisplayLabel(block), 64, y + 18)
+          drawPdfQuadrant(pdf, 64, y + 30, 92, Number(point.x) || 0, Number(point.y) || 0)
+          pdf.setFontSize(9)
+          pdf.setTextColor(71, 85, 105)
+          pdf.text(`x: ${(Number(point.x) || 0).toFixed(1)}`, 172, y + 42)
+          pdf.text(`y: ${(Number(point.y) || 0).toFixed(1)}`, 172, y + 56)
+          drawWrappedText(rationale, 172, y + 74, pageWidth - 292)
+          y += 146
+          return
+        }
+
+        if (block.type === 'matrix' && value && typeof value === 'object') {
+          const lines = Object.entries(value as Record<string, unknown>)
+            .filter(([, score]) => Number.isFinite(Number(score)))
+            .map(([row, score]) => `${row}: ${Number(score).toFixed(1)}`)
+          if (!lines.length) return
+          drawPdfCard(getBlockDisplayLabel(block), lines)
+          return
+        }
+
+        if (block.type === 'swot' && value && typeof value === 'object') {
+          const categories = Array.isArray(block.config?.categories)
+            ? block.config.categories
+            : [
+                { id: 'strengths', label: 'Strengths' },
+                { id: 'weaknesses', label: 'Weaknesses' },
+                { id: 'opportunities', label: 'Opportunities' },
+                { id: 'threats', label: 'Threats' },
+              ]
+          const lines = categories.flatMap((category: any) => {
+            const entries = ((((value as Record<string, unknown>)[category.id]) || []) as any[])
+              .map((item) => String(item?.text || '').trim())
+              .filter(Boolean)
+            return entries.length > 0 ? [`${category.label}:`, ...entries.map((entry) => `• ${entry}`)] : []
+          })
+          if (!lines.length) return
+          drawPdfCard(getBlockDisplayLabel(block), lines)
+          return
+        }
+
+        if (block.type === 'checklist') {
+          const lines = (Array.isArray(value) ? value : []).map((item) => `• ${String(item)}`)
+          if (!lines.length) return
+          drawPdfCard(getBlockDisplayLabel(block), lines)
+          return
+        }
+
+        drawPdfCard(getBlockDisplayLabel(block), [formatBlockValue(block, value)])
       })
-      y += 10
     })
 
     pdf.save(`${definition.id}-response.pdf`)
@@ -1568,6 +1718,11 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     }
 
     navigate('/builder')
+  }
+
+  const handleReturnToStart = () => {
+    setShowCompletionDialog(false)
+    navigate('/')
   }
 
   if (!currentPage) {
@@ -1588,7 +1743,7 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
           <h1 className="text-3xl font-bold text-slate-900">{definition.title}</h1>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link to="/" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to start</Link>
+          <button type="button" onClick={handleReturnToStart} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to start</button>
           {previewMode && (
             <button type="button" onClick={handleBackToBuilder} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to builder</button>
           )}
@@ -1703,6 +1858,13 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
             <h2 className="mt-2 text-2xl font-bold text-slate-900">Your response has been exported</h2>
             <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{completionMessage}</p>
             <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={handleReturnToStart}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"
+              >
+                Back to start
+              </button>
               <button
                 type="button"
                 onClick={() => setShowCompletionDialog(false)}
@@ -2352,7 +2514,7 @@ function RichTextSurface({
   ]
 
   const listActions = [
-    { label: 'Bullet list', shortLabel: '• List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
+    { label: 'Bullet list', shortLabel: '��� List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
     { label: 'Numbered list', shortLabel: '1. List', run: () => editor.chain().focus().toggleOrderedList().run(), isActive: editor.isActive('orderedList'), canRun: editor.can().chain().focus().toggleOrderedList().run() },
   ]
 
@@ -3167,8 +3329,8 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
               <span className="flex-1 text-sm text-slate-700">{option}</span>
               <div className="flex gap-1">
-                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↑</button>
-                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↓</button>
+                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
+                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
               </div>
             </div>
           ))}
@@ -3271,7 +3433,7 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
-            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '—'}</span>
+            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '���'}</span>
           </div>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <input
@@ -3440,6 +3602,20 @@ function drawPdfRadar(pdf: jsPDF, centreX: number, centreY: number, radius: numb
   points.forEach((point) => {
     pdf.circle(point.x, point.y, 2, 'F')
   })
+}
+
+function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x: number, y: number) {
+  pdf.setFillColor(248, 250, 252)
+  pdf.setDrawColor(203, 213, 225)
+  pdf.roundedRect(left, top, size, size, 10, 10, 'FD')
+  pdf.line(left + size / 2, top, left + size / 2, top + size)
+  pdf.line(left, top + size / 2, left + size, top + size / 2)
+
+  const pointX = left + (Math.max(0, Math.min(100, x)) / 100) * size
+  const pointY = top + size - (Math.max(0, Math.min(100, y)) / 100) * size
+  pdf.setFillColor(245, 158, 11)
+  pdf.setDrawColor(255, 255, 255)
+  pdf.circle(pointX, pointY, 4, 'FD')
 }
 
 function SynthesisViewer({ definition, initialMode = 'student' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher' }) {
@@ -4039,10 +4215,10 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     pdf.rect(0, 0, pageWidth, 78, 'F')
     pdf.setTextColor(255, 255, 255)
     pdf.setFontSize(22)
-    pdf.text(`${definition.title} — Class Evaluation Report`, 52, 40)
+    pdf.text(`${definition.title} ��� Class Evaluation Report`, 52, 40)
     pdf.setFontSize(10)
     pdf.setTextColor(191, 219, 254)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}   •   Evaluations: ${filteredResponseCount}   •   ${groupingLabelPlural}: ${filteredGroupings.length}   •   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ���   Evaluations: ${filteredResponseCount}   ���   ${groupingLabelPlural}: ${filteredGroupings.length}   ���   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
 
     y = 102
     pdf.setTextColor(15, 23, 42)
@@ -4271,7 +4447,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
           <h3 className="text-lg font-semibold text-emerald-900">What the class could do next</h3>
           <ul className="mt-3 space-y-2 text-sm text-emerald-800">
             {studentSynthesis.recommendations.map((recommendation, index) => (
-              <li key={index} className="flex gap-2"><span className="mt-0.5 text-base">•</span><span>{recommendation}</span></li>
+              <li key={index} className="flex gap-2"><span className="mt-0.5 text-base">���</span><span>{recommendation}</span></li>
             ))}
           </ul>
         </div>
@@ -4874,7 +5050,7 @@ function BuilderPage({
                     className="flex w-full items-center justify-between bg-slate-100 px-3 py-2 text-left text-sm font-semibold text-slate-700"
                   >
                     <span>{category.label}</span>
-                    <span className="text-slate-500">{isExpanded ? '−' : '+'}</span>
+                    <span className="text-slate-500">{isExpanded ? '���' : '+'}</span>
                   </button>
 
                   {isExpanded && (
