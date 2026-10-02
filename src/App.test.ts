@@ -1,0 +1,158 @@
+import { describe, expect, it } from 'vitest'
+import { buildStudentSynthesis, getDefaultBlockConfig, getDefaultPageTimer, getQuizSummary } from './App'
+
+describe('worksheet block defaults', () => {
+  it('includes the media and analysis block types with sensible defaults', () => {
+    expect(getDefaultBlockConfig('checklist', 1)).toMatchObject({
+      options: ['Option 1', 'Option 2'],
+    })
+    expect(getDefaultBlockConfig('ranking', 1)).toMatchObject({
+      options: ['Option 1', 'Option 2', 'Option 3'],
+    })
+    expect(getDefaultBlockConfig('matrix', 1)).toMatchObject({
+      rows: ['Criteria 1', 'Criteria 2', 'Criteria 3'],
+      min: 1,
+      max: 5,
+    })
+    expect(getDefaultBlockConfig('imagePrompt', 1)).toMatchObject({
+      imageUrl: expect.any(String),
+      altText: 'Worksheet image prompt',
+    })
+    expect(getDefaultBlockConfig('video', 1)).toMatchObject({
+      videoUrl: expect.any(String),
+      altText: 'Video prompt',
+    })
+    expect(getDefaultBlockConfig('youtube', 1)).toMatchObject({
+      videoUrl: expect.stringContaining('youtube.com'),
+      altText: 'YouTube video prompt',
+    })
+    expect(getDefaultBlockConfig('multipleChoice', 1)).toMatchObject({
+      question: 'Which answer is correct?',
+      options: ['Option A', 'Option B', 'Option C'],
+      correctAnswer: 'Option A',
+      multipleAnswers: false,
+      showFeedback: true,
+      points: 1,
+    })
+    expect(getDefaultBlockConfig('trueFalse', 1)).toMatchObject({
+      question: 'Is this statement true?',
+      correctAnswer: true,
+      showFeedback: true,
+      points: 1,
+    })
+    expect(getDefaultBlockConfig('shortAnswer', 1)).toMatchObject({
+      question: 'Provide the correct term or phrase.',
+      correctAnswer: 'answer',
+      showFeedback: true,
+      points: 1,
+    })
+    expect(getDefaultBlockConfig('matching', 1)).toMatchObject({
+      pairs: expect.arrayContaining([
+        expect.objectContaining({ prompt: 'Photosynthesis' }),
+      ]),
+      showFeedback: true,
+      points: 1,
+    })
+    expect(getDefaultBlockConfig('fillBlank', 1)).toMatchObject({
+      question: 'The capital of France is ______.',
+      correctAnswer: 'Paris',
+      showFeedback: true,
+      points: 1,
+    })
+    expect(getDefaultBlockConfig('section', 1)).toMatchObject({
+      title: 'Section heading',
+    })
+    expect(getDefaultBlockConfig('randomizer', 1)).toMatchObject({
+      prompt: 'Generate a random item from this list.',
+      items: ['Item 1', 'Item 2', 'Item 3'],
+      shuffle: true,
+      requireFirstGeneration: false,
+      displayStyle: 'word-flicker',
+      animationDurationMs: 1800,
+    })
+    expect(getDefaultBlockConfig('richText', 1)).toMatchObject({
+      placeholder: 'Write and format your response here.',
+      mode: 'response',
+      contentHtml: '<p>Add rich text information for students here.</p>',
+    })
+    expect(getDefaultBlockConfig('url', 1)).toMatchObject({
+      url: 'https://example.com',
+      buttonText: 'Open link',
+      audience: 'student',
+    })
+  })
+})
+
+describe('worksheet page timer defaults', () => {
+  it('keeps page timers optional and off by default', () => {
+    const timer = getDefaultPageTimer()
+
+    expect(timer).toMatchObject({
+      enabled: false,
+      durationSeconds: 300,
+      behaviour: 'advisory',
+    })
+  })
+})
+
+describe('student synthesis summary', () => {
+  it('creates a student-friendly synthesis from grouped responses', () => {
+    const synthesis = buildStudentSynthesis([
+      { tool: 'Diffit', groups: [
+        { responses: { 'radar-eval': { 'Ease of use': 9, 'Pedagogical value': 8, 'Reliability': 7 } } },
+        { responses: { 'radar-eval': { 'Ease of use': 8, 'Pedagogical value': 7, 'Reliability': 8 } } },
+      ] as any },
+    ])
+
+    expect(synthesis.headline).toContain('Diffit')
+    expect(synthesis.highlights.length).toBeGreaterThan(0)
+    expect(synthesis.recommendations.length).toBeGreaterThan(0)
+  })
+})
+
+describe('worksheet quiz summary', () => {
+  it('calculates score totals across quiz blocks in the worksheet', () => {
+    const definition = {
+      id: 'quiz-test',
+      version: 1,
+      title: 'Quiz test',
+      description: 'A short quiz',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [
+        {
+          id: 'page-1',
+          title: 'Quiz page',
+          blocks: [
+            {
+              id: 'q-1',
+              type: 'multipleChoice',
+              label: 'First question',
+              config: { question: 'A?', options: ['A', 'B'], correctAnswer: 'A', points: 2 },
+            },
+            {
+              id: 'q-2',
+              type: 'multipleChoice',
+              label: 'Second question',
+              config: { question: 'B?', options: ['A', 'B'], correctAnswer: 'B', points: 3 },
+            },
+          ],
+        },
+      ],
+    } as any
+
+    const summary = getQuizSummary(definition, { 'q-1': 'A', 'q-2': 'A' })
+
+    expect(summary.totalQuestions).toBe(2)
+    expect(summary.totalScore).toBe(2)
+    expect(summary.totalMax).toBe(5)
+    expect(summary.percent).toBeCloseTo(40)
+    expect(summary.items[0].isCorrect).toBe(true)
+    expect(summary.items[1].isCorrect).toBe(false)
+  })
+})

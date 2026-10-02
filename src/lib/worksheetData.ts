@@ -1,0 +1,298 @@
+import type { WorksheetDefinition } from './types'
+
+const radarDimensions = [
+  'Ease of use',
+  'Pedagogical value',
+  'Reliability',
+  'Creativity',
+  'Accessibility',
+  'Time saving',
+  'Learner usefulness',
+  'Educator control',
+]
+
+export const aiToolLabDefinition: WorksheetDefinition = {
+  id: 'ai-tool-lab',
+  version: 1,
+  title: 'AI Tool Lab',
+  description:
+    'Small groups investigate one AI tool, evaluate its educational value, and produce a group verdict for the class.',
+  settings: {
+    navigation: 'sequential',
+    allowPageJumping: false,
+    autosave: true,
+    showProgress: true,
+    exports: {
+      json: true,
+      pdf: true,
+    },
+  },
+  pages: [
+    {
+      id: 'welcome',
+      title: 'Welcome',
+      timer: { enabled: false, durationSeconds: 300, behaviour: 'advisory' },
+      blocks: [
+        {
+          id: 'welcome-intro',
+          type: 'content',
+          title: 'AI Tool Lab',
+          description:
+            'Your group will explore an AI tool, test what it can do, evaluate its educational value, identify limitations and produce a group judgement.',
+        },
+        {
+          id: 'group-name',
+          type: 'shortText',
+          label: 'Group name or number',
+          required: true,
+        },
+        {
+          id: 'tool-name',
+          type: 'shortText',
+          label: 'AI tool being evaluated',
+          required: true,
+        },
+        {
+          id: 'expectation-score',
+          type: 'rating',
+          label: 'Before testing, how useful do you expect this tool to be for teaching and learning?',
+          config: { min: 0, max: 10, step: 1 },
+        },
+      ],
+    },
+    {
+      id: 'explore',
+      title: 'Explore',
+      blocks: [
+        {
+          id: 'tool-purpose',
+          type: 'longText',
+          label: 'What is this tool designed to do?',
+          required: true,
+        },
+        {
+          id: 'intended-user',
+          type: 'multipleChoice',
+          label: 'Who appears to be its intended user?',
+          config: {
+            options: ['Educator', 'Learner', 'Both', 'Other'],
+          },
+          required: true,
+        },
+        {
+          id: 'problem-solved',
+          type: 'longText',
+          label: 'What problem does it appear to solve?',
+          required: true,
+        },
+        {
+          id: 'feature-interest',
+          type: 'shortText',
+          label: 'What feature are you most interested in testing?',
+          required: true,
+        },
+      ],
+    },
+    {
+      id: 'test',
+      title: 'Test',
+      blocks: [
+        {
+          id: 'challenge',
+          type: 'content',
+          title: 'Practical challenge',
+          description:
+            'Use your assigned AI tool to create or support something that would help a learner understand and apply the concept of constructive alignment. Try more than one approach if appropriate.',
+        },
+        {
+          id: 'test-request',
+          type: 'longText',
+          label: 'What did you ask the tool to do?',
+          required: true,
+        },
+        {
+          id: 'test-what-happened',
+          type: 'longText',
+          label: 'What happened?',
+          required: true,
+        },
+        {
+          id: 'surprised',
+          type: 'longText',
+          label: 'What surprised you?',
+        },
+        {
+          id: 'corrected',
+          type: 'longText',
+          label: 'What did you have to change, correct or improve yourself?',
+          required: true,
+        },
+      ],
+    },
+    {
+      id: 'radar',
+      title: 'Radar Evaluation',
+      blocks: [
+        {
+          id: 'radar-eval',
+          type: 'radar',
+          label: 'Evaluation radar',
+          config: {
+            dimensions: radarDimensions.map((label, index) => ({
+              id: `radar-dimension-${index + 1}`,
+              label,
+            })),
+          },
+        },
+      ],
+    },
+    {
+      id: 'swot',
+      title: 'SWOT Analysis',
+      blocks: [
+        {
+          id: 'swot-board',
+          type: 'swot',
+          label: 'SWOT board',
+          config: {
+            categories: [
+              { id: 'strengths', label: 'Strengths' },
+              { id: 'weaknesses', label: 'Weaknesses' },
+              { id: 'opportunities', label: 'Opportunities' },
+              { id: 'threats', label: 'Threats' },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      id: 'education-risk',
+      title: 'Educational Use & Risk',
+      blocks: [
+        {
+          id: 'learning-improve',
+          type: 'longText',
+          label: 'Where could this tool genuinely improve learning?',
+          required: true,
+        },
+        {
+          id: 'teacher-time',
+          type: 'longText',
+          label: 'Where does it mainly save the educator time?',
+        },
+        {
+          id: 'strongest-use',
+          type: 'longText',
+          label: 'What is one particularly strong educational use case?',
+          required: true,
+        },
+        {
+          id: 'avoid-use',
+          type: 'longText',
+          label: 'When would you avoid using it?',
+          required: true,
+        },
+        {
+          id: 'check-before-use',
+          type: 'longText',
+          label: 'What would an educator need to check before using its output?',
+          required: true,
+        },
+      ],
+    },
+    {
+      id: 'quadrant',
+      title: 'Quadrant Map',
+      blocks: [
+        {
+          id: 'quadrant-map',
+          type: 'quadrant',
+          label: 'Where does this tool sit?',
+          config: {
+            xLeft: 'Saves educator time',
+            xRight: 'Enhances student learning',
+            yBottom: 'Lower risk',
+            yTop: 'Higher risk',
+            instructions: 'Place the tool in the sector that best reflects its value and risk.',
+            rationaleRequired: true,
+          },
+        },
+      ],
+    },
+    {
+      id: 'human-judgement',
+      title: 'Human Judgement',
+      blocks: [
+        {
+          id: 'ai-decisions',
+          type: 'longText',
+          label: 'What decisions did the AI make that would normally be made by an educator?',
+          required: true,
+        },
+        {
+          id: 'human-judgement-needed',
+          type: 'longText',
+          label: 'Where is human judgement still essential?',
+          required: true,
+        },
+        {
+          id: 'concerned',
+          type: 'longText',
+          label: 'What would concern you if an inexperienced educator accepted the AI\'s output unchanged?',
+          required: true,
+        },
+      ],
+    },
+    {
+      id: 'verdict',
+      title: 'Verdict & Export',
+      blocks: [
+        {
+          id: 'overall-verdict',
+          type: 'verdict',
+          label: 'Overall verdict',
+          config: {
+            options: ['Use it', 'Use carefully', 'Not convinced'],
+          },
+          required: true,
+        },
+        {
+          id: 'best-use',
+          type: 'shortText',
+          label: 'Best use',
+          required: true,
+        },
+        {
+          id: 'biggest-concern',
+          type: 'shortText',
+          label: 'Biggest concern',
+          required: true,
+        },
+        {
+          id: 'other-educators-know',
+          type: 'longText',
+          label: 'One thing another educator should know',
+          required: true,
+        },
+        {
+          id: 'view-change',
+          type: 'longText',
+          label: 'What changed your view?',
+        },
+      ],
+    },
+  ],
+}
+
+export const emptyResponse = {
+  responseSchema: 'interactive-worksheet-response',
+  schemaVersion: 1,
+  worksheetId: aiToolLabDefinition.id,
+  worksheetVersion: aiToolLabDefinition.version,
+  responseId: '',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  group: '',
+  subject: '',
+  responses: {},
+}
