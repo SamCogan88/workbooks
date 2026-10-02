@@ -39,8 +39,14 @@ const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
 const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
-const TEXT_RESPONSE_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText'])
 const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating'])
+const REPORT_EXCLUDED_BLOCK_TYPES = new Set(['randomizer'])
+
+interface ReportPageSection {
+  page: WorksheetPage
+  responseBlocks: WorksheetBlock[]
+  contextText?: string
+}
 
 function getBlockDisplayLabel(block: WorksheetBlock) {
   return block.label || block.title || block.id
@@ -148,6 +154,46 @@ function getWorksheetStructure(definition: WorksheetDefinition) {
     swotBlockId: swotBlock?.id || 'swot-board',
     quadrantBlockId: quadrantBlock?.id || 'quadrant-map',
   }
+}
+
+function stripHtml(value: string) {
+  return value.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function truncateText(value: string, maxLength = 180) {
+  if (value.length <= maxLength) return value
+  const snippet = value.slice(0, maxLength).trimEnd()
+  const breakPoint = snippet.lastIndexOf(' ')
+  return `${(breakPoint > 80 ? snippet.slice(0, breakPoint) : snippet).trimEnd()}...`
+}
+
+function getPageContextText(page: WorksheetPage) {
+  const contextualBlock = page.blocks.find((block) => block.type === 'content'
+    || block.type === 'section'
+    || (block.type === 'richText' && block.config?.mode === 'information'))
+
+  if (!contextualBlock) return undefined
+
+  const candidates = [
+    contextualBlock.description,
+    contextualBlock.type === 'richText' && typeof contextualBlock.config?.contentHtml === 'string'
+      ? stripHtml(contextualBlock.config.contentHtml)
+      : '',
+    contextualBlock.title,
+    contextualBlock.label,
+  ]
+  const text = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim())
+  return text ? truncateText(String(text).trim()) : undefined
+}
+
+function hasMeaningfulResponseValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return stripHtml(value).length > 0
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'boolean') return true
+  if (Array.isArray(value)) return value.some((item) => hasMeaningfulResponseValue(item))
+  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some((item) => hasMeaningfulResponseValue(item))
+  return false
 }
 
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, any>) {
@@ -485,6 +531,7 @@ function SystemGuidePage() {
         'Multi-file response import and aggregated synthesis',
         'Configurable synthesis grouping and response labels',
         'Shared filtering across student synthesis and teacher report',
+        'Page-based report sections derived from worksheet structure',
         'Teacher reporting with radar, quadrant, and SWOT analysis',
         'Student-facing summaries and recommendations',
         'Optional page timers and progress tracking',
@@ -808,6 +855,13 @@ function SystemGuidePage() {
       },
       chartTypes: ['radar', 'quadrant', 'summary badges', 'verdict distribution', 'matrix averages'],
       sharedFilters: ['grouping key', 'response label', 'verdict', 'free-text search'],
+      reportHierarchy: ['synthesis group', 'worksheet page section', 'response block card'],
+      sectionBehavior: {
+        source: 'Report sections are derived from definition.pages.',
+        inclusion: 'Only pages with reportable response data are rendered.',
+        context: 'Short contextual copy may be pulled from existing content, section, or informational rich text blocks.',
+        exclusions: ['content blocks are not rendered as response cards', 'section blocks are not rendered as response cards', 'URL blocks are not rendered as response cards', 'randomizer controls are excluded from report cards'],
+      },
       teacherSignals: ['strengths', 'weaknesses', 'mean scores', 'group trends', 'verdict distributions', 'individual written responses'],
       sampleResponses: 'Use public/sample-responses/tool-comparison/*.json with public/worksheets/ai-tool-lab.json for grouped synthesis testing.',
     },
@@ -900,6 +954,7 @@ function SystemGuidePage() {
             <li>• Exports worksheet definitions and response JSON.</li>
             <li>• Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
             <li>• Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
+            <li>• Organises synthesis and report output into page-based sections using the worksheet's existing page structure.</li>
             <li>• Supports radar, quadrant, SWOT, and media-based prompts.</li>
           </ul>
         </section>
@@ -928,6 +983,7 @@ function SystemGuidePage() {
               <li>• Group label: sets the human-readable name used across synthesis and report views.</li>
               <li>• Label individual responses by: chooses the block used to name each submission inside a synthesis group.</li>
               <li>• If a referenced block is deleted, the builder warns first and clears the broken synthesis setting if deletion proceeds.</li>
+              <li>• Report hierarchy stays schema-light: grouped responses render first by synthesis key, then by worksheet page, then by block.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -938,6 +994,31 @@ function SystemGuidePage() {
               <li>• Missing grouping values are placed under Unspecified.</li>
               <li>• If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
               <li>• Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
+              <li>• Only worksheet pages with meaningful response data become report sections; procedural-only pages remain hidden unless they contain evidence worth showing.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-900">Report section hierarchy</h2>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Hierarchy</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>• Level 1: synthesis group, such as an AI tool or other configured grouping value.</li>
+              <li>• Level 2: worksheet page heading pulled from `page.title`.</li>
+              <li>• Level 3: response block cards shown inside the owning page section.</li>
+              <li>• This preserves conceptual grouping without adding new report schema.</li>
+            </ul>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Rendering rules</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>• Content, section, and URL blocks are used only as optional context, not as response cards.</li>
+              <li>• Related matrix blocks stay together inside the same worksheet page section.</li>
+              <li>• SWOT stays grouped as one conceptual block rather than four unrelated cards.</li>
+              <li>• The class PDF export follows the same group → page section → block hierarchy.</li>
             </ul>
           </div>
         </div>
@@ -3039,16 +3120,21 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
   const synthesisResult = useMemo(() => groupResponsesByKey(definition, responses), [definition, responses])
   const groupings = synthesisResult.groups
   const synthesisConfig = synthesisResult.config
-  const summaryBlocks = useMemo(
-    () => structure.responseBlocks.filter((block) => RESPONSE_SUMMARY_BLOCK_TYPES.has(block.type) && block.id !== synthesisConfig.groupByBlockId && block.id !== synthesisConfig.responseLabelBlockId),
-    [structure.responseBlocks, synthesisConfig.groupByBlockId, synthesisConfig.responseLabelBlockId],
+  const reportPages = useMemo<ReportPageSection[]>(
+    () => definition.pages
+      .map((page) => ({
+        page,
+        responseBlocks: page.blocks.filter((block) => isResponseProducingBlock(block)
+          && block.id !== synthesisConfig.groupByBlockId
+          && block.id !== synthesisConfig.responseLabelBlockId
+          && !REPORT_EXCLUDED_BLOCK_TYPES.has(block.type)),
+        contextText: getPageContextText(page),
+      }))
+      .filter((section) => section.responseBlocks.length > 0),
+    [definition.pages, synthesisConfig.groupByBlockId, synthesisConfig.responseLabelBlockId],
   )
   const verdictBlocks = useMemo(
     () => structure.responseBlocks.filter((block) => block.type === 'verdict'),
-    [structure.responseBlocks],
-  )
-  const matrixBlocks = useMemo(
-    () => structure.responseBlocks.filter((block) => block.type === 'matrix'),
     [structure.responseBlocks],
   )
   const verdictFilterOptions = useMemo(
@@ -3092,6 +3178,366 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     () => buildStudentSynthesis(filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel),
     [filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel],
   )
+
+  const getVisiblePageSections = useCallback((groupingResponses: WorksheetResponse[]) => (
+    reportPages
+      .map((section) => ({
+        ...section,
+        visibleBlocks: section.responseBlocks.filter((block) => groupingResponses.some((response) => hasMeaningfulResponseValue(response.responses?.[block.id]))),
+      }))
+      .filter((section) => section.visibleBlocks.length > 0)
+  ), [reportPages])
+
+  const getBlockEntries = useCallback((block: WorksheetBlock, groupingResponses: WorksheetResponse[]) => (
+    groupingResponses
+      .map((response) => ({
+        response,
+        label: responseLabelLookup[response.responseId],
+        value: response.responses?.[block.id],
+      }))
+      .filter((entry) => hasMeaningfulResponseValue(entry.value))
+  ), [responseLabelLookup])
+
+  const getBlockCardSpanClass = (block: WorksheetBlock) => {
+    switch (block.type) {
+      case 'swot':
+        return 'md:col-span-2 xl:col-span-6'
+      case 'radar':
+      case 'quadrant':
+      case 'longText':
+      case 'richText':
+      case 'checklist':
+      case 'ranking':
+      case 'imagePrompt':
+      case 'video':
+      case 'youtube':
+        return 'md:col-span-2 xl:col-span-3'
+      default:
+        return 'xl:col-span-2'
+    }
+  }
+
+  const renderResponseValue = (block: WorksheetBlock, value: any) => {
+    if (block.type === 'richText') {
+      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: String(value) }} />
+    }
+
+    if (block.type === 'checklist') {
+      const items = Array.isArray(value) ? value.filter((item) => hasMeaningfulResponseValue(item)) : []
+      return (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {items.map((item) => (
+            <span key={`${block.id}-${String(item)}`} className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{String(item)}</span>
+          ))}
+        </div>
+      )
+    }
+
+    if (block.type === 'ranking') {
+      const items = Array.isArray(value) ? value : []
+      return (
+        <ol className="mt-2 space-y-2 text-sm text-slate-700">
+          {items.map((item, index) => (
+            <li key={`${block.id}-${String(item)}-${index}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
+              <span>{String(item)}</span>
+            </li>
+          ))}
+        </ol>
+      )
+    }
+
+    return <div className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{formatBlockValue(block, value)}</div>
+  }
+
+  const renderReportBlockCard = (block: WorksheetBlock, groupingResponses: WorksheetResponse[], viewerMode: 'student' | 'teacher') => {
+    const entries = getBlockEntries(block, groupingResponses)
+    if (entries.length === 0) return null
+
+    const title = getBlockDisplayLabel(block)
+
+    if (block.type === 'radar') {
+      const configuredDimensions = Array.isArray(block.config?.dimensions)
+        ? block.config.dimensions.map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || ''))).filter(Boolean)
+        : []
+      const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
+      const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
+      const averages = aggregateRadarValues(groupingResponses, dimensions, block.id)
+
+      return (
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">Average across {formatCountLabel(groupingResponses.length, 'evaluation')}.</p>
+            </div>
+            <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">Radar</span>
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <RadarSummaryChart data={averages} />
+            </div>
+            <div className="space-y-2">
+              {Object.entries(averages).map(([label, score]) => (
+                <div key={label} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                  <span className="text-sm text-slate-700">{label}</span>
+                  <span className="text-sm font-semibold text-slate-900">{Number(score).toFixed(1)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )
+    }
+
+    if (block.type === 'quadrant') {
+      const averagePoint = aggregateQuadrantMean(groupingResponses, block.id)
+      const rationaleEntries = entries.filter(({ value }) => typeof value?.rationale === 'string' && value.rationale.trim())
+      const visibleRationales = viewerMode === 'student' ? rationaleEntries.slice(0, 3) : rationaleEntries
+
+      return (
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">Average position across {formatCountLabel(groupingResponses.length, 'evaluation')}.</p>
+            </div>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-amber-700">Quadrant</span>
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} />
+              <div className="mt-3 flex justify-between text-sm text-slate-700">
+                <span>x: {averagePoint.x.toFixed(1)}</span>
+                <span>y: {averagePoint.y.toFixed(1)}</span>
+              </div>
+            </div>
+            <div>
+              <h5 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Rationales</h5>
+              <div className="mt-3 space-y-2">
+                {visibleRationales.length > 0 ? visibleRationales.map(({ response, label, value }) => (
+                  <div key={`${response.responseId}-${block.id}`} className="rounded-xl bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-slate-800">{label}</span>
+                      {viewerMode === 'teacher' && <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{response.responseId.slice(0, 8)}</span>}
+                    </div>
+                    <p className="mt-2 text-sm text-slate-700">{String(value.rationale).trim()}</p>
+                  </div>
+                )) : <p className="text-sm text-slate-500">No rationale text was recorded for this block.</p>}
+              </div>
+            </div>
+          </div>
+        </>
+      )
+    }
+
+    if (block.type === 'swot') {
+      const categories = Array.isArray(block.config?.categories)
+        ? block.config.categories
+        : [
+            { id: 'strengths', label: 'Strengths' },
+            { id: 'weaknesses', label: 'Weaknesses' },
+            { id: 'opportunities', label: 'Opportunities' },
+            { id: 'threats', label: 'Threats' },
+          ]
+
+      return (
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">Responses stay grouped by SWOT category with source labels attached.</p>
+            </div>
+            <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">SWOT</span>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {categories.map((category: any) => {
+              const items = groupingResponses.flatMap((response) => (((response.responses?.[block.id] as Record<string, any>)?.[category.id] || []) as any[])
+                .filter((item) => hasMeaningfulResponseValue(item?.text))
+                .map((item) => ({ text: String(item.text).trim(), label: responseLabelLookup[response.responseId], responseId: response.responseId })))
+
+              return (
+                <div key={`${block.id}-${category.id}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <h5 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-600">{category.label}</h5>
+                  <div className="mt-3 space-y-2">
+                    {items.length > 0 ? items.map((item, index) => (
+                      <div key={`${category.id}-${index}-${item.responseId}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-medium text-slate-800">{item.label}</span>
+                          {viewerMode === 'teacher' && <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{item.responseId.slice(0, 8)}</span>}
+                        </div>
+                        <p className="mt-2 text-sm text-slate-700">{item.text}</p>
+                      </div>
+                    )) : <p className="text-sm text-slate-500">No entries recorded.</p>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )
+    }
+
+    if (block.type === 'matrix') {
+      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+      const averages = rows.map((row: string) => {
+        const values = groupingResponses
+          .map((response) => Number(response.responses?.[block.id]?.[row]))
+          .filter((value) => Number.isFinite(value))
+        return {
+          row,
+          average: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
+          count: values.length,
+        }
+      }).filter((entry) => entry.count > 0)
+
+      return (
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">Average across {formatCountLabel(groupingResponses.length, 'evaluation')}.</p>
+            </div>
+            <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-violet-700">Matrix</span>
+          </div>
+          <div className="mt-4 space-y-2">
+            {averages.map(({ row, average }) => (
+              <div key={`${block.id}-${row}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-sm text-slate-700">{row}</span>
+                <span className="text-sm font-semibold text-slate-900">{average.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )
+    }
+
+    if (block.type === 'rating') {
+      const numericEntries = entries
+        .map(({ response, label, value }) => ({ response, label, value: Number(value) }))
+        .filter((entry) => Number.isFinite(entry.value))
+      const average = numericEntries.length ? numericEntries.reduce((sum, entry) => sum + entry.value, 0) / numericEntries.length : 0
+
+      return (
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">Scale {block.config?.min ?? 0} to {block.config?.max ?? 10}.</p>
+            </div>
+            <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Rating</span>
+          </div>
+          <div className="mt-4 flex items-end justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Average</div>
+              <div className="mt-2 text-4xl font-bold text-slate-900">{average.toFixed(1)}</div>
+            </div>
+            <div className="text-sm text-slate-600">{numericEntries.length} recorded value(s)</div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {numericEntries.map(({ response, label, value }) => (
+              <div key={`${response.responseId}-${block.id}`} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                <span className="text-sm text-slate-700">{label}</span>
+                <span className="text-sm font-semibold text-slate-900">{value}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )
+    }
+
+    if (block.type === 'singleSelect' || block.type === 'verdict' || block.type === 'multipleChoice' || block.type === 'trueFalse') {
+      const counts = new Map<string, string[]>()
+      entries.forEach(({ label, value }) => {
+        const selectedValues = Array.isArray(value) ? value : [value]
+        selectedValues
+          .map((item) => String(item).trim())
+          .filter(Boolean)
+          .forEach((item) => {
+            counts.set(item, [...(counts.get(item) || []), label])
+          })
+      })
+
+      return (
+        <>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+              <p className="mt-1 text-sm text-slate-500">Distribution across visible responses.</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700">Summary</span>
+          </div>
+          <div className="mt-4 space-y-3">
+            {Array.from(counts.entries()).map(([option, labels]) => (
+              <div key={`${block.id}-${option}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium text-slate-800">{option}</span>
+                  <span className="text-sm font-semibold text-slate-900">{labels.length}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {labels.map((label) => (
+                    <span key={`${block.id}-${option}-${label}`} className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-600 ring-1 ring-slate-200">{label}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )
+    }
+
+    const isSummaryCard = RESPONSE_SUMMARY_BLOCK_TYPES.has(block.type)
+
+    return (
+      <>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+            <p className="mt-1 text-sm text-slate-500">{isSummaryCard ? 'Reported individually with source labels preserved.' : 'Captured responses for this worksheet block.'}</p>
+          </div>
+          {block.type === 'shortText' || block.type === 'longText' || block.type === 'richText' ? <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700">Written</span> : null}
+        </div>
+        <div className="mt-4 space-y-3">
+          {entries.map(({ response, label, value }) => (
+            <div key={`${response.responseId}-${block.id}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-slate-800">{label}</span>
+                {viewerMode === 'teacher' && <span className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{response.responseId.slice(0, 8)}</span>}
+              </div>
+              {renderResponseValue(block, value)}
+            </div>
+          ))}
+        </div>
+      </>
+    )
+  }
+
+  const renderPageSections = (grouping: GroupedResponseSet, viewerMode: 'student' | 'teacher') => {
+    const visibleSections = getVisiblePageSections(grouping.responses)
+
+    return visibleSections.map((section) => (
+      <section key={`${grouping.key}-${section.page.id}`} className="mt-8 rounded-[26px] border border-slate-200 bg-slate-50/70 p-5">
+        <div className="border-b border-slate-300 pb-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Worksheet section</p>
+          <h3 className="mt-2 text-2xl font-bold text-slate-900">{section.page.title}</h3>
+          {section.contextText && <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{section.contextText}</p>}
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          {section.visibleBlocks.map((block) => {
+            const content = renderReportBlockCard(block, grouping.responses, viewerMode)
+            if (!content) return null
+
+            return (
+              <div key={`${grouping.key}-${section.page.id}-${block.id}`} className={`${getBlockCardSpanClass(block)} rounded-2xl border border-slate-200 bg-white p-4 shadow-sm`}>
+                {content}
+              </div>
+            )
+          })}
+        </div>
+      </section>
+    ))
+  }
 
   const clearFilters = () => {
     setGroupingFilter('all')
@@ -3211,8 +3657,44 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
   const exportClassPdf = () => {
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
-    const groupingLabelPlural = pluralizeLabel(synthesisConfig.groupLabel, groupings.length)
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    const groupingLabelPlural = pluralizeLabel(synthesisConfig.groupLabel, filteredGroupings.length)
     let y = 42
+
+    const ensurePdfSpace = (height: number) => {
+      if (y + height <= pageHeight - 42) return
+      pdf.addPage()
+      y = 52
+    }
+
+    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
+      const lines = pdf.splitTextToSize(text, width)
+      pdf.text(lines, x, top)
+      return lines.length * lineHeight
+    }
+
+    const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
+      const innerWidth = pageWidth - 104
+      const lineHeight = 12
+      const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
+      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
+      ensurePdfSpace(cardHeight + 10)
+      if (tone === 'section') {
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(203, 213, 225)
+      } else {
+        pdf.setFillColor(255, 255, 255)
+        pdf.setDrawColor(226, 232, 240)
+      }
+      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(11)
+      pdf.text(title, 64, y + 18)
+      pdf.setTextColor(71, 85, 105)
+      pdf.setFontSize(9)
+      pdf.text(wrappedLines, 64, y + 34)
+      y += cardHeight + 10
+    }
 
     pdf.setFillColor(15, 23, 42)
     pdf.rect(0, 0, pageWidth, 78, 'F')
@@ -3221,7 +3703,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     pdf.text(`${definition.title} — Class Evaluation Report`, 52, 40)
     pdf.setFontSize(10)
     pdf.setTextColor(191, 219, 254)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}   •   Evaluations: ${responses.length}   •   ${groupingLabelPlural}: ${groupings.length}   •   Response labels: ${new Set(Object.values(responseLabelLookup)).size}`, 52, 60)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   •   Evaluations: ${filteredResponseCount}   •   ${groupingLabelPlural}: ${filteredGroupings.length}   •   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
 
     y = 102
     pdf.setTextColor(15, 23, 42)
@@ -3230,9 +3712,9 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     y += 18
     pdf.setFontSize(11)
     const cards = [
-      `Total evaluations: ${responses.length}`,
-      `${groupingLabelPlural}: ${groupings.length}`,
-      `Response labels: ${new Set(Object.values(responseLabelLookup)).size}`,
+      `Total evaluations: ${filteredResponseCount}`,
+      `${groupingLabelPlural}: ${filteredGroupings.length}`,
+      `Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`,
     ]
     const cardWidth = 160
     cards.forEach((card, index) => {
@@ -3244,12 +3726,10 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     })
     y += 66
 
-    groupings.forEach((grouping) => {
-      if (y > 560) {
-        pdf.addPage()
-        y = 52
-      }
+    filteredGroupings.forEach((grouping) => {
+      ensurePdfSpace(126)
       pdf.setFillColor(255, 255, 255)
+      pdf.setDrawColor(226, 232, 240)
       pdf.roundedRect(52, y, 500, 120, 12, 12, 'FD')
       pdf.setTextColor(15, 23, 42)
       pdf.setFontSize(15)
@@ -3274,6 +3754,117 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
       })
 
       y += 132
+
+      const visibleSections = getVisiblePageSections(grouping.responses)
+      visibleSections.forEach((section) => {
+        ensurePdfSpace(78)
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(203, 213, 225)
+        pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
+        pdf.setTextColor(15, 23, 42)
+        pdf.setFontSize(13)
+        pdf.text(section.page.title, 64, y + 20)
+        if (section.contextText) {
+          pdf.setFontSize(9)
+          pdf.setTextColor(71, 85, 105)
+          drawWrappedText(section.contextText, 64, y + 36, pageWidth - 136)
+        }
+        y += 72
+
+        section.visibleBlocks.forEach((block) => {
+          const entries = getBlockEntries(block, grouping.responses)
+          if (entries.length === 0) return
+
+          if (block.type === 'radar') {
+            const configuredDimensions = Array.isArray(block.config?.dimensions)
+              ? block.config.dimensions.map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || ''))).filter(Boolean)
+              : []
+            const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
+            const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
+            const averages = aggregateRadarValues(grouping.responses, dimensions, block.id)
+            ensurePdfSpace(128)
+            pdf.setFillColor(255, 255, 255)
+            pdf.setDrawColor(226, 232, 240)
+            pdf.roundedRect(52, y, pageWidth - 104, 118, 10, 10, 'FD')
+            pdf.setTextColor(15, 23, 42)
+            pdf.setFontSize(11)
+            pdf.text(getBlockDisplayLabel(block), 64, y + 18)
+            drawPdfRadar(pdf, 118, y + 70, 34, averages)
+            pdf.setFontSize(9)
+            pdf.setTextColor(71, 85, 105)
+            Object.entries(averages).forEach(([label, score], index) => {
+              pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
+            })
+            y += 130
+            return
+          }
+
+          if (block.type === 'matrix') {
+            const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+            const lines = rows
+              .map((row: string) => {
+                const values = grouping.responses
+                  .map((response) => Number(response.responses?.[block.id]?.[row]))
+                  .filter((value) => Number.isFinite(value))
+                if (!values.length) return ''
+                const average = values.reduce((sum, value) => sum + value, 0) / values.length
+                return `${row}: ${average.toFixed(1)}`
+              })
+              .filter(Boolean)
+            drawPdfCard(getBlockDisplayLabel(block), lines)
+            return
+          }
+
+          if (block.type === 'quadrant') {
+            const averagePoint = aggregateQuadrantMean(grouping.responses, block.id)
+            const lines = [
+              `Average x position: ${averagePoint.x.toFixed(1)}`,
+              `Average y position: ${averagePoint.y.toFixed(1)}`,
+              ...entries
+                .filter(({ value }) => typeof value?.rationale === 'string' && value.rationale.trim())
+                .map(({ label, value }) => `${label}: ${String(value.rationale).trim()}`),
+            ]
+            drawPdfCard(getBlockDisplayLabel(block), lines)
+            return
+          }
+
+          if (block.type === 'swot') {
+            const categories = Array.isArray(block.config?.categories)
+              ? block.config.categories
+              : [
+                  { id: 'strengths', label: 'Strengths' },
+                  { id: 'weaknesses', label: 'Weaknesses' },
+                  { id: 'opportunities', label: 'Opportunities' },
+                  { id: 'threats', label: 'Threats' },
+                ]
+            const lines = categories.flatMap((category: any) => {
+              const items = grouping.responses.flatMap((response) => (((response.responses?.[block.id] as Record<string, any>)?.[category.id] || []) as any[])
+                .filter((item) => hasMeaningfulResponseValue(item?.text))
+                .map((item) => `${responseLabelLookup[response.responseId]}: ${String(item.text).trim()}`))
+
+              return items.length > 0 ? [`${category.label}:`, ...items] : [`${category.label}: No entries recorded.`]
+            })
+            drawPdfCard(getBlockDisplayLabel(block), lines)
+            return
+          }
+
+          if (block.type === 'singleSelect' || block.type === 'verdict' || block.type === 'multipleChoice' || block.type === 'trueFalse') {
+            const counts = new Map<string, string[]>()
+            entries.forEach(({ label, value }) => {
+              const selectedValues = Array.isArray(value) ? value : [value]
+              selectedValues.map((item) => String(item).trim()).filter(Boolean).forEach((item) => {
+                counts.set(item, [...(counts.get(item) || []), label])
+              })
+            })
+            const lines = Array.from(counts.entries()).flatMap(([option, labels]) => [`${option}: ${labels.length}`, `  ${labels.join(', ')}`])
+            drawPdfCard(getBlockDisplayLabel(block), lines)
+            return
+          }
+
+          const lines = entries.map(({ label, value }) => `${label}: ${formatBlockValue(block, value)}`)
+          drawPdfCard(getBlockDisplayLabel(block), lines)
+        })
+      })
     })
 
     pdf.save(`${definition.id}-class-report.pdf`)
@@ -3351,31 +3942,6 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
         {filteredGroupings.map((grouping) => {
           const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
           const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
-          const avgPoint = aggregateQuadrantMean(grouping.responses, structure.quadrantBlockId)
-          const swot = structure.swotBlockId
-          const strengths = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.strengths || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
-          const weaknesses = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.weaknesses || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
-          const verdictSummaries = verdictBlocks.map((block) => {
-            const counts = grouping.responses.reduce<Record<string, number>>((accumulator, response) => {
-              const raw = response.responses?.[block.id]
-              const verdict = typeof raw === 'string' ? raw.trim() : ''
-              if (!verdict) return accumulator
-              accumulator[verdict] = (accumulator[verdict] || 0) + 1
-              return accumulator
-            }, {})
-            return { block, counts }
-          }).filter(({ counts }) => Object.keys(counts).length > 0)
-          const matrixSummaries = matrixBlocks.map((block) => {
-            const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
-            const averages = Object.fromEntries(rows.map((row: string) => {
-              const values = grouping.responses
-                .map((response) => Number(response.responses?.[block.id]?.[row]))
-                .filter((value) => Number.isFinite(value))
-              const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-              return [row, average]
-            })) as Record<string, number>
-            return { block, averages }
-          }).filter(({ averages }) => Object.keys(averages).length > 0)
           const topRanked = Object.entries(avgRadar).sort((left, right) => Number(right[1]) - Number(left[1]))[0]
           return (
             <article key={grouping.key} className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -3396,88 +3962,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">Aggregate</span>
               </div>
 
-              <div className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Average radar</h3>
-                    <span className="text-sm font-medium text-slate-700">Mean score</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
-                    <RadarSummaryChart data={avgRadar} />
-                    <div className="flex-1 space-y-2 text-sm text-slate-700">
-                      {Object.entries(avgRadar).map(([label, value]) => (
-                        <div key={label} className="flex items-center justify-between rounded-lg bg-white px-2.5 py-2 shadow-sm ring-1 ring-slate-200">
-                          <span>{label}</span>
-                          <span className="font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Quadrant position</h3>
-                  <div className="mt-3 flex items-center justify-center gap-4">
-                    <QuadrantMiniChart x={avgPoint.x} y={avgPoint.y} />
-                  </div>
-                  <div className="mt-3 flex justify-between text-sm text-slate-700">
-                    <span>x: {avgPoint.x.toFixed(1)}</span>
-                    <span>y: {avgPoint.y.toFixed(1)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {(verdictSummaries.length > 0 || matrixSummaries.length > 0) && (
-                <div className="mt-6 grid gap-4 md:grid-cols-2">
-                  {verdictSummaries.map(({ block, counts }) => (
-                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Verdict distribution'}</h3>
-                      <div className="mt-3 space-y-2">
-                        {Object.entries(counts).map(([verdict, count]) => (
-                          <div key={verdict} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
-                            <span className="text-sm text-slate-700">{verdict}</span>
-                            <span className="text-sm font-semibold text-slate-900">{count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-
-                  {matrixSummaries.map(({ block, averages }) => (
-                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Matrix averages'}</h3>
-                      <div className="mt-3 space-y-2">
-                        {Object.entries(averages).map(([row, value]) => (
-                          <div key={row} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
-                            <span className="text-sm text-slate-700">{row}</span>
-                            <span className="text-sm font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-emerald-700">Strengths</h3>
-                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                    {strengths.slice(0, 5).map((item, index) => (
-                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-red-700">Limitations</h3>
-                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                    {weaknesses.slice(0, 5).map((item, index) => (
-                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-red-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+              {renderPageSections(grouping, 'student')}
             </article>
           )
         })}
@@ -3539,40 +4024,6 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
 
       <section className="mt-8 space-y-6">
         {filteredGroupings.map((grouping) => {
-          const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-          const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
-          const avgPoint = aggregateQuadrantMean(grouping.responses, structure.quadrantBlockId)
-          const swot = structure.swotBlockId
-          const strengths = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.strengths || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
-          const weaknesses = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.weaknesses || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
-          const verdictSummaries = verdictBlocks.map((block) => {
-            const counts = grouping.responses.reduce<Record<string, number>>((accumulator, response) => {
-              const raw = response.responses?.[block.id]
-              const verdict = typeof raw === 'string' ? raw.trim() : ''
-              if (!verdict) return accumulator
-              accumulator[verdict] = (accumulator[verdict] || 0) + 1
-              return accumulator
-            }, {})
-            return { block, counts }
-          }).filter(({ counts }) => Object.keys(counts).length > 0)
-          const matrixSummaries = matrixBlocks.map((block) => {
-            const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
-            const averages = Object.fromEntries(rows.map((row: string) => {
-              const values = grouping.responses
-                .map((response) => Number(response.responses?.[block.id]?.[row]))
-                .filter((value) => Number.isFinite(value))
-              const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
-              return [row, average]
-            })) as Record<string, number>
-            return { block, averages }
-          }).filter(({ averages }) => Object.keys(averages).length > 0)
-          const responseCards = grouping.responses.map((response) => ({
-            response,
-            label: responseLabelLookup[response.responseId],
-            entries: summaryBlocks
-              .map((block) => ({ block, value: response.responses?.[block.id] }))
-              .filter(({ value }) => value !== undefined && value !== null && value !== ''),
-          }))
           return (
             <article key={grouping.key} className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -3590,117 +4041,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
                 ))}
               </div>
 
-              <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Average radar</h3>
-                    <span className="text-sm font-medium text-slate-700">Mean score</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
-                    <RadarSummaryChart data={avgRadar} />
-                    <div className="flex-1 space-y-2 text-sm text-slate-700">
-                      {Object.entries(avgRadar).map(([label, value]) => (
-                        <div key={label} className="flex items-center justify-between rounded-lg bg-white px-2.5 py-2 shadow-sm ring-1 ring-slate-200">
-                          <span>{label}</span>
-                          <span className="font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Quadrant position</h3>
-                  <div className="mt-3 flex items-center justify-center gap-4">
-                    <QuadrantMiniChart x={avgPoint.x} y={avgPoint.y} />
-                  </div>
-                  <div className="mt-3 flex justify-between text-sm text-slate-700">
-                    <span>x: {avgPoint.x.toFixed(1)}</span>
-                    <span>y: {avgPoint.y.toFixed(1)}</span>
-                  </div>
-                </div>
-              </div>
-
-              {(verdictSummaries.length > 0 || matrixSummaries.length > 0) && (
-                <div className="mt-6 grid gap-4 md:grid-cols-2">
-                  {verdictSummaries.map(({ block, counts }) => (
-                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Verdict distribution'}</h3>
-                      <div className="mt-3 space-y-2">
-                        {Object.entries(counts).map(([verdict, count]) => (
-                          <div key={verdict} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
-                            <span className="text-sm text-slate-700">{verdict}</span>
-                            <span className="text-sm font-semibold text-slate-900">{count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-
-                  {matrixSummaries.map(({ block, averages }) => (
-                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Matrix averages'}</h3>
-                      <div className="mt-3 space-y-2">
-                        {Object.entries(averages).map(([row, value]) => (
-                          <div key={row} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
-                            <span className="text-sm text-slate-700">{row}</span>
-                            <span className="text-sm font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-emerald-700">Strengths</h3>
-                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                    {strengths.slice(0, 5).map((item, index) => (
-                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-red-700">Limitations</h3>
-                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
-                    {weaknesses.slice(0, 5).map((item, index) => (
-                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-red-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-
-              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Individual responses</h3>
-                  <span className="text-sm text-slate-600">Written responses stay separate from the aggregate.</span>
-                </div>
-                <div className="grid gap-3 xl:grid-cols-2">
-                  {responseCards.map(({ response, label, entries }) => (
-                    <div key={response.responseId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                      <div className="flex items-center justify-between gap-3">
-                        <h4 className="text-base font-semibold text-slate-900">{label}</h4>
-                        <span className="text-xs uppercase tracking-[0.12em] text-slate-500">{response.responseId.slice(0, 8)}</span>
-                      </div>
-                      <div className="mt-3 space-y-3">
-                        {entries.length > 0 ? entries.map(({ block, value }) => (
-                          <div key={`${response.responseId}-${block.id}`} className="rounded-xl bg-slate-50 px-3 py-2">
-                            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{getBlockDisplayLabel(block)}</div>
-                            {block.type === 'richText' && TEXT_RESPONSE_BLOCK_TYPES.has(block.type) ? (
-                              <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: String(value) }} />
-                            ) : (
-                              <div className="mt-2 text-sm text-slate-700">{formatBlockValue(block, value)}</div>
-                            )}
-                          </div>
-                        )) : <p className="text-sm text-slate-500">No additional written responses were recorded for this submission.</p>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {renderPageSections(grouping, 'teacher')}
             </article>
           )
         })}
