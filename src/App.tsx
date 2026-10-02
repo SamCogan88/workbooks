@@ -25,7 +25,7 @@ import {
   User,
   Wrench,
 } from 'lucide-react'
-import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSynthesisSettings } from './lib/types'
+import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings, WorksheetSynthesisSettings } from './lib/types'
 import {
   aggregateQuadrantMean,
   aggregateRadarValues,
@@ -116,6 +116,7 @@ const EMPTY_WORKSHEET_DEFINITION: WorksheetDefinition = {
     allowPageJumping: false,
     autosave: true,
     showProgress: true,
+    completionMessage: '',
     exports: {
       json: true,
       pdf: true,
@@ -194,6 +195,15 @@ function hasMeaningfulResponseValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.some((item) => hasMeaningfulResponseValue(item))
   if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some((item) => hasMeaningfulResponseValue(item))
   return false
+}
+
+export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Record<string, any>) {
+  if (!block.required) return true
+  return hasMeaningfulResponseValue(responses[block.id])
+}
+
+export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, any>) {
+  return page.blocks.filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
 }
 
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, any>) {
@@ -528,6 +538,7 @@ function SystemGuidePage() {
         'Structured worksheet definitions with page-based authoring',
         'JSON import/export for teacher and student workflow',
         'Autosave and resume continuation for active worksheets',
+        'Optional learner completion popup after automatic JSON export on Finish',
         'Multi-file response import and aggregated synthesis',
         'Configurable synthesis grouping and response labels',
         'Shared filtering across student synthesis and teacher report',
@@ -554,6 +565,7 @@ function SystemGuidePage() {
           allowPageJumping: 'boolean',
           autosave: 'boolean',
           showProgress: 'boolean',
+          completionMessage: 'optional learner-facing popup text shown after Finish exports the response JSON',
           exports: { json: 'boolean', pdf: 'boolean' },
         },
         synthesis: {
@@ -856,6 +868,7 @@ function SystemGuidePage() {
       chartTypes: ['radar', 'quadrant', 'summary badges', 'verdict distribution', 'matrix averages'],
       sharedFilters: ['grouping key', 'response label', 'verdict', 'free-text search'],
       reportHierarchy: ['synthesis group', 'worksheet page section', 'response block card'],
+      finishBehavior: ['checks required items before allowing completion', 'exports the learner response JSON', 'shows a completion popup using settings.completionMessage when configured'],
       sectionBehavior: {
         source: 'Report sections are derived from definition.pages.',
         inclusion: 'Only pages with reportable response data are rendered.',
@@ -881,6 +894,7 @@ function SystemGuidePage() {
       allowPageJumping: false,
       autosave: true,
       showProgress: true,
+      completionMessage: 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.',
       exports: { json: true, pdf: true },
     },
     synthesis: {
@@ -952,6 +966,7 @@ function SystemGuidePage() {
             <li>• Supports sequential or free navigation through pages.</li>
             <li>• Captures student responses and persists autosave sessions.</li>
             <li>• Exports worksheet definitions and response JSON.</li>
+            <li>• Can export the learner JSON automatically on Finish and show a teacher-authored completion popup.</li>
             <li>• Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
             <li>• Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
             <li>• Organises synthesis and report output into page-based sections using the worksheet's existing page structure.</li>
@@ -967,11 +982,34 @@ function SystemGuidePage() {
             <li>• Prefer stable labels and simple option arrays for choice blocks.</li>
             <li>• Put media URLs in config.videoUrl or config.imageUrl.</li>
             <li>• Configure `synthesis.groupByBlockId` and `synthesis.responseLabelBlockId` when you want grouped synthesis output.</li>
+            <li>• Configure `settings.completionMessage` when learners need a custom hand-in or next-step popup after finishing.</li>
             <li>• For synthesis, use radar, quadrant, matrix, SWOT, or verdict blocks where possible.</li>
             <li>• Keep definitions versioned for future schema updates.</li>
           </ul>
         </section>
       </div>
+
+      <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-900">Completion popup</h2>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Learner flow</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>• Finish exports the current response JSON automatically.</li>
+              <li>• After export, the learner sees a completion popup.</li>
+              <li>• The popup can tell learners where to upload or hand in the JSON file.</li>
+            </ul>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Worksheet setting</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>• Store custom popup copy in `settings.completionMessage`.</li>
+              <li>• Leave it blank to use the default completion text.</li>
+              <li>• This is a worksheet-level setup option, not a page-level option.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
 
       <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-900">Synthesis configuration</h2>
@@ -1078,6 +1116,7 @@ function SystemGuidePage() {
     allowPageJumping: false,
     autosave: true,
     showProgress: true,
+    completionMessage: 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.',
     exports: { json: true, pdf: true }
   },
           synthesis: {
@@ -1124,6 +1163,8 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   const [responses, setResponses] = useState<Record<string, any>>({})
   const [status, setStatus] = useState('In progress')
   const [isSessionHydrated, setIsSessionHydrated] = useState(false)
+  const [navigationWarning, setNavigationWarning] = useState('')
+  const [showCompletionDialog, setShowCompletionDialog] = useState(false)
 
   useEffect(() => {
     setIsSessionHydrated(false)
@@ -1170,6 +1211,22 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   const currentTimer = currentPage?.timer ?? null
   const [pageRemainingSeconds, setPageRemainingSeconds] = useState<number | null>(null)
   const quizSummary = useMemo(() => getQuizSummary(definition, responses), [definition, responses])
+  const completionMessage = useMemo(() => {
+    const configured = trimSynthesisValue(definition.settings.completionMessage)
+    return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
+  }, [definition.settings.completionMessage])
+  const missingRequiredBlocks = useMemo(
+    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
+    [currentPage, responses],
+  )
+  const canLeaveCurrentPage = missingRequiredBlocks.length === 0
+
+  const buildNavigationWarning = useCallback(() => {
+    if (!currentPage || missingRequiredBlocks.length === 0) return ''
+    const labels = missingRequiredBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
+    const suffix = missingRequiredBlocks.length > 3 ? ', and more' : ''
+    return `Complete the required items on ${currentPage.title} before moving on: ${labels.join(', ')}${suffix}.`
+  }, [currentPage, missingRequiredBlocks])
 
   useEffect(() => {
     if (!currentTimer?.enabled) {
@@ -1199,6 +1256,11 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     if (pageRemainingSeconds > 0) return
 
     if (currentTimer.behaviour === 'auto-advance') {
+      if (!canLeaveCurrentPage) {
+        setNavigationWarning(buildNavigationWarning())
+        setStatus('Required responses missing')
+        return
+      }
       if (pageIndex < totalPages - 1) {
         setPageIndex((value) => value + 1)
         return
@@ -1208,9 +1270,13 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     }
 
     setStatus('Time expired')
-  }, [currentPage?.id, currentTimer, pageIndex, pageRemainingSeconds, totalPages])
+  }, [buildNavigationWarning, canLeaveCurrentPage, currentPage?.id, currentTimer, pageIndex, pageRemainingSeconds, totalPages])
 
   const updateResponse = (blockId: string, value: any) => {
+    setNavigationWarning('')
+    if (status === 'Required responses missing') {
+      setStatus('In progress')
+    }
     setResponses((previous) => ({ ...previous, [blockId]: value }))
   }
 
@@ -1227,28 +1293,45 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     responses,
   })
 
+  const tryLeaveCurrentPage = () => {
+    if (canLeaveCurrentPage) {
+      setNavigationWarning('')
+      return true
+    }
+
+    setNavigationWarning(buildNavigationWarning())
+    setStatus('Required responses missing')
+    return false
+  }
+
   const goToPage = (index: number) => {
     if (index < 0 || index > totalPages - 1) return
+    if (index !== pageIndex && !tryLeaveCurrentPage()) return
     setPageIndex(index)
   }
 
   const handleNext = () => {
+    if (!tryLeaveCurrentPage()) return
+
     if (pageIndex < totalPages - 1) {
       setPageIndex((value) => value + 1)
       return
     }
+    exportResponseJson(buildDocument())
     setStatus('Complete')
+    setShowCompletionDialog(true)
   }
 
   const handleBack = () => {
     if (pageIndex > 0) {
-      setPageIndex((value) => value - 1)
+      goToPage(pageIndex - 1)
     }
   }
 
   const handleStartNew = () => {
     if (!window.confirm('Start a new response? This will clear the current saved version.')) return
     const nextId = getDefaultResponseId()
+    setShowCompletionDialog(false)
     setResponseId(nextId)
     setResponses({})
     setPageIndex(0)
@@ -1361,6 +1444,11 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
               <span>{formatTimerValue(pageRemainingSeconds ?? currentTimer.durationSeconds)}</span>
             </div>
           )}
+          {navigationWarning && (
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {navigationWarning}
+            </div>
+          )}
           <div className="h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
           </div>
@@ -1378,7 +1466,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={pageIndex === 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
-            <button onClick={handleNext} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+            <button onClick={handleNext} disabled={!canLeaveCurrentPage} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300">
               {pageIndex === totalPages - 1 ? 'Finish' : 'Next'}
             </button>
           </div>
@@ -1401,7 +1489,8 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
                   <button
                     type="button"
                     onClick={() => goToPage(index)}
-                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+                    disabled={index !== pageIndex && !canLeaveCurrentPage}
+                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
                   >
                     <span className="inline-flex items-center gap-2">
                       <FileText className="h-4 w-4" />
@@ -1418,6 +1507,25 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
           </div>
         </aside>
       </div>
+
+      {showCompletionDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Worksheet complete</p>
+            <h2 className="mt-2 text-2xl font-bold text-slate-900">Your response has been exported</h2>
+            <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{completionMessage}</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowCompletionDialog(false)}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
@@ -4467,6 +4575,20 @@ function BuilderPage({
     updateSelectedBlock({ config: { ...selectedConfig, ...partial } })
   }
 
+  const updateWorksheetDefinition = (partial: Partial<WorksheetDefinition>) => {
+    setDefinition((previous) => ({ ...previous, ...partial }))
+  }
+
+  const updateWorksheetSettings = (partial: Partial<WorksheetSettings>) => {
+    setDefinition((previous) => ({
+      ...previous,
+      settings: {
+        ...previous.settings,
+        ...partial,
+      },
+    }))
+  }
+
   const synthesisBlockOptions = getResponseProducingBlocks(definition).map((block) => ({
     value: block.id,
     label: getBlockDisplayLabel(block),
@@ -4583,6 +4705,103 @@ function BuilderPage({
         </aside>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Worksheet setup</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-900">Configure the worksheet and learner completion flow</h2>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block text-sm font-medium text-slate-700">
+                Worksheet ID
+                <input
+                  value={definition.id}
+                  onChange={(event) => updateWorksheetDefinition({ id: event.target.value })}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700">
+                Version
+                <input
+                  type="number"
+                  min={1}
+                  value={definition.version}
+                  onChange={(event) => updateWorksheetDefinition({ version: Math.max(1, Number(event.target.value) || 1) })}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700 md:col-span-2">
+                Worksheet title
+                <input
+                  value={definition.title}
+                  onChange={(event) => updateWorksheetDefinition({ title: event.target.value })}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700 md:col-span-2">
+                Description
+                <textarea
+                  value={definition.description}
+                  onChange={(event) => updateWorksheetDefinition({ description: event.target.value })}
+                  className="mt-2 min-h-20 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700">
+                Navigation mode
+                <select
+                  value={definition.settings.navigation}
+                  onChange={(event) => updateWorksheetSettings({ navigation: event.target.value as 'sequential' | 'free' })}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                >
+                  <option value="sequential">Sequential</option>
+                  <option value="free">Free</option>
+                </select>
+              </label>
+
+              <div className="grid gap-2 rounded-xl border border-slate-200 bg-white p-3 md:col-span-1">
+                <label className="flex items-center justify-between gap-3 text-sm font-medium text-slate-700">
+                  <span>Allow page jumping</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(definition.settings.allowPageJumping)}
+                    onChange={(event) => updateWorksheetSettings({ allowPageJumping: event.target.checked })}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm font-medium text-slate-700">
+                  <span>Autosave</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(definition.settings.autosave)}
+                    onChange={(event) => updateWorksheetSettings({ autosave: event.target.checked })}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm font-medium text-slate-700">
+                  <span>Show progress</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(definition.settings.showProgress)}
+                    onChange={(event) => updateWorksheetSettings({ showProgress: event.target.checked })}
+                  />
+                </label>
+              </div>
+
+              <label className="block text-sm font-medium text-slate-700 md:col-span-2">
+                Completion popup message
+                <textarea
+                  value={definition.settings.completionMessage || ''}
+                  onChange={(event) => updateWorksheetSettings({ completionMessage: event.target.value })}
+                  placeholder="Your response JSON has been downloaded. Upload it to your teacher or learning platform."
+                  className="mt-2 min-h-24 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                />
+                <p className="mt-2 text-xs text-slate-500">Shown to learners after Finish exports the worksheet response JSON.</p>
+              </label>
+            </div>
+          </div>
+
           <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-3">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Synthesis settings</p>

@@ -33,6 +33,7 @@ export interface WorksheetSettings {
   allowPageJumping: boolean
   autosave: boolean
   showProgress: boolean
+  completionMessage?: string
   exports: {
     json: boolean
     pdf: boolean

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildStudentSynthesis, getDefaultBlockConfig, getDefaultPageTimer, getQuizSummary } from './App'
+import { buildStudentSynthesis, getDefaultBlockConfig, getDefaultPageTimer, getMissingRequiredBlocks, getQuizSummary, isRequiredBlockSatisfied } from './App'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -155,5 +155,47 @@ describe('worksheet quiz summary', () => {
     expect(summary.percent).toBeCloseTo(40)
     expect(summary.items[0].isCorrect).toBe(true)
     expect(summary.items[1].isCorrect).toBe(false)
+  })
+})
+
+describe('required page completion', () => {
+  it('treats required response blocks as incomplete until they have meaningful values', () => {
+    const page = {
+      id: 'page-1',
+      title: 'Required page',
+      blocks: [
+        {
+          id: 'group-name',
+          type: 'shortText',
+          label: 'Group name',
+          required: true,
+        },
+        {
+          id: 'tool-spin',
+          type: 'randomizer',
+          label: 'Spin for a tool',
+          required: true,
+          config: { items: ['Diffit', 'NotebookLM'] },
+        },
+        {
+          id: 'notes',
+          type: 'longText',
+          label: 'Notes',
+          required: false,
+        },
+      ],
+    } as any
+
+    expect(isRequiredBlockSatisfied(page.blocks[0], {})).toBe(false)
+    expect(isRequiredBlockSatisfied(page.blocks[1], {})).toBe(false)
+    expect(getMissingRequiredBlocks(page, {})).toHaveLength(2)
+
+    const partialResponses = { 'group-name': 'Group 1' }
+    expect(isRequiredBlockSatisfied(page.blocks[0], partialResponses)).toBe(true)
+    expect(getMissingRequiredBlocks(page, partialResponses).map((block) => block.id)).toEqual(['tool-spin'])
+
+    const completeResponses = { 'group-name': 'Group 1', 'tool-spin': 'Diffit' }
+    expect(isRequiredBlockSatisfied(page.blocks[1], completeResponses)).toBe(true)
+    expect(getMissingRequiredBlocks(page, completeResponses)).toHaveLength(0)
   })
 })
