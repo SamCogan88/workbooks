@@ -1,0 +1,67 @@
+{
+  "responseSchema": "interactive-worksheet-response",
+  "schemaVersion": 1,
+  "worksheetId": "ai-tool-lab",
+  "worksheetVersion": 1,
+  "responseId": "response-ai-tool-lab-notebooklm-group-5",
+  "createdAt": "2026-10-02T10:16:00.000Z",
+  "updatedAt": "2026-10-02T10:16:00.000Z",
+  "group": "Group 5",
+  "subject": "NotebookLM",
+  "responses": {
+    "group-name": "Group 5",
+    "tool-name": "NotebookLM",
+    "expectation-score": 8,
+    "tool-purpose": "Builds summaries and question sets from uploaded documents while keeping a stronger link to the source base.",
+    "intended-user": "Educator",
+    "problem-solved": "It helps teachers and students consolidate notes from several readings into a manageable study resource.",
+    "feature-interest": "Turning lecture notes and readings into source-backed revision questions.",
+    "test-request": "We uploaded two readings and seminar notes, then asked NotebookLM to create a summary and possible seminar prompts.",
+    "test-what-happened": "The summary was strong, the prompt set was mostly useful, and the source connections gave us more confidence than a normal chatbot.",
+    "surprised": "The tool was better at comparative synthesis than at producing original teaching activity ideas.",
+    "corrected": "We refined one prompt, removed repetition, and checked a claim that simplified the authors' disagreement too much.",
+    "radar-eval": {
+      "Ease of use": 7,
+      "Pedagogical value": 9,
+      "Reliability": 8,
+      "Creativity": 6,
+      "Accessibility": 7,
+      "Time saving": 8,
+      "Learner usefulness": 8,
+      "Educator control": 8
+    },
+    "swot-board": {
+      "strengths": [
+        { "text": "Useful for comparing ideas across multiple uploaded sources." },
+        { "text": "Source-grounded summaries feel more trustworthy than generic AI answers." }
+      ],
+      "weaknesses": [
+        { "text": "It is less imaginative when asked for novel classroom activities." }
+      ],
+      "opportunities": [
+        { "text": "Could support seminar prep and revision from module reading packs." }
+      ],
+      "threats": [
+        { "text": "Students may rely on the summary rather than wrestling with difficult source passages themselves." }
+      ]
+    },
+    "learning-improve": "It could help students see connections across readings and prepare more efficiently for discussion.",
+    "teacher-time": "Combining notes and readings into a reusable revision overview.",
+    "strongest-use": "Comparative reading synthesis.",
+    "avoid-use": "Avoid it if the main aim is for students to interpret primary sources independently before any summary support.",
+    "check-before-use": "Check that the summary does not erase disagreement or compress authors' positions too heavily.",
+    "quadrant-map": {
+      "x": 72,
+      "y": 40,
+      "rationale": "It offers clear learning support and reasonable control, but still carries some risk if summaries replace direct reading."
+    },
+    "ai-decisions": "It selected which themes to compare, what evidence to prioritise, and how to compress the overall narrative.",
+    "human-judgement-needed": "Teachers still need to judge whether the synthesis keeps the right balance between simplification and disciplinary accuracy.",
+    "concerned": "Learners might treat the notebook summary as a substitute for careful engagement with the original texts.",
+    "overall-verdict": "Use carefully",
+    "best-use": "Cross-reading summaries",
+    "biggest-concern": "Replacing direct reading",
+    "other-educators-know": "It is strongest when framed as a guide into the reading rather than a replacement for it.",
+    "view-change": "We became more positive about its reliability, but more cautious about how students might overuse it."
+  }
+}

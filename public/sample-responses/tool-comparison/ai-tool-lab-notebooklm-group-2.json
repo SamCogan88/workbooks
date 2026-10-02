@@ -1,0 +1,67 @@
+{
+  "responseSchema": "interactive-worksheet-response",
+  "schemaVersion": 1,
+  "worksheetId": "ai-tool-lab",
+  "worksheetVersion": 1,
+  "responseId": "response-ai-tool-lab-notebooklm-group-2",
+  "createdAt": "2026-10-02T10:14:00.000Z",
+  "updatedAt": "2026-10-02T10:14:00.000Z",
+  "group": "Group 2",
+  "subject": "NotebookLM",
+  "responses": {
+    "group-name": "Group 2",
+    "tool-name": "NotebookLM",
+    "expectation-score": 9,
+    "tool-purpose": "Synthesizes uploaded source material into summaries, questions, and study support.",
+    "intended-user": "Both",
+    "problem-solved": "It helps learners and educators work across several documents without losing track of source evidence.",
+    "feature-interest": "Using uploaded documents to create a concise summary and source-grounded revision prompts.",
+    "test-request": "We uploaded notes on formative assessment and asked NotebookLM to summarise key themes and generate revision questions.",
+    "test-what-happened": "It produced a coherent summary with source-aware prompts and clearer links back to evidence than expected.",
+    "surprised": "The source-grounding reduced hallucination more effectively than in other chat-based tools.",
+    "corrected": "We still checked a few claims and adjusted one question that was too broad for our module context.",
+    "radar-eval": {
+      "Ease of use": 8,
+      "Pedagogical value": 9,
+      "Reliability": 8,
+      "Creativity": 7,
+      "Accessibility": 7,
+      "Time saving": 8,
+      "Learner usefulness": 9,
+      "Educator control": 8
+    },
+    "swot-board": {
+      "strengths": [
+        { "text": "Keeps responses visibly tied to uploaded source material." },
+        { "text": "Useful for summarising multiple texts into one study view." }
+      ],
+      "weaknesses": [
+        { "text": "Output quality depends heavily on the quality of uploaded sources." }
+      ],
+      "opportunities": [
+        { "text": "Could support revision packs and seminar preparation from reading bundles." }
+      ],
+      "threats": [
+        { "text": "Students may over-rely on summaries instead of reading original sources carefully." }
+      ]
+    },
+    "learning-improve": "It could help learners navigate a larger reading set and identify the most relevant ideas more quickly.",
+    "teacher-time": "Summarising document sets and drafting evidence-based revision prompts.",
+    "strongest-use": "Source-grounded revision and reading synthesis.",
+    "avoid-use": "Avoid it when students need to practise close reading of the original source itself.",
+    "check-before-use": "Check that summaries do not overstate claims and that cited evidence really supports the output.",
+    "quadrant-map": {
+      "x": 74,
+      "y": 38,
+      "rationale": "It offers strong learning value with manageable risk when source material is chosen carefully."
+    },
+    "ai-decisions": "It decided which themes to foreground, which evidence to connect, and how to structure the summary.",
+    "human-judgement-needed": "Educators still need to judge whether the summary reflects the course emphasis and reading priorities.",
+    "concerned": "Students might skip the original texts and accept the notebook summary as complete understanding.",
+    "overall-verdict": "Use it",
+    "best-use": "Revision synthesis",
+    "biggest-concern": "Source over-reliance",
+    "other-educators-know": "Its value is strongest when the source pack is carefully curated and expectations for verification are explicit.",
+    "view-change": "We became more confident in it once we saw how clearly it linked responses back to uploaded materials."
+  }
+}

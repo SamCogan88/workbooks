@@ -1,0 +1,67 @@
+{
+  "responseSchema": "interactive-worksheet-response",
+  "schemaVersion": 1,
+  "worksheetId": "ai-tool-lab",
+  "worksheetVersion": 1,
+  "responseId": "response-ai-tool-lab-group-4",
+  "createdAt": "2026-10-02T09:58:00.000Z",
+  "updatedAt": "2026-10-02T09:58:00.000Z",
+  "group": "Group 4",
+  "subject": "Diffit",
+  "responses": {
+    "group-name": "Group 4",
+    "tool-name": "Diffit",
+    "expectation-score": 7,
+    "tool-purpose": "Adapts source materials into learner-friendly resources and revision tasks.",
+    "intended-user": "Educator",
+    "problem-solved": "It helps staff create accessible versions of dense academic texts more quickly.",
+    "feature-interest": "Using one source text to create discussion prompts and key-word support.",
+    "test-request": "We asked Diffit to create a simplified resource and discussion questions from a text about assessment design.",
+    "test-what-happened": "The tool generated a clearer reading version and a set of prompts that were usable after light editing.",
+    "surprised": "The vocabulary support was more useful than the discussion prompts.",
+    "corrected": "We removed a few repetitive questions and reworded one explanation that was slightly misleading.",
+    "radar-eval": {
+      "Ease of use": 8,
+      "Pedagogical value": 7,
+      "Reliability": 7,
+      "Creativity": 5,
+      "Accessibility": 9,
+      "Time saving": 8,
+      "Learner usefulness": 8,
+      "Educator control": 6
+    },
+    "swot-board": {
+      "strengths": [
+        { "text": "Accessible outputs make difficult texts easier to approach." },
+        { "text": "Vocabulary and comprehension support are quick to generate." }
+      ],
+      "weaknesses": [
+        { "text": "Prompt quality can become repetitive across tasks." }
+      ],
+      "opportunities": [
+        { "text": "Can support inclusive preparation for students before class." }
+      ],
+      "threats": [
+        { "text": "There is a risk of reducing complexity too far if staff do not review carefully." }
+      ]
+    },
+    "learning-improve": "It can lower the reading barrier for students who need a more accessible first encounter with the topic.",
+    "teacher-time": "Creating adapted handouts and first-draft discussion questions.",
+    "strongest-use": "Generating accessible pre-seminar reading support.",
+    "avoid-use": "Avoid it where nuance and original phrasing are central to the learning outcome.",
+    "check-before-use": "Check whether examples, simplifications, and generated questions still reflect the source accurately.",
+    "quadrant-map": {
+      "x": 76,
+      "y": 42,
+      "rationale": "It saves time and improves access, but still carries some risk if edits are skipped."
+    },
+    "ai-decisions": "It decided which vocabulary needed scaffolding and which ideas to compress into a simpler explanation.",
+    "human-judgement-needed": "Educators need to confirm that simplification supports learning without weakening the underlying concept.",
+    "concerned": "A novice teacher might assume accessibility always equals accuracy and miss where subtle ideas were lost.",
+    "overall-verdict": "Use carefully",
+    "best-use": "Accessible pre-reading",
+    "biggest-concern": "Loss of nuance",
+    "other-educators-know": "The first draft is helpful, but the educational value depends on active teacher editing.",
+    "view-change": "We finished more positive about its accessibility benefits, but less convinced by the originality of its prompts."
+  }
+}

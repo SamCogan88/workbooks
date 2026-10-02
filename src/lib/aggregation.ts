@@ -1,25 +1,154 @@
-import type { WorksheetResponse } from './types'
+import type { GroupedResponseSet, WorksheetDefinition, WorksheetResponse, WorksheetSynthesisSettings } from './types'
 
-export function normaliseToolName(value: string = '') {
+export interface ResolvedSynthesisConfig {
+  groupByBlockId?: string
+  groupLabel: string
+  responseLabelBlockId?: string
+  warning?: string
+  usesFallbackGrouping: boolean
+}
+
+const DEFAULT_GROUP_LABEL = 'Response group'
+const DEFAULT_UNGROUPED_LABEL = 'All responses'
+const UNSPECIFIED_GROUP_LABEL = 'Unspecified'
+
+export function normaliseGroupingValue(value: string = '') {
   return value.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
-export function groupResponsesByTool(responses: WorksheetResponse[]) {
-  const groups = new Map<string, WorksheetResponse[]>()
+function getWorksheetBlocks(definition: WorksheetDefinition) {
+  return definition.pages.flatMap((page) => page.blocks)
+}
 
-  for (const response of responses) {
-    const toolName = response.subject || 'Unknown'
-    const key = normaliseToolName(toolName)
-    if (!groups.has(key)) {
-      groups.set(key, [])
+function hasBlock(definition: WorksheetDefinition, blockId?: string) {
+  return Boolean(blockId) && getWorksheetBlocks(definition).some((block) => block.id === blockId)
+}
+
+function getConfiguredGroupLabel(settings?: WorksheetSynthesisSettings) {
+  const configured = typeof settings?.groupLabel === 'string' ? settings.groupLabel.trim() : ''
+  return configured || DEFAULT_GROUP_LABEL
+}
+
+function getCompatibilityGroupByBlockId(definition: WorksheetDefinition) {
+  if (definition.id !== 'ai-tool-lab') return undefined
+  return hasBlock(definition, 'tool-name') ? 'tool-name' : undefined
+}
+
+function getCompatibilityResponseLabelBlockId(definition: WorksheetDefinition) {
+  if (definition.id !== 'ai-tool-lab') return undefined
+  return hasBlock(definition, 'group-name') ? 'group-name' : undefined
+}
+
+function toDisplayGroupingValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim().replace(/\s+/g, ' ')
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map((item) => toDisplayGroupingValue(item)).filter(Boolean).join(', ')
+  return ''
+}
+
+function getConfiguredGroupingValue(response: WorksheetResponse, groupByBlockId?: string) {
+  if (!groupByBlockId) return ''
+  return toDisplayGroupingValue(response.responses?.[groupByBlockId])
+}
+
+function getCompatibilityGroupingValue(response: WorksheetResponse, definition: WorksheetDefinition) {
+  const fromResponse = getConfiguredGroupingValue(response, getCompatibilityGroupByBlockId(definition))
+  if (fromResponse) return fromResponse
+  return toDisplayGroupingValue(response.subject)
+}
+
+export function resolveSynthesisConfig(definition: WorksheetDefinition): ResolvedSynthesisConfig {
+  const settings = definition.synthesis
+  const configuredGroupByBlockId = settings?.groupByBlockId?.trim()
+  const configuredResponseLabelBlockId = settings?.responseLabelBlockId?.trim()
+
+  if (configuredGroupByBlockId) {
+    if (hasBlock(definition, configuredGroupByBlockId)) {
+      return {
+        groupByBlockId: configuredGroupByBlockId,
+        groupLabel: getConfiguredGroupLabel(settings),
+        responseLabelBlockId: hasBlock(definition, configuredResponseLabelBlockId) ? configuredResponseLabelBlockId : undefined,
+        warning: configuredResponseLabelBlockId && !hasBlock(definition, configuredResponseLabelBlockId)
+          ? `This worksheet is configured to label responses using \`${configuredResponseLabelBlockId}\`, but that block could not be found.`
+          : undefined,
+        usesFallbackGrouping: false,
+      }
     }
-    groups.get(key)?.push(response)
+
+    return {
+      groupLabel: getConfiguredGroupLabel(settings),
+      responseLabelBlockId: hasBlock(definition, configuredResponseLabelBlockId) ? configuredResponseLabelBlockId : undefined,
+      warning: `This worksheet is configured to group synthesis by \`${configuredGroupByBlockId}\`, but that block could not be found.`,
+      usesFallbackGrouping: true,
+    }
   }
 
-  return Array.from(groups.entries()).map(([toolKey, items]) => ({
-    tool: items[0]?.subject || toolKey,
-    groups: items,
-  }))
+  const compatibilityGroupByBlockId = getCompatibilityGroupByBlockId(definition)
+  if (compatibilityGroupByBlockId || definition.id === 'ai-tool-lab') {
+    return {
+      groupByBlockId: compatibilityGroupByBlockId,
+      groupLabel: 'AI Tool',
+      responseLabelBlockId: getCompatibilityResponseLabelBlockId(definition),
+      usesFallbackGrouping: true,
+    }
+  }
+
+  return {
+    groupLabel: getConfiguredGroupLabel(settings),
+    responseLabelBlockId: hasBlock(definition, configuredResponseLabelBlockId) ? configuredResponseLabelBlockId : undefined,
+    warning: configuredResponseLabelBlockId && !hasBlock(definition, configuredResponseLabelBlockId)
+      ? `This worksheet is configured to label responses using \`${configuredResponseLabelBlockId}\`, but that block could not be found.`
+      : undefined,
+    usesFallbackGrouping: true,
+  }
+}
+
+export function getResponseLabel(response: WorksheetResponse, definition: WorksheetDefinition) {
+  const config = resolveSynthesisConfig(definition)
+  const configuredLabel = getConfiguredGroupingValue(response, config.responseLabelBlockId)
+  if (configuredLabel) return configuredLabel
+  if (typeof response.group === 'string' && response.group.trim()) return response.group.trim()
+  return response.responseId.slice(0, 8)
+}
+
+export function groupResponsesByKey(definition: WorksheetDefinition, responses: WorksheetResponse[]) {
+  const config = resolveSynthesisConfig(definition)
+
+  if (!config.groupByBlockId && definition.id !== 'ai-tool-lab') {
+    return {
+      config,
+      groups: responses.length
+        ? [{ key: 'all-responses', label: DEFAULT_UNGROUPED_LABEL, responses: [...responses] } satisfies GroupedResponseSet]
+        : [],
+    }
+  }
+
+  const groups = new Map<string, GroupedResponseSet>()
+
+  for (const response of responses) {
+    const rawValue = config.groupByBlockId
+      ? getConfiguredGroupingValue(response, config.groupByBlockId)
+      : getCompatibilityGroupingValue(response, definition)
+
+    const displayLabel = rawValue || UNSPECIFIED_GROUP_LABEL
+    const key = rawValue ? normaliseGroupingValue(rawValue) : 'unspecified'
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: displayLabel,
+        responses: [],
+        isMissingValue: !rawValue,
+      })
+    }
+
+    groups.get(key)?.responses.push(response)
+  }
+
+  return {
+    config,
+    groups: Array.from(groups.values()),
+  }
 }
 
 export function averageArray(values: number[]) {

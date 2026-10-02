@@ -1,0 +1,67 @@
+{
+  "responseSchema": "interactive-worksheet-response",
+  "schemaVersion": 1,
+  "worksheetId": "ai-tool-lab",
+  "worksheetVersion": 1,
+  "responseId": "response-ai-tool-lab-diffit-group-4",
+  "createdAt": "2026-10-02T10:12:00.000Z",
+  "updatedAt": "2026-10-02T10:12:00.000Z",
+  "group": "Group 4",
+  "subject": "Diffit",
+  "responses": {
+    "group-name": "Group 4",
+    "tool-name": "Diffit",
+    "expectation-score": 7,
+    "tool-purpose": "Adapts source text into accessible reading materials and related study prompts.",
+    "intended-user": "Educator",
+    "problem-solved": "It helps staff create easier entry points into dense academic readings.",
+    "feature-interest": "Using one article to produce a simplified handout and discussion prompts.",
+    "test-request": "We asked Diffit to turn an assessment-design article into a simpler student-friendly version.",
+    "test-what-happened": "The simplified text was helpful and the prompt suggestions were usable after editing.",
+    "surprised": "The accessibility features felt more valuable than the prompt generation.",
+    "corrected": "We removed a repetitive question and edited one explanation that slightly distorted the source meaning.",
+    "radar-eval": {
+      "Ease of use": 8,
+      "Pedagogical value": 7,
+      "Reliability": 7,
+      "Creativity": 5,
+      "Accessibility": 9,
+      "Time saving": 8,
+      "Learner usefulness": 8,
+      "Educator control": 6
+    },
+    "swot-board": {
+      "strengths": [
+        { "text": "Makes difficult texts easier to approach." },
+        { "text": "Produces support materials quickly for preparation." }
+      ],
+      "weaknesses": [
+        { "text": "Generated prompts can be repetitive and shallow." }
+      ],
+      "opportunities": [
+        { "text": "Could support inclusive access before seminars." }
+      ],
+      "threats": [
+        { "text": "Complex ideas may lose nuance if teachers skip review." }
+      ]
+    },
+    "learning-improve": "It could help learners meet a threshold understanding before deeper seminar discussion.",
+    "teacher-time": "Adapting source text and drafting quick support questions.",
+    "strongest-use": "Accessible pre-reading support.",
+    "avoid-use": "Avoid it when precise wording and disciplinary nuance must remain unchanged.",
+    "check-before-use": "Check whether simplifications preserve meaning and whether questions promote genuine understanding.",
+    "quadrant-map": {
+      "x": 76,
+      "y": 42,
+      "rationale": "It saves time and improves access, but still requires review to manage the risk of oversimplification."
+    },
+    "ai-decisions": "It decided which concepts to compress and which vocabulary to scaffold for the reader.",
+    "human-judgement-needed": "Educators must decide whether the adapted reading still aligns with the learning outcome.",
+    "concerned": "A novice teacher might mistake accessibility for accuracy and overlook missing nuance.",
+    "overall-verdict": "Use carefully",
+    "best-use": "Accessible pre-reading",
+    "biggest-concern": "Loss of nuance",
+    "other-educators-know": "The educational value depends on active teacher editing rather than one-click output.",
+    "view-change": "We ended more positive about its accessibility benefits than its question-writing ability."
+  }
+}

@@ -25,11 +25,12 @@ import {
   User,
   Wrench,
 } from 'lucide-react'
-import type { WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse } from './lib/types'
+import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSynthesisSettings } from './lib/types'
 import {
   aggregateQuadrantMean,
   aggregateRadarValues,
-  groupResponsesByTool,
+  getResponseLabel,
+  groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
 import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
@@ -37,6 +38,57 @@ import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } fr
 const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
+const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
+const TEXT_RESPONSE_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText'])
+const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating'])
+
+function getBlockDisplayLabel(block: WorksheetBlock) {
+  return block.label || block.title || block.id
+}
+
+function isResponseProducingBlock(block: WorksheetBlock) {
+  if (NON_RESPONSE_BLOCK_TYPES.has(block.type)) return false
+  if (block.type === 'richText' && block.config?.mode === 'information') return false
+  return true
+}
+
+function pluralizeLabel(label: string, count: number) {
+  if (count === 1) return label
+  return label.endsWith('s') ? label : `${label}s`
+}
+
+function formatCountLabel(count: number, singularLabel: string) {
+  return `${count} ${count === 1 ? singularLabel : `${singularLabel}s`}`
+}
+
+function getResponseProducingBlocks(definition: WorksheetDefinition) {
+  return definition.pages.flatMap((page) => page.blocks).filter(isResponseProducingBlock)
+}
+
+function trimSynthesisValue(value?: string) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function isSynthesisSettingsEmpty(settings?: WorksheetSynthesisSettings) {
+  return !settings || !trimSynthesisValue(settings.groupByBlockId) && !trimSynthesisValue(settings.groupLabel) && !trimSynthesisValue(settings.responseLabelBlockId)
+}
+
+function clearRemovedBlockReferences(
+  synthesis: WorksheetSynthesisSettings | undefined,
+  deletedBlockIds: string[],
+) {
+  if (!synthesis) return undefined
+
+  const next: WorksheetSynthesisSettings = { ...synthesis }
+  if (next.groupByBlockId && deletedBlockIds.includes(next.groupByBlockId)) {
+    delete next.groupByBlockId
+  }
+  if (next.responseLabelBlockId && deletedBlockIds.includes(next.responseLabelBlockId)) {
+    delete next.responseLabelBlockId
+  }
+
+  return isSynthesisSettingsEmpty(next) ? undefined : next
+}
 
 const EMPTY_WORKSHEET_DEFINITION: WorksheetDefinition = {
   id: 'custom-worksheet',
@@ -72,18 +124,19 @@ function getWorksheetStructure(definition: WorksheetDefinition) {
   const radarBlock = blocks.find((block) => block.type === 'radar')
   const swotBlock = blocks.find((block) => block.type === 'swot')
   const quadrantBlock = blocks.find((block) => block.type === 'quadrant')
-  const subjectBlock = blocks.find((block) => /tool|subject|name/i.test(block.id) && block.type === 'shortText')
 
   const radarDimensions = (radarBlock?.config?.dimensions || [])
     .map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || '')))
     .filter(Boolean)
 
   return {
+    blocks,
+    blockById: Object.fromEntries(blocks.map((block) => [block.id, block])) as Record<string, WorksheetBlock>,
+    responseBlocks: blocks.filter(isResponseProducingBlock),
     radarBlockId: radarBlock?.id || 'radar-eval',
     radarDimensions,
     swotBlockId: swotBlock?.id || 'swot-board',
     quadrantBlockId: quadrantBlock?.id || 'quadrant-map',
-    subjectBlockId: subjectBlock?.id || 'tool-name',
   }
 }
 
@@ -420,6 +473,7 @@ function SystemGuidePage() {
         'JSON import/export for teacher and student workflow',
         'Autosave and resume continuation for active worksheets',
         'Multi-file response import and aggregated synthesis',
+        'Configurable synthesis grouping and response labels',
         'Teacher reporting with radar, quadrant, and SWOT analysis',
         'Student-facing summaries and recommendations',
         'Optional page timers and progress tracking',
@@ -434,6 +488,7 @@ function SystemGuidePage() {
           title: 'string',
           description: 'string',
           settings: 'WorksheetSettings',
+          synthesis: 'optional WorksheetSynthesisSettings',
           pages: 'WorksheetPage[]',
         },
         settings: {
@@ -442,6 +497,11 @@ function SystemGuidePage() {
           autosave: 'boolean',
           showProgress: 'boolean',
           exports: { json: 'boolean', pdf: 'boolean' },
+        },
+        synthesis: {
+          groupByBlockId: 'optional string block id used as the synthesis grouping key',
+          groupLabel: 'optional human-readable label for synthesis groups',
+          responseLabelBlockId: 'optional string block id used to label individual responses',
         },
         page: {
           required: ['id', 'title', 'blocks'],
@@ -723,9 +783,21 @@ function SystemGuidePage() {
     },
     analytics: {
       supportedOutputs: ['student synthesis', 'teacher report', 'class PDF export'],
-      groupingKeys: ['tool', 'subject', 'group'],
-      chartTypes: ['radar', 'quadrant', 'summary badges'],
-      teacherSignals: ['strengths', 'weaknesses', 'mean scores', 'group trends'],
+      synthesisTerminology: {
+        responseId: 'Unique identifier for a submission.',
+        synthesisGroupingKey: 'The learner response field used to group related submissions.',
+        responseLabel: 'The human-readable name shown for an individual submission inside a synthesis group.',
+      },
+      groupingBehavior: {
+        normalization: ['trim whitespace', 'collapse repeated whitespace', 'compare case-insensitively'],
+        missingGroupingValue: 'Falls back to Unspecified without discarding the response.',
+        missingGroupingConfig: 'Falls back to a neutral All responses group.',
+        invalidGroupingConfig: 'Shows a warning and falls back gracefully to ungrouped synthesis.',
+        compatibility: 'AI Tool Lab can still fall back to subject/tool-name grouping when explicit synthesis settings are absent.',
+      },
+      chartTypes: ['radar', 'quadrant', 'summary badges', 'verdict distribution', 'matrix averages'],
+      teacherSignals: ['strengths', 'weaknesses', 'mean scores', 'group trends', 'verdict distributions', 'individual written responses'],
+      sampleResponses: 'Use public/sample-responses/tool-comparison/*.json with public/worksheets/ai-tool-lab.json for grouped synthesis testing.',
     },
     timers: {
       model: 'Page-scoped timer with enabled, durationSeconds, and behaviour.',
@@ -745,6 +817,11 @@ function SystemGuidePage() {
       showProgress: true,
       exports: { json: true, pdf: true },
     },
+    synthesis: {
+      groupByBlockId: 'block-1',
+      groupLabel: 'AI Tool',
+      responseLabelBlockId: 'block-team',
+    },
     pages: [
       {
         id: 'page-1',
@@ -755,6 +832,13 @@ function SystemGuidePage() {
             type: 'content',
             title: 'Worksheet briefing',
             description: 'Explain the task before students respond.',
+          },
+          {
+            id: 'block-team',
+            type: 'shortText',
+            label: 'Group name or number',
+            required: true,
+            config: { placeholder: 'Enter the team label' },
           },
           {
             id: 'block-1',
@@ -802,7 +886,7 @@ function SystemGuidePage() {
             <li>• Supports sequential or free navigation through pages.</li>
             <li>• Captures student responses and persists autosave sessions.</li>
             <li>• Exports worksheet definitions and response JSON.</li>
-            <li>• Generates synthesis views for class aggregation.</li>
+            <li>• Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
             <li>• Supports radar, quadrant, SWOT, and media-based prompts.</li>
           </ul>
         </section>
@@ -814,11 +898,36 @@ function SystemGuidePage() {
             <li>• Use descriptive IDs like block-intro or block-matrix-1.</li>
             <li>• Prefer stable labels and simple option arrays for choice blocks.</li>
             <li>• Put media URLs in config.videoUrl or config.imageUrl.</li>
-            <li>• For synthesis, use radar, quadrant, or verdict blocks where possible.</li>
+            <li>• Configure `synthesis.groupByBlockId` and `synthesis.responseLabelBlockId` when you want grouped synthesis output.</li>
+            <li>• For synthesis, use radar, quadrant, matrix, SWOT, or verdict blocks where possible.</li>
             <li>• Keep definitions versioned for future schema updates.</li>
           </ul>
         </section>
       </div>
+
+      <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-900">Synthesis configuration</h2>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Builder settings</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>• Group responses by: selects the response-producing block used as the synthesis grouping key.</li>
+              <li>• Group label: sets the human-readable name used across synthesis and report views.</li>
+              <li>• Label individual responses by: chooses the block used to name each submission inside a synthesis group.</li>
+              <li>• If a referenced block is deleted, the builder warns first and clears the broken synthesis setting if deletion proceeds.</li>
+            </ul>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-900">Import behavior</p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li>• Multiple responses with the same grouping value stay separate and also generate an aggregate view.</li>
+              <li>• Grouping values are normalized by trimming and collapsing whitespace and comparing case-insensitively.</li>
+              <li>• Missing grouping values are placed under Unspecified.</li>
+              <li>• If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
 
       <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-900">Complete capability manifest</h2>
@@ -847,6 +956,21 @@ function SystemGuidePage() {
       </section>
 
       <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-bold text-slate-900">Sample synthesis test set</h2>
+        <div className="mt-4 space-y-3 text-sm text-slate-600">
+          <p>Load the AI Tool Lab worksheet JSON first, then import the sample student response files from the grouped comparison folder.</p>
+          <ul className="space-y-2">
+            <li>• Worksheet: public/worksheets/ai-tool-lab.json</li>
+            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-1.json</li>
+            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-4.json</li>
+            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-2.json</li>
+            <li>• Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-5.json</li>
+          </ul>
+          <p>This set creates two synthesis groups, Diffit and NotebookLM, each with two individual evaluations and one aggregate view.</p>
+        </div>
+      </section>
+
+      <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-xl font-bold text-slate-900">Minimal worksheet contract</h2>
         <pre className="mt-4 overflow-x-auto rounded-xl bg-slate-950 p-4 text-xs text-slate-100">
           <code>{`{
@@ -861,6 +985,11 @@ function SystemGuidePage() {
     showProgress: true,
     exports: { json: true, pdf: true }
   },
+          synthesis: {
+            groupByBlockId: 'block-1',
+            groupLabel: 'AI Tool',
+            responseLabelBlockId: 'block-team'
+          },
   pages: [
     {
       id: 'page-1',
@@ -1467,36 +1596,36 @@ export function getDefaultPageTimer() {
   }
 }
 
-export function buildStudentSynthesis(groupings: Array<{ tool: string; groups: WorksheetResponse[] }>) {
+export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBlockId = 'radar-eval', groupLabel = 'Response group') {
   if (!groupings.length) {
     return {
       headline: 'The class is ready to begin synthesising their responses.',
       summary: 'Upload a set of response files to generate a student-friendly summary of the class findings.',
       highlights: ['No responses are available yet.', 'Once students submit results, this synthesis will show the strongest patterns.'],
       recommendations: ['Review the prompts with students.', 'Discuss the most common strengths and areas for improvement.'],
-      topTool: 'No tool yet',
+      topGroup: `No ${groupLabel.toLowerCase()} yet`,
     }
   }
 
-  const rankedTools = groupings.map((group) => {
-    const total = group.groups.reduce((sum, response) => {
-      const radar = response.responses?.['radar-eval'] || {}
+  const rankedGroups = groupings.map((group) => {
+    const total = group.responses.reduce((sum, response) => {
+      const radar = response.responses?.[radarBlockId] || {}
       const scores = Object.values(radar).filter((value) => typeof value === 'number') as number[]
       return sum + (scores.length ? scores.reduce((innerSum, score) => innerSum + Number(score), 0) / scores.length : 0)
     }, 0)
 
-    return { tool: group.tool, score: group.groups.length ? total / group.groups.length : 0 }
+    return { label: group.label, score: group.responses.length ? total / group.responses.length : 0, responseCount: group.responses.length }
   }).sort((left, right) => right.score - left.score)
 
-  const topTool = rankedTools[0]
-  const headline = `${topTool?.tool || 'This tool'} stands out as the strongest overall result for the class.`
-  const summary = `Across the current responses, students most often highlight the strengths and opportunities associated with ${topTool?.tool || 'the selected tool'}, while also identifying a few areas to improve.`
+  const topGroup = rankedGroups[0]
+  const headline = `${topGroup?.label || 'This response set'} stands out as the strongest overall result for the class.`
+  const summary = `Across the current responses, students most often highlight the strongest patterns associated with ${topGroup?.label || 'the current grouping'}, while also identifying a few areas to improve.`
 
   return {
     headline,
     summary,
     highlights: [
-      `${topTool?.tool || 'The top tool'} has the strongest average response pattern in the class.`,
+      `${topGroup?.label || 'The leading group'} has the strongest average response pattern in the class.`,
       'The class is showing a clear set of shared strengths and practical opportunities.',
       'Patterns suggest the most successful responses are the ones that are clear, evidence-based, and reflective.',
     ],
@@ -1505,7 +1634,7 @@ export function buildStudentSynthesis(groupings: Array<{ tool: string; groups: W
       'Use the class patterns to identify one next step for improvement.',
       'Turn the strongest responses into a shared class resource or exemplar.',
     ],
-    topTool: topTool?.tool || 'No tool yet',
+    topGroup: topGroup?.label || `No ${groupLabel.toLowerCase()} yet`,
   }
 }
 
@@ -2885,6 +3014,29 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
   const [importInfo, setImportInfo] = useState('')
   const [mode, setMode] = useState<'student' | 'teacher'>(initialMode)
   const structure = useMemo(() => getWorksheetStructure(definition), [definition])
+  const responseLabelLookup = useMemo(
+    () => Object.fromEntries(responses.map((response) => [response.responseId, getResponseLabel(response, definition)])),
+    [definition, responses],
+  )
+  const synthesisResult = useMemo(() => groupResponsesByKey(definition, responses), [definition, responses])
+  const groupings = synthesisResult.groups
+  const synthesisConfig = synthesisResult.config
+  const summaryBlocks = useMemo(
+    () => structure.responseBlocks.filter((block) => RESPONSE_SUMMARY_BLOCK_TYPES.has(block.type) && block.id !== synthesisConfig.groupByBlockId && block.id !== synthesisConfig.responseLabelBlockId),
+    [structure.responseBlocks, synthesisConfig.groupByBlockId, synthesisConfig.responseLabelBlockId],
+  )
+  const verdictBlocks = useMemo(
+    () => structure.responseBlocks.filter((block) => block.type === 'verdict'),
+    [structure.responseBlocks],
+  )
+  const matrixBlocks = useMemo(
+    () => structure.responseBlocks.filter((block) => block.type === 'matrix'),
+    [structure.responseBlocks],
+  )
+  const studentSynthesis = useMemo(
+    () => buildStudentSynthesis(groupings, structure.radarBlockId, synthesisConfig.groupLabel),
+    [groupings, structure.radarBlockId, synthesisConfig.groupLabel],
+  )
 
   useEffect(() => {
     setMode(initialMode)
@@ -2910,8 +3062,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
           setError(`Rejected ${file.name}: invalid response schema.`)
           continue
         }
-        const inferredSubject = String(json.subject || json.responses?.[structure.subjectBlockId] || '').trim()
-        parsed.push({ ...json, subject: inferredSubject || 'Unknown' })
+        parsed.push(json)
       } catch {
         rejected += 1
         setError(`Rejected ${file.name}: malformed JSON.`)
@@ -2935,12 +3086,10 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     event.target.value = ''
   }
 
-  const groupings = useMemo(() => groupResponsesByTool(responses), [responses])
-  const studentSynthesis = useMemo(() => buildStudentSynthesis(groupings), [groupings])
-
   const exportClassPdf = () => {
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
+    const groupingLabelPlural = pluralizeLabel(synthesisConfig.groupLabel, groupings.length)
     let y = 42
 
     pdf.setFillColor(15, 23, 42)
@@ -2950,7 +3099,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     pdf.text(`${definition.title} — Class Evaluation Report`, 52, 40)
     pdf.setFontSize(10)
     pdf.setTextColor(191, 219, 254)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}   •   Evaluations: ${responses.length}   •   Tools: ${groupings.length}   •   Groups: ${new Set(responses.map((response) => response.group)).size}`, 52, 60)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   •   Evaluations: ${responses.length}   •   ${groupingLabelPlural}: ${groupings.length}   •   Response labels: ${new Set(Object.values(responseLabelLookup)).size}`, 52, 60)
 
     y = 102
     pdf.setTextColor(15, 23, 42)
@@ -2960,8 +3109,8 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     pdf.setFontSize(11)
     const cards = [
       `Total evaluations: ${responses.length}`,
-      `Distinct tools: ${groupings.length}`,
-      `Distinct groups: ${new Set(responses.map((response) => response.group)).size}`,
+      `${groupingLabelPlural}: ${groupings.length}`,
+      `Response labels: ${new Set(Object.values(responseLabelLookup)).size}`,
     ]
     const cardWidth = 160
     cards.forEach((card, index) => {
@@ -2973,7 +3122,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     })
     y += 66
 
-    groupings.forEach((toolGroup) => {
+    groupings.forEach((grouping) => {
       if (y > 560) {
         pdf.addPage()
         y = 52
@@ -2982,13 +3131,13 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
       pdf.roundedRect(52, y, 500, 120, 12, 12, 'FD')
       pdf.setTextColor(15, 23, 42)
       pdf.setFontSize(15)
-      pdf.text(toolGroup.tool, 68, y + 24)
+      pdf.text(grouping.label, 68, y + 24)
       pdf.setFontSize(10)
       pdf.setTextColor(100, 116, 139)
-      pdf.text(`${toolGroup.groups.length} groups evaluating this subject`, 68, y + 38)
+      pdf.text(`${formatCountLabel(grouping.responses.length, 'evaluation')} in this ${synthesisConfig.groupLabel.toLowerCase()}`, 68, y + 38)
 
       const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-      const avgRadar = aggregateRadarValues(toolGroup.groups, radarDimensions, structure.radarBlockId)
+      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
       drawPdfRadar(pdf, 190, y + 80, 46, avgRadar)
 
       pdf.setTextColor(51, 65, 85)
@@ -3032,6 +3181,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
         </div>
         {importInfo && <p className="border-t border-slate-200 px-6 py-3 text-sm text-emerald-700">{importInfo}</p>}
         {error && <p className="border-t border-slate-200 px-6 py-3 text-sm text-red-600">{error}</p>}
+        {synthesisConfig.warning && <p className="border-t border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">{synthesisConfig.warning}</p>}
       </header>
 
       <section className="grid gap-4 md:grid-cols-3">
@@ -3041,10 +3191,10 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">Top result</div>
-          <div className="mt-3 text-2xl font-bold text-slate-900">{studentSynthesis.topTool}</div>
+          <div className="mt-3 text-2xl font-bold text-slate-900">{studentSynthesis.topGroup}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
-          <div className="text-sm text-slate-500">Class themes</div>
+          <div className="text-sm text-slate-500">{pluralizeLabel(synthesisConfig.groupLabel, groupings.length)}</div>
           <div className="mt-3 text-3xl font-bold text-slate-900">{groupings.length}</div>
         </div>
       </section>
@@ -3074,17 +3224,28 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
       </section>
 
       <section className="mt-8 space-y-5">
-        {groupings.map((toolGroup) => {
+        {groupings.map((grouping) => {
           const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-          const avgRadar = aggregateRadarValues(toolGroup.groups, radarDimensions, structure.radarBlockId)
+          const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
           const topRanked = Object.entries(avgRadar).sort((left, right) => Number(right[1]) - Number(left[1]))[0]
           return (
-            <article key={toolGroup.tool} className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+            <article key={grouping.key} className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h3 className="text-2xl font-bold text-slate-900">{toolGroup.tool}</h3>
-                <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">{toolGroup.groups.length} groups</span>
+                <div>
+                  <h3 className="text-2xl font-bold text-slate-900">{grouping.label}</h3>
+                  {grouping.isMissingValue && <p className="mt-1 text-sm text-amber-700">Grouping value missing for one or more imported responses.</p>}
+                </div>
+                <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">{formatCountLabel(grouping.responses.length, 'evaluation')}</span>
               </div>
-              <p className="mt-3 text-sm text-slate-600">The strongest pattern in this group was {topRanked ? topRanked[0] : 'overall response quality'} with an average score of {topRanked ? Number(topRanked[1]).toFixed(1) : 'n/a'}.</p>
+              <p className="mt-3 text-sm text-slate-600">The strongest pattern in this {synthesisConfig.groupLabel.toLowerCase()} was {topRanked ? topRanked[0] : 'overall response quality'} with an average score of {topRanked ? Number(topRanked[1]).toFixed(1) : 'n/a'}.</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {grouping.responses.map((response) => (
+                  <span key={response.responseId} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700">
+                    {responseLabelLookup[response.responseId]}
+                  </span>
+                ))}
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">Aggregate</span>
+              </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 {Object.entries(avgRadar).slice(0, 4).map(([label, value]) => (
                   <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -3127,6 +3288,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
         </div>
         {importInfo && <p className="border-t border-slate-200 px-6 py-3 text-sm text-emerald-700">{importInfo}</p>}
         {error && <p className="border-t border-slate-200 px-6 py-3 text-sm text-red-600">{error}</p>}
+        {synthesisConfig.warning && <p className="border-t border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800">{synthesisConfig.warning}</p>}
       </header>
 
       <section className="grid gap-4 md:grid-cols-3">
@@ -3135,31 +3297,66 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
           <div className="mt-3 text-3xl font-bold text-slate-900">{responses.length}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 to-white p-4 shadow-sm">
-          <div className="text-sm text-slate-500">Different subjects</div>
+          <div className="text-sm text-slate-500">Distinct {pluralizeLabel(synthesisConfig.groupLabel, groupings.length)}</div>
           <div className="mt-3 text-3xl font-bold text-slate-900">{groupings.length}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
-          <div className="text-sm text-slate-500">Groups</div>
-          <div className="mt-3 text-3xl font-bold text-slate-900">{new Set(responses.map((response) => response.group)).size}</div>
+          <div className="text-sm text-slate-500">Response labels</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{new Set(Object.values(responseLabelLookup)).size}</div>
         </div>
       </section>
 
       <section className="mt-8 space-y-6">
-        {groupings.map((toolGroup) => {
+        {groupings.map((grouping) => {
           const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-          const avgRadar = aggregateRadarValues(toolGroup.groups, radarDimensions, structure.radarBlockId)
-          const avgPoint = aggregateQuadrantMean(toolGroup.groups, structure.quadrantBlockId)
+          const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
+          const avgPoint = aggregateQuadrantMean(grouping.responses, structure.quadrantBlockId)
           const swot = structure.swotBlockId
-          const strengths = toolGroup.groups.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.strengths || []).map((item: any) => ({ text: item.text, group: response.group })))
-          const weaknesses = toolGroup.groups.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.weaknesses || []).map((item: any) => ({ text: item.text, group: response.group })))
+          const strengths = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.strengths || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
+          const weaknesses = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.weaknesses || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
+          const verdictSummaries = verdictBlocks.map((block) => {
+            const counts = grouping.responses.reduce<Record<string, number>>((accumulator, response) => {
+              const raw = response.responses?.[block.id]
+              const verdict = typeof raw === 'string' ? raw.trim() : ''
+              if (!verdict) return accumulator
+              accumulator[verdict] = (accumulator[verdict] || 0) + 1
+              return accumulator
+            }, {})
+            return { block, counts }
+          }).filter(({ counts }) => Object.keys(counts).length > 0)
+          const matrixSummaries = matrixBlocks.map((block) => {
+            const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+            const averages = Object.fromEntries(rows.map((row: string) => {
+              const values = grouping.responses
+                .map((response) => Number(response.responses?.[block.id]?.[row]))
+                .filter((value) => Number.isFinite(value))
+              const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+              return [row, average]
+            })) as Record<string, number>
+            return { block, averages }
+          }).filter(({ averages }) => Object.keys(averages).length > 0)
+          const responseCards = grouping.responses.map((response) => ({
+            response,
+            label: responseLabelLookup[response.responseId],
+            entries: summaryBlocks
+              .map((block) => ({ block, value: response.responses?.[block.id] }))
+              .filter(({ value }) => value !== undefined && value !== null && value !== ''),
+          }))
           return (
-            <article key={toolGroup.tool} className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+            <article key={grouping.key} className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Worksheet subject</p>
-                  <h2 className="mt-1 text-2xl font-bold text-slate-900">{toolGroup.tool}</h2>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">{synthesisConfig.groupLabel}</p>
+                  <h2 className="mt-1 text-2xl font-bold text-slate-900">{grouping.label}</h2>
+                  {grouping.isMissingValue && <p className="mt-2 text-sm text-amber-700">This group contains responses where the configured grouping value was missing.</p>}
                 </div>
-                <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">{toolGroup.groups.length} groups</span>
+                <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">{formatCountLabel(grouping.responses.length, 'evaluation')}</span>
+              </div>
+
+              <div className="mb-5 flex flex-wrap gap-2">
+                {grouping.responses.map((response) => (
+                  <span key={response.responseId} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700">{responseLabelLookup[response.responseId]}</span>
+                ))}
               </div>
 
               <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
@@ -3193,12 +3390,44 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
                 </div>
               </div>
 
+              {(verdictSummaries.length > 0 || matrixSummaries.length > 0) && (
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
+                  {verdictSummaries.map(({ block, counts }) => (
+                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Verdict distribution'}</h3>
+                      <div className="mt-3 space-y-2">
+                        {Object.entries(counts).map(([verdict, count]) => (
+                          <div key={verdict} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <span className="text-sm text-slate-700">{verdict}</span>
+                            <span className="text-sm font-semibold text-slate-900">{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  {matrixSummaries.map(({ block, averages }) => (
+                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Matrix averages'}</h3>
+                      <div className="mt-3 space-y-2">
+                        {Object.entries(averages).map(([row, value]) => (
+                          <div key={row} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <span className="text-sm text-slate-700">{row}</span>
+                            <span className="text-sm font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="mt-6 grid gap-4 md:grid-cols-2">
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-emerald-700">Strengths</h3>
                   <ul className="mt-3 space-y-2 text-sm text-slate-700">
                     {strengths.slice(0, 5).map((item, index) => (
-                      <li key={`${item.group}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-200">{item.text} <span className="text-slate-500">({item.group})</span></li>
+                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
                     ))}
                   </ul>
                 </div>
@@ -3207,9 +3436,38 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
                   <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-red-700">Limitations</h3>
                   <ul className="mt-3 space-y-2 text-sm text-slate-700">
                     {weaknesses.slice(0, 5).map((item, index) => (
-                      <li key={`${item.group}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-red-200">{item.text} <span className="text-slate-500">({item.group})</span></li>
+                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-red-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
                     ))}
                   </ul>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Individual responses</h3>
+                  <span className="text-sm text-slate-600">Written responses stay separate from the aggregate.</span>
+                </div>
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {responseCards.map(({ response, label, entries }) => (
+                    <div key={response.responseId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-base font-semibold text-slate-900">{label}</h4>
+                        <span className="text-xs uppercase tracking-[0.12em] text-slate-500">{response.responseId.slice(0, 8)}</span>
+                      </div>
+                      <div className="mt-3 space-y-3">
+                        {entries.length > 0 ? entries.map(({ block, value }) => (
+                          <div key={`${response.responseId}-${block.id}`} className="rounded-xl bg-slate-50 px-3 py-2">
+                            <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{getBlockDisplayLabel(block)}</div>
+                            {block.type === 'richText' && TEXT_RESPONSE_BLOCK_TYPES.has(block.type) ? (
+                              <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: String(value) }} />
+                            ) : (
+                              <div className="mt-2 text-sm text-slate-700">{formatBlockValue(block, value)}</div>
+                            )}
+                          </div>
+                        )) : <p className="text-sm text-slate-500">No additional written responses were recorded for this submission.</p>}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </article>
@@ -3362,7 +3620,11 @@ function BuilderPage({
         timer: getDefaultPageTimer(),
         blocks: [],
       }
-      setDefinition((previous) => ({ ...previous, pages: [replacementPage] }))
+      setDefinition((previous) => ({
+        ...previous,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
+        pages: [replacementPage],
+      }))
       setSelectedPageId(replacementPage.id)
       setSelectedBlockId('')
       return
@@ -3374,6 +3636,7 @@ function BuilderPage({
 
     setDefinition((previous) => ({
       ...previous,
+      synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
       pages: previous.pages.filter((page) => page.id !== selectedPage.id),
     }))
     if (fallbackPage) {
@@ -3526,8 +3789,19 @@ function BuilderPage({
 
   const deleteSelectedBlock = () => {
     if (!selectedPage || !selectedBlock) return
+    const synthesisEffects = [
+      definition.synthesis?.groupByBlockId === selectedBlock.id ? 'group synthesis results' : '',
+      definition.synthesis?.responseLabelBlockId === selectedBlock.id ? 'label individual responses in synthesis' : '',
+    ].filter(Boolean)
+
+    if (synthesisEffects.length > 0) {
+      const warningText = `This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`
+      if (!window.confirm(warningText)) return
+    }
+
     setDefinition((previous) => ({
       ...previous,
+      synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
       pages: previous.pages.map((page) => (
         page.id === selectedPage.id
           ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
@@ -3591,6 +3865,31 @@ function BuilderPage({
   const updateSelectedConfig = (partial: Record<string, any>) => {
     if (!selectedBlock) return
     updateSelectedBlock({ config: { ...selectedConfig, ...partial } })
+  }
+
+  const synthesisBlockOptions = getResponseProducingBlocks(definition).map((block) => ({
+    value: block.id,
+    label: getBlockDisplayLabel(block),
+  }))
+  const synthesisSettings = definition.synthesis || {}
+
+  const updateSynthesisSettings = (partial: Partial<WorksheetSynthesisSettings>) => {
+    setDefinition((previous) => {
+      const merged = { ...(previous.synthesis || {}), ...partial }
+      const next: WorksheetSynthesisSettings = {}
+      const groupByBlockId = trimSynthesisValue(merged.groupByBlockId)
+      const groupLabel = trimSynthesisValue(merged.groupLabel)
+      const responseLabelBlockId = trimSynthesisValue(merged.responseLabelBlockId)
+
+      if (groupByBlockId) next.groupByBlockId = groupByBlockId
+      if (groupLabel) next.groupLabel = groupLabel
+      if (responseLabelBlockId) next.responseLabelBlockId = responseLabelBlockId
+
+      return {
+        ...previous,
+        synthesis: isSynthesisSettingsEmpty(next) ? undefined : next,
+      }
+    })
   }
 
   return (
@@ -3684,6 +3983,57 @@ function BuilderPage({
         </aside>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Synthesis settings</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-900">Configure how responses are grouped in synthesis</h2>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="block text-sm font-medium text-slate-700">
+                Group responses by
+                <select
+                  value={synthesisSettings.groupByBlockId || ''}
+                  onChange={(event) => updateSynthesisSettings({ groupByBlockId: event.target.value || undefined })}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                >
+                  <option value="">None</option>
+                  {synthesisBlockOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700">
+                Group label
+                <input
+                  value={synthesisSettings.groupLabel || ''}
+                  onChange={(event) => updateSynthesisSettings({ groupLabel: event.target.value })}
+                  placeholder="AI Tool"
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                />
+              </label>
+
+              <label className="block text-sm font-medium text-slate-700">
+                Label individual responses by
+                <select
+                  value={synthesisSettings.responseLabelBlockId || ''}
+                  onChange={(event) => updateSynthesisSettings({ responseLabelBlockId: event.target.value || undefined })}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                >
+                  <option value="">None</option>
+                  {synthesisBlockOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {synthesisBlockOptions.length === 0 && (
+              <p className="mt-3 text-sm text-slate-500">Add at least one response-producing block to configure synthesis grouping.</p>
+            )}
+          </div>
+
           <div className="mb-4 flex items-center justify-between">
             <div className="flex flex-wrap gap-2">
               {definition.pages.map((page) => (

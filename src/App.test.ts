@@ -98,13 +98,14 @@ describe('worksheet page timer defaults', () => {
 describe('student synthesis summary', () => {
   it('creates a student-friendly synthesis from grouped responses', () => {
     const synthesis = buildStudentSynthesis([
-      { tool: 'Diffit', groups: [
+      { key: 'diffit', label: 'Diffit', responses: [
         { responses: { 'radar-eval': { 'Ease of use': 9, 'Pedagogical value': 8, 'Reliability': 7 } } },
         { responses: { 'radar-eval': { 'Ease of use': 8, 'Pedagogical value': 7, 'Reliability': 8 } } },
       ] as any },
     ])
 
     expect(synthesis.headline).toContain('Diffit')
+    expect(synthesis.topGroup).toBe('Diffit')
     expect(synthesis.highlights.length).toBeGreaterThan(0)
     expect(synthesis.recommendations.length).toBeGreaterThan(0)
   })

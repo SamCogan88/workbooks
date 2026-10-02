@@ -27,6 +27,11 @@ export const aiToolLabDefinition: WorksheetDefinition = {
       pdf: true,
     },
   },
+  synthesis: {
+    groupByBlockId: 'tool-name',
+    groupLabel: 'AI Tool',
+    responseLabelBlockId: 'group-name',
+  },
   pages: [
     {
       id: 'welcome',

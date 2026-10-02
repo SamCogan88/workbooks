@@ -1,0 +1,67 @@
+{
+  "responseSchema": "interactive-worksheet-response",
+  "schemaVersion": 1,
+  "worksheetId": "ai-tool-lab",
+  "worksheetVersion": 1,
+  "responseId": "response-ai-tool-lab-group-1",
+  "createdAt": "2026-10-02T09:55:00.000Z",
+  "updatedAt": "2026-10-02T09:55:00.000Z",
+  "group": "Group 1",
+  "subject": "Diffit",
+  "responses": {
+    "group-name": "Group 1",
+    "tool-name": "Diffit",
+    "expectation-score": 8,
+    "tool-purpose": "Creates levelled reading materials and follow-up activities from source text.",
+    "intended-user": "Both",
+    "problem-solved": "It reduces the time needed to adapt reading materials for mixed-ability groups.",
+    "feature-interest": "Turning one article into multiple reading levels with quick comprehension questions.",
+    "test-request": "We asked Diffit to turn a short article on constructive alignment into versions for different learner levels.",
+    "test-what-happened": "It produced differentiated reading passages with vocabulary support and several usable question ideas.",
+    "surprised": "The speed of generating scaffolded questions was better than expected.",
+    "corrected": "We rewrote a few questions because some prompts were too generic and one summary missed an important nuance.",
+    "radar-eval": {
+      "Ease of use": 9,
+      "Pedagogical value": 8,
+      "Reliability": 7,
+      "Creativity": 6,
+      "Accessibility": 8,
+      "Time saving": 9,
+      "Learner usefulness": 8,
+      "Educator control": 7
+    },
+    "swot-board": {
+      "strengths": [
+        { "text": "Quickly differentiates reading materials for mixed ability groups." },
+        { "text": "Provides a strong starting point for comprehension activities." }
+      ],
+      "weaknesses": [
+        { "text": "Some generated questions are too broad without teacher editing." }
+      ],
+      "opportunities": [
+        { "text": "Useful for producing adapted pre-class reading tasks." }
+      ],
+      "threats": [
+        { "text": "Teachers may over-trust the quality of generated summaries." }
+      ]
+    },
+    "learning-improve": "It could help students access the same concept at different reading levels without waiting for manual rewriting.",
+    "teacher-time": "Preparing differentiated reading packs and starter questions.",
+    "strongest-use": "Rapid preparation of scaffolded reading tasks for seminars.",
+    "avoid-use": "When exact disciplinary wording matters and oversimplification would distort the concept.",
+    "check-before-use": "Check the accuracy of summaries, question quality, and whether simplification removed important meaning.",
+    "quadrant-map": {
+      "x": 82,
+      "y": 34,
+      "rationale": "High time saving with moderate risk because outputs still need teacher review."
+    },
+    "ai-decisions": "It chose which ideas to foreground, what vocabulary to simplify, and how to frame comprehension questions.",
+    "human-judgement-needed": "An educator still needs to judge whether the adapted text preserves conceptual accuracy and matches learner needs.",
+    "concerned": "An inexperienced educator might accept the simplified version without noticing where meaning has been flattened.",
+    "overall-verdict": "Use it",
+    "best-use": "Differentiated reading",
+    "biggest-concern": "Over-simplification",
+    "other-educators-know": "It is best treated as a drafting partner rather than a finished classroom resource.",
+    "view-change": "We expected it to be mostly a worksheet generator, but it felt more useful as a differentiation tool."
+  }
+}

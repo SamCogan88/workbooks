@@ -2,11 +2,59 @@ import { describe, expect, it } from 'vitest'
 import {
   aggregateQuadrantMean,
   aggregateRadarValues,
-  groupResponsesByTool,
+  getResponseLabel,
+  groupResponsesByKey,
   mapCanvasPointToQuadrant,
-  normaliseToolName,
+  normaliseGroupingValue,
+  resolveSynthesisConfig,
 } from './aggregation'
+import type { WorksheetResponse } from './types'
 import { aiToolLabDefinition } from './worksheetData'
+
+const synthesisDefinition = {
+  id: 'generic-worksheet',
+  version: 1,
+  title: 'Generic worksheet',
+  description: 'Test worksheet',
+  settings: {
+    navigation: 'sequential',
+    allowPageJumping: false,
+    autosave: true,
+    showProgress: true,
+    exports: { json: true, pdf: true },
+  },
+  synthesis: {
+    groupByBlockId: 'tool-name',
+    groupLabel: 'AI Tool',
+    responseLabelBlockId: 'group-name',
+  },
+  pages: [
+    {
+      id: 'page-1',
+      title: 'Page 1',
+      blocks: [
+        { id: 'group-name', type: 'shortText', label: 'Group name' },
+        { id: 'tool-name', type: 'randomizer', label: 'Tool' },
+        { id: 'radar-eval', type: 'radar', label: 'Radar' },
+        { id: 'quadrant-map', type: 'quadrant', label: 'Quadrant' },
+      ],
+    },
+  ],
+} as const
+
+function createResponse(responseId: string, values: Record<string, any>, overrides: Partial<WorksheetResponse> = {}): WorksheetResponse {
+  return {
+    responseSchema: 'interactive-worksheet-response' as const,
+    schemaVersion: 1,
+    worksheetId: synthesisDefinition.id,
+    worksheetVersion: 1,
+    responseId,
+    createdAt: '2026-10-02T00:00:00.000Z',
+    updatedAt: '2026-10-02T00:00:00.000Z',
+    responses: values,
+    ...overrides,
+  }
+}
 
 describe('worksheet engine core logic', () => {
   it('validates the default worksheet structure', () => {
@@ -15,32 +63,118 @@ describe('worksheet engine core logic', () => {
     expect(aiToolLabDefinition.pages).toHaveLength(9)
   })
 
-  it('normalises tool names for synthesis grouping', () => {
-    expect(normaliseToolName(' Diffit ')).toBe('diffit')
-    expect(normaliseToolName('DiFFit')).toBe('diffit')
+  it('normalises grouping values for synthesis grouping', () => {
+    expect(normaliseGroupingValue(' Diffit ')).toBe('diffit')
+    expect(normaliseGroupingValue('DiFFit')).toBe('diffit')
+    expect(normaliseGroupingValue('Notebook   LM')).toBe('notebook lm')
   })
 
-  it('groups responses by tool and calculates average radar values', () => {
+  it('groups responses by synthesis key and calculates average radar values', () => {
     const responses = [
-      {
-        group: 'Group 1',
-        subject: 'Diffit',
-        responses: { 'radar-eval': { 'Ease of use': 8, 'Pedagogical value': 9, 'Reliability': 7, 'Creativity': 6, 'Accessibility': 8, 'Time saving': 9, 'Learner usefulness': 8, 'Educator control': 7 } },
-      },
-      {
-        group: 'Group 2',
-        subject: 'diffit',
-        responses: { 'radar-eval': { 'Ease of use': 6, 'Pedagogical value': 8, 'Reliability': 8, 'Creativity': 7, 'Accessibility': 7, 'Time saving': 8, 'Learner usefulness': 7, 'Educator control': 6 } },
-      },
-    ] as any
+      createResponse('response-1', {
+        'group-name': 'Group 1',
+        'tool-name': 'Diffit',
+        'radar-eval': { 'Ease of use': 8, 'Pedagogical value': 9, 'Reliability': 7, 'Creativity': 6, 'Accessibility': 8, 'Time saving': 9, 'Learner usefulness': 8, 'Educator control': 7 },
+      }),
+      createResponse('response-2', {
+        'group-name': 'Group 2',
+        'tool-name': ' diffit ',
+        'radar-eval': { 'Ease of use': 6, 'Pedagogical value': 8, 'Reliability': 8, 'Creativity': 7, 'Accessibility': 7, 'Time saving': 8, 'Learner usefulness': 7, 'Educator control': 6 },
+      }),
+    ]
 
-    const grouped = groupResponsesByTool(responses)
+    const grouped = groupResponsesByKey(synthesisDefinition as any, responses).groups
     expect(grouped).toHaveLength(1)
-    expect(grouped[0].tool).toBe('Diffit')
+    expect(grouped[0].label).toBe('Diffit')
+    expect(grouped[0].responses).toHaveLength(2)
 
     const averages = aggregateRadarValues(responses, ['Ease of use', 'Pedagogical value', 'Reliability', 'Creativity', 'Accessibility', 'Time saving', 'Learner usefulness', 'Educator control'])
     expect(averages['Ease of use']).toBe(7)
     expect(averages['Pedagogical value']).toBe(8.5)
+  })
+
+  it('creates separate groups for different grouping values', () => {
+    const responses = [
+      createResponse('response-1', { 'tool-name': 'Diffit', 'group-name': 'Group 1' }),
+      createResponse('response-2', { 'tool-name': 'NotebookLM', 'group-name': 'Group 2' }),
+    ]
+
+    const grouped = groupResponsesByKey(synthesisDefinition as any, responses).groups
+
+    expect(grouped).toHaveLength(2)
+    expect(grouped.map((group) => group.label)).toEqual(['Diffit', 'NotebookLM'])
+  })
+
+  it('uses randomizer output as a grouping value', () => {
+    const response = createResponse('response-1', { 'tool-name': 'Gamma', 'group-name': 'Group 4' })
+
+    const grouped = groupResponsesByKey(synthesisDefinition as any, [response]).groups
+
+    expect(grouped[0].label).toBe('Gamma')
+  })
+
+  it('places missing grouping values under Unspecified', () => {
+    const response = createResponse('response-1', { 'group-name': 'Group 4' })
+
+    const grouped = groupResponsesByKey(synthesisDefinition as any, [response]).groups
+
+    expect(grouped[0]).toMatchObject({ label: 'Unspecified', isMissingValue: true })
+  })
+
+  it('falls back to a neutral group when no grouping is configured', () => {
+    const definition = {
+      ...synthesisDefinition,
+      id: 'ungrouped-worksheet',
+      synthesis: undefined,
+    }
+
+    const grouped = groupResponsesByKey(definition as any, [createResponse('response-1', { 'tool-name': 'Diffit' })]).groups
+
+    expect(grouped).toHaveLength(1)
+    expect(grouped[0].label).toBe('All responses')
+  })
+
+  it('falls back gracefully when the grouping block is invalid', () => {
+    const definition = {
+      ...synthesisDefinition,
+      synthesis: {
+        groupByBlockId: 'missing-block',
+        groupLabel: 'Programme',
+        responseLabelBlockId: 'group-name',
+      },
+    }
+
+    const result = groupResponsesByKey(definition as any, [createResponse('response-1', { 'tool-name': 'Diffit', 'group-name': 'Group 1' })])
+
+    expect(result.config.warning).toContain('missing-block')
+    expect(result.groups[0].label).toBe('All responses')
+  })
+
+  it('uses configured response labels and does not require uniqueness', () => {
+    const responseA = createResponse('response-1', { 'tool-name': 'Diffit', 'group-name': 'Group 1' })
+    const responseB = createResponse('response-2', { 'tool-name': 'Diffit', 'group-name': 'Group 1' }, { group: 'Fallback group' })
+
+    expect(getResponseLabel(responseA as any, synthesisDefinition as any)).toBe('Group 1')
+    expect(getResponseLabel(responseB as any, synthesisDefinition as any)).toBe('Group 1')
+    expect(responseA.responseId).toBe('response-1')
+    expect(responseB.responseId).toBe('response-2')
+  })
+
+  it('keeps AI Tool Lab compatibility when synthesis settings are absent', () => {
+    const definition = {
+      ...aiToolLabDefinition,
+      synthesis: undefined,
+    }
+    const responses = [
+      createResponse('response-1', { 'tool-name': 'Diffit' }, { worksheetId: definition.id, subject: 'Diffit' }),
+      createResponse('response-2', { 'tool-name': 'diffit' }, { worksheetId: definition.id, subject: 'diffit' }),
+    ]
+
+    const result = groupResponsesByKey(definition as any, responses as any)
+
+    expect(resolveSynthesisConfig(definition as any).groupLabel).toBe('AI Tool')
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0].label).toBe('Diffit')
   })
 
   it('computes mean quadrant coordinates', () => {

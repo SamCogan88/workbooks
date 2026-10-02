@@ -39,12 +39,19 @@ export interface WorksheetSettings {
   }
 }
 
+export interface WorksheetSynthesisSettings {
+  groupByBlockId?: string
+  groupLabel?: string
+  responseLabelBlockId?: string
+}
+
 export interface WorksheetDefinition {
   id: string
   version: number
   title: string
   description: string
   settings: WorksheetSettings
+  synthesis?: WorksheetSynthesisSettings
   pages: WorksheetPage[]
 }
 
@@ -68,7 +75,9 @@ export interface StoredSession {
   updatedAt: string
 }
 
-export interface GroupedToolResponse {
-  tool: string
-  groups: WorksheetResponse[]
+export interface GroupedResponseSet {
+  key: string
+  label: string
+  responses: WorksheetResponse[]
+  isMissingValue?: boolean
 }
