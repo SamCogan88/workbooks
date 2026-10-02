@@ -197,13 +197,142 @@ function hasMeaningfulResponseValue(value: unknown): boolean {
   return false
 }
 
+function getRequiredLabel(block: WorksheetBlock) {
+  return block.required ? 'Required' : ''
+}
+
+function getBlockErrorId(blockId: string) {
+  return `worksheet-block-error-${blockId}`
+}
+
+function getBlockWrapperId(blockId: string) {
+  return `worksheet-block-${blockId}`
+}
+
+function getMatrixRows(block: WorksheetBlock) {
+  return Array.isArray(block.config?.rows) ? block.config.rows.map((row: unknown) => String(row)).filter(Boolean) : []
+}
+
+function getRadarDimensionLabels(block: WorksheetBlock) {
+  return Array.isArray(block.config?.dimensions)
+    ? block.config.dimensions
+      .map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || '')))
+      .filter(Boolean)
+    : []
+}
+
+function getStructuredDefaultResponse(block: WorksheetBlock) {
+  switch (block.type) {
+    case 'rating': {
+      const configured = block.config?.defaultValue
+      const fallback = Math.round((Number(block.config?.min ?? 0) + Number(block.config?.max ?? 10)) / 2)
+      const value = Number(configured ?? fallback)
+      return Number.isFinite(value) ? value : undefined
+    }
+    case 'matrix': {
+      const rows = getMatrixRows(block)
+      if (!rows.length) return undefined
+      const configured = block.config?.defaultValue
+      const fallback = Number(block.config?.min ?? 1)
+      const value = Number(configured ?? fallback)
+      if (!Number.isFinite(value)) return undefined
+      return Object.fromEntries(rows.map((row) => [row, value]))
+    }
+    case 'radar': {
+      const labels = getRadarDimensionLabels(block)
+      if (!labels.length) return undefined
+      return Object.fromEntries(labels.map((label) => [label, 5]))
+    }
+    default:
+      return undefined
+  }
+}
+
 export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Record<string, any>) {
   if (!block.required) return true
-  return hasMeaningfulResponseValue(responses[block.id])
+
+  const value = responses[block.id]
+
+  switch (block.type) {
+    case 'shortText':
+    case 'longText':
+    case 'imagePrompt':
+    case 'video':
+    case 'youtube':
+    case 'randomizer':
+    case 'shortAnswer':
+    case 'fillBlank':
+      return typeof value === 'string' && stripHtml(value).length > 0
+    case 'richText':
+      return typeof value === 'string' && stripHtml(value).length > 0
+    case 'singleSelect':
+    case 'verdict':
+      return typeof value === 'string' && value.trim().length > 0
+    case 'checklist':
+      return Array.isArray(value) && value.some((item) => typeof item === 'string' ? item.trim().length > 0 : hasMeaningfulResponseValue(item))
+    case 'ranking':
+      return Array.isArray(value) && value.length > 0
+    case 'rating':
+      return Number.isFinite(Number(value))
+    case 'matrix': {
+      if (!value || typeof value !== 'object') return false
+      const rows = getMatrixRows(block)
+      return rows.length > 0 && rows.every((row) => Number.isFinite(Number((value as Record<string, unknown>)[row])))
+    }
+    case 'radar': {
+      if (!value || typeof value !== 'object') return false
+      const labels = getRadarDimensionLabels(block)
+      return labels.length > 0 && labels.every((label) => Number.isFinite(Number((value as Record<string, unknown>)[label])))
+    }
+    case 'quadrant': {
+      if (!value || typeof value !== 'object') return false
+      const point = value as Record<string, unknown>
+      const hasPoint = Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+      if (!hasPoint) return false
+      if (block.config?.rationaleRequired) {
+        return typeof point.rationale === 'string' && point.rationale.trim().length > 0
+      }
+      return true
+    }
+    case 'swot': {
+      if (!value || typeof value !== 'object') return false
+      return Object.values(value as Record<string, unknown>).some((entries) => Array.isArray(entries)
+        && entries.some((entry) => hasMeaningfulResponseValue((entry as Record<string, unknown>)?.text)))
+    }
+    case 'multipleChoice':
+    case 'quiz':
+      return Array.isArray(value)
+        ? value.some((entry) => entry !== undefined && entry !== null && String(entry).trim() !== '')
+        : value !== undefined && value !== null && String(value).trim() !== ''
+    case 'trueFalse':
+      return typeof value === 'boolean' || value === 'True' || value === 'False'
+    case 'matching': {
+      if (!value || typeof value !== 'object') return false
+      const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
+      return pairs.length > 0 && pairs.every((pair: any, index: number) => {
+        const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
+        const selected = (value as Record<string, unknown>)[pairKey]
+        return typeof selected === 'string' && selected.trim().length > 0
+      })
+    }
+    default:
+      return hasMeaningfulResponseValue(value)
+  }
 }
 
 export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, any>) {
   return page.blocks.filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
+}
+
+function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
+  const requiredLabel = getRequiredLabel(block)
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span>{block.label}</span>
+      {requiredLabel && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700">{requiredLabel}</span>}
+    </span>
+  )
 }
 
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, any>) {
@@ -1165,6 +1294,8 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   const [isSessionHydrated, setIsSessionHydrated] = useState(false)
   const [navigationWarning, setNavigationWarning] = useState('')
   const [showCompletionDialog, setShowCompletionDialog] = useState(false)
+  const [validationAttempted, setValidationAttempted] = useState(false)
+  const [exportError, setExportError] = useState('')
 
   useEffect(() => {
     setIsSessionHydrated(false)
@@ -1220,13 +1351,34 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     [currentPage, responses],
   )
   const canLeaveCurrentPage = missingRequiredBlocks.length === 0
+  const missingRequiredBlockIds = useMemo(() => new Set(missingRequiredBlocks.map((block) => block.id)), [missingRequiredBlocks])
 
   const buildNavigationWarning = useCallback(() => {
     if (!currentPage || missingRequiredBlocks.length === 0) return ''
     const labels = missingRequiredBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
-    const suffix = missingRequiredBlocks.length > 3 ? ', and more' : ''
-    return `Complete the required items on ${currentPage.title} before moving on: ${labels.join(', ')}${suffix}.`
+    const remainingCount = Math.max(0, missingRequiredBlocks.length - labels.length)
+    return `Please complete the required items before continuing:
+${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
   }, [currentPage, missingRequiredBlocks])
+
+  useEffect(() => {
+    const nextDefaults = currentPage?.blocks.reduce<Record<string, any>>((accumulator, block) => {
+      if (responses[block.id] !== undefined) return accumulator
+      const defaultValue = getStructuredDefaultResponse(block)
+      if (defaultValue !== undefined) {
+        accumulator[block.id] = defaultValue
+      }
+      return accumulator
+    }, {}) || {}
+
+    if (Object.keys(nextDefaults).length === 0) return
+    setResponses((previous) => {
+      const missingDefaults = Object.fromEntries(
+        Object.entries(nextDefaults).filter(([blockId]) => previous[blockId] === undefined),
+      )
+      return Object.keys(missingDefaults).length > 0 ? { ...previous, ...missingDefaults } : previous
+    })
+  }, [currentPage, responses])
 
   useEffect(() => {
     if (!currentTimer?.enabled) {
@@ -1274,11 +1426,21 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
 
   const updateResponse = (blockId: string, value: any) => {
     setNavigationWarning('')
+    setExportError('')
     if (status === 'Required responses missing') {
       setStatus('In progress')
     }
     setResponses((previous) => ({ ...previous, [blockId]: value }))
   }
+
+  const focusFirstMissingBlock = useCallback(() => {
+    const firstMissing = missingRequiredBlocks[0]
+    if (!firstMissing) return
+    const wrapper = document.getElementById(getBlockWrapperId(firstMissing.id))
+    wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const focusTarget = wrapper?.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')
+    focusTarget?.focus()
+  }, [missingRequiredBlocks])
 
   const buildDocument = (): WorksheetResponse => ({
     responseSchema: 'interactive-worksheet-response',
@@ -1295,18 +1457,21 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
+      setValidationAttempted(false)
       setNavigationWarning('')
       return true
     }
 
+    setValidationAttempted(true)
     setNavigationWarning(buildNavigationWarning())
     setStatus('Required responses missing')
+    focusFirstMissingBlock()
     return false
   }
 
   const goToPage = (index: number) => {
     if (index < 0 || index > totalPages - 1) return
-    if (index !== pageIndex && !tryLeaveCurrentPage()) return
+    if (index > pageIndex && !tryLeaveCurrentPage()) return
     setPageIndex(index)
   }
 
@@ -1317,7 +1482,13 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
       setPageIndex((value) => value + 1)
       return
     }
-    exportResponseJson(buildDocument())
+    try {
+      exportResponseJson(buildDocument())
+    } catch {
+      setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
+      setStatus('Download failed')
+      return
+    }
     setStatus('Complete')
     setShowCompletionDialog(true)
   }
@@ -1332,6 +1503,9 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     if (!window.confirm('Start a new response? This will clear the current saved version.')) return
     const nextId = getDefaultResponseId()
     setShowCompletionDialog(false)
+    setValidationAttempted(false)
+    setNavigationWarning('')
+    setExportError('')
     setResponseId(nextId)
     setResponses({})
     setPageIndex(0)
@@ -1446,7 +1620,13 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
           )}
           {navigationWarning && (
             <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {navigationWarning}
+              <p className="font-medium">Required responses are still missing.</p>
+              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
+            </div>
+          )}
+          {exportError && (
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {exportError}
             </div>
           )}
           <div className="h-2 overflow-hidden rounded-full bg-slate-200">
@@ -1460,13 +1640,22 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
           <h2 className="mb-4 text-2xl font-semibold text-slate-900">{currentPage.title}</h2>
           <div className="space-y-6">
             {visibleBlocks.map((block) => (
-              <div key={block.id}>{renderBlock(block, responses, updateResponse)}</div>
+              <div key={block.id} id={getBlockWrapperId(block.id)}>{renderBlock(block, responses, updateResponse, {
+                showRequiredError: validationAttempted && missingRequiredBlockIds.has(block.id),
+              })}</div>
             ))}
           </div>
 
+          {navigationWarning && (
+            <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <p className="font-medium">Please complete the required items before continuing.</p>
+              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
+            </div>
+          )}
+
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={pageIndex === 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
-            <button onClick={handleNext} disabled={!canLeaveCurrentPage} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300">
+            <button onClick={handleNext} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
               {pageIndex === totalPages - 1 ? 'Finish' : 'Next'}
             </button>
           </div>
@@ -1489,8 +1678,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
                   <button
                     type="button"
                     onClick={() => goToPage(index)}
-                    disabled={index !== pageIndex && !canLeaveCurrentPage}
-                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
                   >
                     <span className="inline-flex items-center gap-2">
                       <FileText className="h-4 w-4" />
@@ -1530,7 +1718,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   )
 }
 
-function RadarBlock({ block, responses, updateResponse }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void }) {
+function RadarBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const dimensions = block.config?.dimensions || []
   const valueMap: Record<string, number> = responses[block.id] || {}
   const radius = 100
@@ -1545,8 +1733,8 @@ function RadarBlock({ block, responses, updateResponse }: { block: WorksheetBloc
   })
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-slate-900">{block.label}</h3>
+    <div className={`space-y-4 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+      <h3 className="text-lg font-semibold text-slate-900"><BlockFieldLabel block={block} /></h3>
       <svg viewBox="0 0 300 300" className="mx-auto h-80 w-full max-w-md rounded-2xl bg-slate-50 p-4">
         {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((ring) => {
           const r = (ring / 10) * 100
@@ -1590,6 +1778,7 @@ function RadarBlock({ block, responses, updateResponse }: { block: WorksheetBloc
                 min={1}
                 max={10}
                 value={valueMap[label] ?? 5}
+                aria-required={block.required ? true : undefined}
                 onChange={(event) => {
                   const next = { ...(responses[block.id] || {}), [label]: Number(event.target.value) }
                   updateResponse(block.id, next)
@@ -1600,11 +1789,12 @@ function RadarBlock({ block, responses, updateResponse }: { block: WorksheetBloc
           )
         })}
       </div>
+      {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
     </div>
   )
 }
 
-function SwotBoard({ block, responses, updateResponse }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void }) {
+function SwotBoard({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const columns = block.config?.categories || []
   const notesState = responses[block.id] || Object.fromEntries(columns.map((column: any) => [column.id, []]))
   const [dragItem, setDragItem] = useState<{ noteId: string; fromColumn: string } | null>(null)
@@ -1633,8 +1823,8 @@ function SwotBoard({ block, responses, updateResponse }: { block: WorksheetBlock
   }
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-slate-900">{block.label}</h3>
+    <div className={`space-y-4 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+      <h3 className="text-lg font-semibold text-slate-900"><BlockFieldLabel block={block} /></h3>
       <div className="grid gap-4 md:grid-cols-2">
         {columns.map((column: any) => (
           <div
@@ -1674,11 +1864,12 @@ function SwotBoard({ block, responses, updateResponse }: { block: WorksheetBlock
           </div>
         ))}
       </div>
+      {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Add at least one note for this required item.</p>}
     </div>
   )
 }
 
-function QuadrantBoard({ block, responses, updateResponse }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void }) {
+function QuadrantBoard({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const defaultValue = responses[block.id] || { x: 55, y: 55, rationale: '' }
   const x = Number(defaultValue.x ?? 50)
   const y = Number(defaultValue.y ?? 50)
@@ -1693,8 +1884,8 @@ function QuadrantBoard({ block, responses, updateResponse }: { block: WorksheetB
   }
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-slate-900">{block.label}</h3>
+    <div className={`space-y-4 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+      <h3 className="text-lg font-semibold text-slate-900"><BlockFieldLabel block={block} /></h3>
       <p className="text-sm text-slate-600">{block.config?.instructions || 'Place the tool in the space that best represents its value and risk.'}</p>
       <div className="grid gap-4 md:grid-cols-[1fr_220px]">
         <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -1747,20 +1938,22 @@ function QuadrantBoard({ block, responses, updateResponse }: { block: WorksheetB
         <div className="space-y-3">
           <label className="block">
             <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Horizontal position</span>
-            <input type="range" min={0} max={100} value={x} onChange={(event) => updateResponse(block.id, { ...defaultValue, x: Number(event.target.value) })} className="w-full" />
+            <input type="range" min={0} max={100} value={x} aria-required={block.required ? true : undefined} onChange={(event) => updateResponse(block.id, { ...defaultValue, x: Number(event.target.value) })} className="w-full" />
           </label>
           <label className="block">
             <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Vertical position</span>
-            <input type="range" min={0} max={100} value={y} onChange={(event) => updateResponse(block.id, { ...defaultValue, y: Number(event.target.value) })} className="w-full" />
+            <input type="range" min={0} max={100} value={y} aria-required={block.required ? true : undefined} onChange={(event) => updateResponse(block.id, { ...defaultValue, y: Number(event.target.value) })} className="w-full" />
           </label>
           <textarea
             value={defaultValue.rationale || ''}
+            aria-required={block.config?.rationaleRequired ? true : undefined}
             onChange={(event) => updateResponse(block.id, { ...defaultValue, rationale: event.target.value })}
             className="min-h-28 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm"
             placeholder="Why did you place the tool here?"
           />
         </div>
       </div>
+      {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Place the point and complete any required rationale.</p>}
     </div>
   )
 }
@@ -2290,7 +2483,7 @@ function RichTextSurface({
   )
 }
 
-function RichTextEditorBlock({ block, responses, updateResponse }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void }) {
+function RichTextEditorBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const mode = block.config?.mode === 'information' ? 'information' : 'response'
 
   if (mode === 'information') {
@@ -2313,9 +2506,9 @@ function RichTextEditorBlock({ block, responses, updateResponse }: { block: Work
   const currentValue = typeof responses[block.id] === 'string' ? responses[block.id] : ''
 
   return (
-    <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+    <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-slate-50'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
       <div>
-        <p className="text-sm font-medium text-slate-700">{block.label}</p>
+        <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
         {block.description && <p className="mt-1 text-xs text-slate-500">{block.description}</p>}
       </div>
       <RichTextSurface
@@ -2324,11 +2517,12 @@ function RichTextEditorBlock({ block, responses, updateResponse }: { block: Work
         placeholder={block.config?.placeholder || 'Write and format your response here.'}
         editable
       />
+      {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
     </div>
   )
 }
 
-function RandomizerBlock({ block, responses, updateResponse }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void }) {
+function RandomizerBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const items = Array.isArray(block.config?.items) ? block.config.items.filter((item: unknown) => typeof item === 'string' && item.trim()) : []
   const prompt = block.config?.prompt || 'Generate a random item from this list.'
   const currentValue = responses[block.id]
@@ -2576,10 +2770,10 @@ function RandomizerBlock({ block, responses, updateResponse }: { block: Workshee
           100% { margin-left: -16px; margin-top: 6px; }
         }
       `}</style>
-      <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-slate-50'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-slate-700">{block.label || prompt}</p>
+          <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
           {prompt && <p className="mt-1 text-xs text-slate-500">{prompt}</p>}
         </div>
         <button
@@ -2669,12 +2863,15 @@ function RandomizerBlock({ block, responses, updateResponse }: { block: Workshee
       {requireFirstGeneration && (
         <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">The first generated value is locked in.</p>
       )}
+      {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Please generate a result for this required item.</p>}
     </div>
     </>
   )
 }
 
-function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void) {
+function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void, options?: { showRequiredError?: boolean }) {
+  const showRequiredError = options?.showRequiredError ?? false
+
   switch (block.type) {
     case 'content':
       return (
@@ -2684,7 +2881,7 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
         </div>
       )
     case 'richText':
-      return <RichTextEditorBlock block={block} responses={responses} updateResponse={updateResponse} />
+      return <RichTextEditorBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'url':
       return (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -2705,44 +2902,49 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
       )
     case 'shortText':
       return (
-        <label className="block">
-          <span className="mb-2 block text-sm font-medium text-slate-700">{block.label}</span>
+        <label className="block" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+          <span className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
           {block.description && <p className="mb-2 text-xs text-slate-500">{block.description}</p>}
           <input
             value={responses[block.id] || ''}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none ring-0 transition focus:border-blue-500"
+            aria-required={block.required ? true : undefined}
+            className={`w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none ring-0 transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
             placeholder={block.config?.placeholder || 'Type here'}
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="mt-2 text-sm font-medium text-red-700">This response is required.</p>}
         </label>
       )
     case 'longText':
       return (
-        <label className="block">
-          <span className="mb-2 block text-sm font-medium text-slate-700">{block.label}</span>
+        <label className="block" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+          <span className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
           {block.description && <p className="mb-2 text-xs text-slate-500">{block.description}</p>}
           <textarea
             value={responses[block.id] || ''}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            className="min-h-28 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
+            aria-required={block.required ? true : undefined}
+            className={`min-h-28 w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
             placeholder={block.config?.placeholder || 'Write your response'}
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="mt-2 text-sm font-medium text-red-700">This response is required.</p>}
         </label>
       )
     case 'singleSelect':
       return (
-        <fieldset className="space-y-3">
-          <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label}</legend>
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+          <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
           {(block.config?.options || []).map((option: string) => (
             <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
               <span>{option}</span>
             </label>
           ))}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
     case 'randomizer': {
-      return <RandomizerBlock block={block} responses={responses} updateResponse={updateResponse} />
+      return <RandomizerBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     }
     case 'multipleChoice':
     case 'quiz': {
@@ -2923,8 +3125,8 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
     case 'checklist': {
       const selectedValues = Array.isArray(responses[block.id]) ? responses[block.id] : []
       return (
-        <fieldset className="space-y-3">
-          <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label}</legend>
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+          <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
           {(block.config?.options || []).map((option: string) => {
             const checked = selectedValues.includes(option)
             return (
@@ -2943,6 +3145,7 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
               </label>
             )
           })}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Select at least one option to continue.</p>}
         </fieldset>
       )
     }
@@ -2978,8 +3181,8 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       return (
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-slate-700">{block.label}</p>
+        <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+          <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
           {rows.map((row: string) => (
             <div key={`${block.id}-${row}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 flex items-center justify-between gap-3">
@@ -2992,11 +3195,13 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
                 max={max}
                 step={1}
                 value={Number(values[row] ?? block.config?.defaultValue ?? min)}
+                aria-required={block.required ? true : undefined}
                 onChange={(event) => updateResponse(block.id, { ...values, [row]: Number(event.target.value) })}
                 className="w-full"
               />
             </div>
           ))}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Complete all required ratings in this table.</p>}
         </div>
       )
     }
@@ -3063,10 +3268,10 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
       )
     case 'rating':
       return (
-        <div className="space-y-3">
+        <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-700">{block.label}</span>
-            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? '—'}</span>
+            <span className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
+            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '—'}</span>
           </div>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <input
@@ -3075,27 +3280,30 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
             max={block.config?.max ?? 10}
             step={block.config?.step ?? 1}
             value={responses[block.id] ?? block.config?.defaultValue ?? 5}
+            aria-required={block.required ? true : undefined}
             onChange={(event) => updateResponse(block.id, Number(event.target.value))}
             className="w-full"
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Set a rating to continue.</p>}
         </div>
       )
     case 'radar':
-      return <RadarBlock block={block} responses={responses} updateResponse={updateResponse} />
+      return <RadarBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'swot':
-      return <SwotBoard block={block} responses={responses} updateResponse={updateResponse} />
+      return <SwotBoard block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'quadrant':
-      return <QuadrantBoard block={block} responses={responses} updateResponse={updateResponse} />
+      return <QuadrantBoard block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'verdict':
       return (
-        <fieldset className="space-y-3">
-          <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label}</legend>
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+          <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
           {(block.config?.options || []).map((option: string) => (
             <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
               <span>{option}</span>
             </label>
           ))}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
     default:

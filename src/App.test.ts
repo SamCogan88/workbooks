@@ -198,4 +198,65 @@ describe('required page completion', () => {
     expect(isRequiredBlockSatisfied(page.blocks[1], completeResponses)).toBe(true)
     expect(getMissingRequiredBlocks(page, completeResponses)).toHaveLength(0)
   })
+
+  it('uses block-specific completeness rules for structured required responses', () => {
+    const page = {
+      id: 'page-2',
+      title: 'Structured required page',
+      blocks: [
+        {
+          id: 'rating',
+          type: 'rating',
+          label: 'Confidence',
+          required: true,
+          config: { min: 1, max: 5, defaultValue: 3 },
+        },
+        {
+          id: 'matrix',
+          type: 'matrix',
+          label: 'Criteria ratings',
+          required: true,
+          config: { rows: ['Clarity', 'Accuracy'], min: 1, max: 5, defaultValue: 2 },
+        },
+        {
+          id: 'radar',
+          type: 'radar',
+          label: 'Tool profile',
+          required: true,
+          config: { dimensions: ['Ease', 'Impact'] },
+        },
+        {
+          id: 'quadrant',
+          type: 'quadrant',
+          label: 'Positioning',
+          required: true,
+          config: { rationaleRequired: true },
+        },
+        {
+          id: 'swot',
+          type: 'swot',
+          label: 'SWOT',
+          required: true,
+          config: { categories: [{ id: 'strengths', label: 'Strengths' }] },
+        },
+      ],
+    } as any
+
+    expect(getMissingRequiredBlocks(page, {}).map((block) => block.id)).toEqual(['rating', 'matrix', 'radar', 'quadrant', 'swot'])
+
+    const responses = {
+      rating: 3,
+      matrix: { Clarity: 2, Accuracy: 4 },
+      radar: { Ease: 5, Impact: 7 },
+      quadrant: { x: 60, y: 40, rationale: 'Useful but risky.' },
+      swot: { strengths: [{ id: 'note-1', text: 'Clear outputs' }] },
+    }
+
+    expect(isRequiredBlockSatisfied(page.blocks[0], responses)).toBe(true)
+    expect(isRequiredBlockSatisfied(page.blocks[1], responses)).toBe(true)
+    expect(isRequiredBlockSatisfied(page.blocks[2], responses)).toBe(true)
+    expect(isRequiredBlockSatisfied(page.blocks[3], responses)).toBe(true)
+    expect(isRequiredBlockSatisfied(page.blocks[4], responses)).toBe(true)
+    expect(getMissingRequiredBlocks(page, responses)).toHaveLength(0)
+  })
 })
