@@ -3175,8 +3175,8 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     [filteredGroupings],
   )
   const studentSynthesis = useMemo(
-    () => buildStudentSynthesis(filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel),
-    [filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel],
+    () => buildStudentSynthesis(groupings, structure.radarBlockId, synthesisConfig.groupLabel),
+    [groupings, structure.radarBlockId, synthesisConfig.groupLabel],
   )
 
   const getVisiblePageSections = useCallback((groupingResponses: WorksheetResponse[]) => (
