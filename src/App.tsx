@@ -90,6 +90,16 @@ function clearRemovedBlockReferences(
   return isSynthesisSettingsEmpty(next) ? undefined : next
 }
 
+function buildResponseSearchText(response: WorksheetResponse) {
+  const values = Object.values(response.responses || {})
+  const flattened = values.map((value) => {
+    if (typeof value === 'string') return value
+    return JSON.stringify(value)
+  }).join(' ')
+
+  return `${response.responseId} ${response.group || ''} ${response.subject || ''} ${flattened}`.toLowerCase()
+}
+
 const EMPTY_WORKSHEET_DEFINITION: WorksheetDefinition = {
   id: 'custom-worksheet',
   version: 1,
@@ -474,6 +484,7 @@ function SystemGuidePage() {
         'Autosave and resume continuation for active worksheets',
         'Multi-file response import and aggregated synthesis',
         'Configurable synthesis grouping and response labels',
+        'Shared filtering across student synthesis and teacher report',
         'Teacher reporting with radar, quadrant, and SWOT analysis',
         'Student-facing summaries and recommendations',
         'Optional page timers and progress tracking',
@@ -796,6 +807,7 @@ function SystemGuidePage() {
         compatibility: 'AI Tool Lab can still fall back to subject/tool-name grouping when explicit synthesis settings are absent.',
       },
       chartTypes: ['radar', 'quadrant', 'summary badges', 'verdict distribution', 'matrix averages'],
+      sharedFilters: ['grouping key', 'response label', 'verdict', 'free-text search'],
       teacherSignals: ['strengths', 'weaknesses', 'mean scores', 'group trends', 'verdict distributions', 'individual written responses'],
       sampleResponses: 'Use public/sample-responses/tool-comparison/*.json with public/worksheets/ai-tool-lab.json for grouped synthesis testing.',
     },
@@ -887,6 +899,7 @@ function SystemGuidePage() {
             <li>• Captures student responses and persists autosave sessions.</li>
             <li>• Exports worksheet definitions and response JSON.</li>
             <li>• Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
+            <li>• Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
             <li>• Supports radar, quadrant, SWOT, and media-based prompts.</li>
           </ul>
         </section>
@@ -924,6 +937,7 @@ function SystemGuidePage() {
               <li>• Grouping values are normalized by trimming and collapsing whitespace and comparing case-insensitively.</li>
               <li>• Missing grouping values are placed under Unspecified.</li>
               <li>• If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
+              <li>• Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
             </ul>
           </div>
         </div>
@@ -3013,6 +3027,10 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
   const [mode, setMode] = useState<'student' | 'teacher'>(initialMode)
+  const [groupingFilter, setGroupingFilter] = useState('all')
+  const [responseLabelFilter, setResponseLabelFilter] = useState('all')
+  const [verdictFilter, setVerdictFilter] = useState('all')
+  const [searchFilter, setSearchFilter] = useState('')
   const structure = useMemo(() => getWorksheetStructure(definition), [definition])
   const responseLabelLookup = useMemo(
     () => Object.fromEntries(responses.map((response) => [response.responseId, getResponseLabel(response, definition)])),
@@ -3033,9 +3051,113 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     () => structure.responseBlocks.filter((block) => block.type === 'matrix'),
     [structure.responseBlocks],
   )
+  const verdictFilterOptions = useMemo(
+    () => Array.from(new Set(groupings.flatMap((grouping) => grouping.responses.flatMap((response) => verdictBlocks.map((block) => String(response.responses?.[block.id] || '').trim()).filter(Boolean))))).sort(),
+    [groupings, verdictBlocks],
+  )
+  const responseLabelFilterOptions = useMemo(
+    () => Array.from(new Set(Object.values(responseLabelLookup))).sort((left, right) => left.localeCompare(right)),
+    [responseLabelLookup],
+  )
+  const filteredGroupings = useMemo(() => {
+    const normalizedSearch = searchFilter.trim().toLowerCase()
+
+    return groupings
+      .filter((grouping) => groupingFilter === 'all' || grouping.key === groupingFilter)
+      .map((grouping) => {
+        const filteredResponses = grouping.responses.filter((response) => {
+          const label = responseLabelLookup[response.responseId] || ''
+          const matchesLabel = responseLabelFilter === 'all' || label === responseLabelFilter
+          const matchesVerdict = verdictFilter === 'all' || verdictBlocks.some((block) => String(response.responses?.[block.id] || '').trim() === verdictFilter)
+          const matchesSearch = !normalizedSearch
+            || grouping.label.toLowerCase().includes(normalizedSearch)
+            || label.toLowerCase().includes(normalizedSearch)
+            || buildResponseSearchText(response).includes(normalizedSearch)
+
+          return matchesLabel && matchesVerdict && matchesSearch
+        })
+
+        return {
+          ...grouping,
+          responses: filteredResponses,
+        }
+      })
+      .filter((grouping) => grouping.responses.length > 0)
+  }, [groupings, groupingFilter, responseLabelFilter, responseLabelLookup, searchFilter, verdictBlocks, verdictFilter])
+  const filteredResponseCount = useMemo(
+    () => filteredGroupings.reduce((sum, grouping) => sum + grouping.responses.length, 0),
+    [filteredGroupings],
+  )
   const studentSynthesis = useMemo(
-    () => buildStudentSynthesis(groupings, structure.radarBlockId, synthesisConfig.groupLabel),
-    [groupings, structure.radarBlockId, synthesisConfig.groupLabel],
+    () => buildStudentSynthesis(filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel),
+    [filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel],
+  )
+
+  const clearFilters = () => {
+    setGroupingFilter('all')
+    setResponseLabelFilter('all')
+    setVerdictFilter('all')
+    setSearchFilter('')
+  }
+
+  const renderFilters = (title: string, description: string) => (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+          <p className="mt-1 text-sm text-slate-600">{description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={clearFilters}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"
+        >
+          Clear filters
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <label className="block text-sm font-medium text-slate-700">
+          {synthesisConfig.groupLabel}
+          <select value={groupingFilter} onChange={(event) => setGroupingFilter(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+            <option value="all">All {pluralizeLabel(synthesisConfig.groupLabel, groupings.length)}</option>
+            {groupings.map((grouping) => (
+              <option key={grouping.key} value={grouping.key}>{grouping.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-sm font-medium text-slate-700">
+          Response label
+          <select value={responseLabelFilter} onChange={(event) => setResponseLabelFilter(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+            <option value="all">All response labels</option>
+            {responseLabelFilterOptions.map((label) => (
+              <option key={label} value={label}>{label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-sm font-medium text-slate-700">
+          Verdict
+          <select value={verdictFilter} onChange={(event) => setVerdictFilter(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+            <option value="all">All verdicts</option>
+            {verdictFilterOptions.map((verdict) => (
+              <option key={verdict} value={verdict}>{verdict}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-sm font-medium text-slate-700">
+          Search
+          <input
+            value={searchFilter}
+            onChange={(event) => setSearchFilter(event.target.value)}
+            placeholder="Search labels and responses"
+            className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+          />
+        </label>
+      </div>
+    </section>
   )
 
   useEffect(() => {
@@ -3187,17 +3309,19 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
       <section className="grid gap-4 md:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">Responses imported</div>
-          <div className="mt-3 text-3xl font-bold text-slate-900">{responses.length}</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{filteredResponseCount}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">Top result</div>
           <div className="mt-3 text-2xl font-bold text-slate-900">{studentSynthesis.topGroup}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
-          <div className="text-sm text-slate-500">{pluralizeLabel(synthesisConfig.groupLabel, groupings.length)}</div>
-          <div className="mt-3 text-3xl font-bold text-slate-900">{groupings.length}</div>
+          <div className="text-sm text-slate-500">{pluralizeLabel(synthesisConfig.groupLabel, filteredGroupings.length)}</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{filteredGroupings.length}</div>
         </div>
       </section>
+
+      {renderFilters('Synthesis filters', 'Filter the visible synthesis items by group, response label, verdict, or keyword.')}
 
       <section className="mt-8 rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Class overview</p>
@@ -3224,9 +3348,34 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
       </section>
 
       <section className="mt-8 space-y-5">
-        {groupings.map((grouping) => {
+        {filteredGroupings.map((grouping) => {
           const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
           const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
+          const avgPoint = aggregateQuadrantMean(grouping.responses, structure.quadrantBlockId)
+          const swot = structure.swotBlockId
+          const strengths = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.strengths || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
+          const weaknesses = grouping.responses.flatMap((response) => ((response.responses[swot] as Record<string, any>)?.weaknesses || []).map((item: any) => ({ text: item.text, label: responseLabelLookup[response.responseId] })))
+          const verdictSummaries = verdictBlocks.map((block) => {
+            const counts = grouping.responses.reduce<Record<string, number>>((accumulator, response) => {
+              const raw = response.responses?.[block.id]
+              const verdict = typeof raw === 'string' ? raw.trim() : ''
+              if (!verdict) return accumulator
+              accumulator[verdict] = (accumulator[verdict] || 0) + 1
+              return accumulator
+            }, {})
+            return { block, counts }
+          }).filter(({ counts }) => Object.keys(counts).length > 0)
+          const matrixSummaries = matrixBlocks.map((block) => {
+            const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+            const averages = Object.fromEntries(rows.map((row: string) => {
+              const values = grouping.responses
+                .map((response) => Number(response.responses?.[block.id]?.[row]))
+                .filter((value) => Number.isFinite(value))
+              const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+              return [row, average]
+            })) as Record<string, number>
+            return { block, averages }
+          }).filter(({ averages }) => Object.keys(averages).length > 0)
           const topRanked = Object.entries(avgRadar).sort((left, right) => Number(right[1]) - Number(left[1]))[0]
           return (
             <article key={grouping.key} className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
@@ -3246,17 +3395,97 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
                 ))}
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">Aggregate</span>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {Object.entries(avgRadar).slice(0, 4).map(([label, value]) => (
-                  <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <div className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</div>
-                    <div className="mt-2 text-xl font-bold text-slate-900">{Number(value).toFixed(1)}</div>
+
+              <div className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Average radar</h3>
+                    <span className="text-sm font-medium text-slate-700">Mean score</span>
                   </div>
-                ))}
+                  <div className="flex items-center justify-between gap-4">
+                    <RadarSummaryChart data={avgRadar} />
+                    <div className="flex-1 space-y-2 text-sm text-slate-700">
+                      {Object.entries(avgRadar).map(([label, value]) => (
+                        <div key={label} className="flex items-center justify-between rounded-lg bg-white px-2.5 py-2 shadow-sm ring-1 ring-slate-200">
+                          <span>{label}</span>
+                          <span className="font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">Quadrant position</h3>
+                  <div className="mt-3 flex items-center justify-center gap-4">
+                    <QuadrantMiniChart x={avgPoint.x} y={avgPoint.y} />
+                  </div>
+                  <div className="mt-3 flex justify-between text-sm text-slate-700">
+                    <span>x: {avgPoint.x.toFixed(1)}</span>
+                    <span>y: {avgPoint.y.toFixed(1)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {(verdictSummaries.length > 0 || matrixSummaries.length > 0) && (
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
+                  {verdictSummaries.map(({ block, counts }) => (
+                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Verdict distribution'}</h3>
+                      <div className="mt-3 space-y-2">
+                        {Object.entries(counts).map(([verdict, count]) => (
+                          <div key={verdict} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <span className="text-sm text-slate-700">{verdict}</span>
+                            <span className="text-sm font-semibold text-slate-900">{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  {matrixSummaries.map(({ block, averages }) => (
+                    <div key={block.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-slate-500">{block.label || 'Matrix averages'}</h3>
+                      <div className="mt-3 space-y-2">
+                        {Object.entries(averages).map(([row, value]) => (
+                          <div key={row} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <span className="text-sm text-slate-700">{row}</span>
+                            <span className="text-sm font-semibold text-slate-900">{Number(value).toFixed(1)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-emerald-700">Strengths</h3>
+                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                    {strengths.slice(0, 5).map((item, index) => (
+                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <h3 className="text-sm font-semibold uppercase tracking-[0.15em] text-red-700">Limitations</h3>
+                  <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                    {weaknesses.slice(0, 5).map((item, index) => (
+                      <li key={`${item.label}-${index}`} className="rounded-xl bg-white px-3 py-2 ring-1 ring-red-200">{item.text} <span className="text-slate-500">({item.label})</span></li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             </article>
           )
         })}
+        {filteredGroupings.length === 0 && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+            No synthesis items match the current filters.
+          </div>
+        )}
       </section>
     </main>
   )
@@ -3294,20 +3523,22 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
       <section className="grid gap-4 md:grid-cols-3">
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">Number of evaluations</div>
-          <div className="mt-3 text-3xl font-bold text-slate-900">{responses.length}</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{filteredResponseCount}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">Distinct {pluralizeLabel(synthesisConfig.groupLabel, groupings.length)}</div>
-          <div className="mt-3 text-3xl font-bold text-slate-900">{groupings.length}</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{filteredGroupings.length}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">Response labels</div>
-          <div className="mt-3 text-3xl font-bold text-slate-900">{new Set(Object.values(responseLabelLookup)).size}</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}</div>
         </div>
       </section>
 
+      {renderFilters('Report filters', 'Filter the visible items to focus the teacher report on specific groups, labels, verdicts, or keywords.')}
+
       <section className="mt-8 space-y-6">
-        {groupings.map((grouping) => {
+        {filteredGroupings.map((grouping) => {
           const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
           const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
           const avgPoint = aggregateQuadrantMean(grouping.responses, structure.quadrantBlockId)
@@ -3473,6 +3704,11 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
             </article>
           )
         })}
+        {filteredGroupings.length === 0 && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+            No report items match the current filters.
+          </div>
+        )}
       </section>
     </main>
   )
