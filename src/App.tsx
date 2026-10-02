@@ -1,8 +1,10 @@
-import { HashRouter, Link, Route, Routes, useLocation } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type PointerEvent } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
+import LinkExtension from '@tiptap/extension-link'
+import TextAlign from '@tiptap/extension-text-align'
 import { Wheel as CanvasWheel } from 'spin-wheel'
 import {
   ArrowLeft,
@@ -426,6 +428,14 @@ function SystemGuidePage() {
     schema: {
       worksheetDefinition: {
         required: ['id', 'version', 'title', 'description', 'settings', 'pages'],
+        shape: {
+          id: 'string',
+          version: 'number',
+          title: 'string',
+          description: 'string',
+          settings: 'WorksheetSettings',
+          pages: 'WorksheetPage[]',
+        },
         settings: {
           navigation: ['sequential', 'free'],
           allowPageJumping: 'boolean',
@@ -433,41 +443,283 @@ function SystemGuidePage() {
           showProgress: 'boolean',
           exports: { json: 'boolean', pdf: 'boolean' },
         },
-        page: { id: 'string', title: 'string', timer: 'optional { enabled, durationSeconds }', blocks: 'array<Block>' },
+        page: {
+          required: ['id', 'title', 'blocks'],
+          shape: {
+            id: 'string',
+            title: 'string',
+            timer: 'optional PageTimer',
+            blocks: 'WorksheetBlock[]',
+          },
+        },
+        pageTimer: {
+          enabled: 'boolean',
+          durationSeconds: 'number',
+          behaviour: ['advisory', 'auto-advance'],
+        },
         block: {
-          id: 'string',
-          type: 'supported block type',
-          label: 'string',
-          title: 'optional string',
-          description: 'optional string',
-          required: 'optional boolean',
-          config: 'optional object',
+          required: ['id', 'type'],
+          shape: {
+            id: 'string',
+            type: 'supported block type',
+            label: 'optional string',
+            title: 'optional string',
+            description: 'optional string',
+            required: 'optional boolean',
+            config: 'optional object',
+          },
         },
       },
       response: {
-        responseSchema: 'interactive-worksheet-response',
-        responseId: 'string',
-        worksheetId: 'string',
-        version: 'number',
-        group: 'string',
-        subject: 'string',
-        responses: 'Record<string, any>',
+        required: ['responseSchema', 'schemaVersion', 'worksheetId', 'worksheetVersion', 'responseId', 'createdAt', 'updatedAt', 'responses'],
+        shape: {
+          responseSchema: 'interactive-worksheet-response',
+          schemaVersion: 'number',
+          worksheetId: 'string',
+          worksheetVersion: 'number',
+          responseId: 'string',
+          createdAt: 'ISO datetime string',
+          updatedAt: 'ISO datetime string',
+          group: 'optional string',
+          subject: 'optional string',
+          responses: 'Record<blockId, any>',
+        },
       },
     },
     blocks: {
-      textAndPrompting: ['content', 'section', 'shortText', 'longText'],
-      quiz: ['singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'checklist', 'ranking', 'matrix'],
-      mediaAndEvidence: ['imagePrompt', 'video', 'youtube'],
-      evaluation: ['rating', 'radar', 'quadrant', 'swot', 'verdict'],
-    },
-    questionTypes: {
-      multipleChoice: 'Graded MCQ with optional multi-answer mode.',
-      trueFalse: 'Binary quiz question with correct answer.',
-      shortAnswer: 'Checks a student response against a target string or exact answer.',
-      matching: 'Matches prompts to answer choices.',
-      fillBlank: 'Fills a text gap with the expected value.',
-      singleSelect: 'Non-graded selection from a list of options.',
-      checklist: 'Multiple-choice selection with several accepted answers.',
+      categories: {
+        textAndPrompting: ['content', 'richText', 'shortText', 'longText', 'section'],
+        quiz: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank'],
+        choiceAndSelection: ['singleSelect', 'randomizer', 'checklist', 'ranking', 'verdict'],
+        analysisAndAssessment: ['rating', 'matrix', 'radar', 'quadrant', 'swot'],
+        mediaAndEvidence: ['imagePrompt', 'video', 'youtube', 'url'],
+      },
+      definitions: {
+        content: {
+          purpose: 'Read-only instructional copy or briefing text.',
+          fields: ['title', 'description'],
+          config: {},
+        },
+        section: {
+          purpose: 'Visual section divider or heading.',
+          fields: ['title'],
+          config: {},
+        },
+        shortText: {
+          purpose: 'Single-line learner response.',
+          fields: ['label', 'description', 'required'],
+          config: { placeholder: 'string' },
+          responseShape: 'string',
+        },
+        longText: {
+          purpose: 'Multi-line learner response.',
+          fields: ['label', 'description', 'required'],
+          config: { placeholder: 'string' },
+          responseShape: 'string',
+        },
+        richText: {
+          purpose: 'Formatted information block or formatted learner response block.',
+          fields: ['label', 'description'],
+          config: {
+            mode: ['information', 'response'],
+            placeholder: 'string',
+            contentHtml: 'HTML string for information mode',
+          },
+          responseShape: 'string (HTML)',
+        },
+        url: {
+          purpose: 'Open an external resource in a new tab.',
+          fields: ['label', 'description'],
+          config: {
+            url: 'string',
+            buttonText: 'string',
+            audience: ['student', 'staff'],
+          },
+        },
+        singleSelect: {
+          purpose: 'Non-graded single selection from teacher-defined options.',
+          fields: ['label', 'description', 'required'],
+          config: { options: 'string[]' },
+          responseShape: 'string',
+        },
+        randomizer: {
+          purpose: 'Generate one random item from a list using one of several visual display styles.',
+          fields: ['label', 'description'],
+          config: {
+            prompt: 'string',
+            items: 'string[]',
+            shuffle: 'boolean',
+            requireFirstGeneration: 'boolean',
+            displayStyle: ['word-flicker', 'wheel', 'card-shuffle'],
+            animationDurationMs: 'number >= 300',
+          },
+          responseShape: 'string',
+        },
+        multipleChoice: {
+          purpose: 'Graded multiple-choice question.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            question: 'string',
+            options: 'string[]',
+            correctAnswer: 'string | string[]',
+            multipleAnswers: 'boolean',
+            showFeedback: 'boolean',
+            points: 'number',
+            explanation: 'string',
+          },
+          responseShape: 'string | string[]',
+        },
+        trueFalse: {
+          purpose: 'Binary graded question.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            question: 'string',
+            correctAnswer: 'boolean',
+            showFeedback: 'boolean',
+            points: 'number',
+            explanation: 'string',
+          },
+          responseShape: 'boolean | string',
+        },
+        shortAnswer: {
+          purpose: 'Exact-match graded short answer.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            question: 'string',
+            correctAnswer: 'string',
+            showFeedback: 'boolean',
+            points: 'number',
+            explanation: 'string',
+          },
+          responseShape: 'string',
+        },
+        matching: {
+          purpose: 'Match prompts to answers.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            question: 'string',
+            options: 'string[]',
+            pairs: '{ id, prompt, answer }[]',
+            showFeedback: 'boolean',
+            points: 'number',
+          },
+          responseShape: 'Record<pairId, selectedOption>',
+        },
+        fillBlank: {
+          purpose: 'Fill-in-the-blank graded response.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            question: 'string',
+            correctAnswer: 'string',
+            answers: 'optional string[]',
+            showFeedback: 'boolean',
+            points: 'number',
+            explanation: 'string',
+          },
+          responseShape: 'string',
+        },
+        checklist: {
+          purpose: 'Multi-select, non-graded option list.',
+          fields: ['label', 'description', 'required'],
+          config: { options: 'string[]' },
+          responseShape: 'string[]',
+        },
+        ranking: {
+          purpose: 'Re-order or prioritise listed items.',
+          fields: ['label', 'description'],
+          config: { options: 'string[]' },
+          responseShape: 'string[]',
+        },
+        verdict: {
+          purpose: 'Final recommendation or decision pick.',
+          fields: ['label', 'description'],
+          config: { options: 'string[]' },
+          responseShape: 'string',
+        },
+        rating: {
+          purpose: 'Numeric scale slider.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            min: 'number',
+            max: 'number',
+            step: 'number',
+            minLabel: 'string',
+            maxLabel: 'string',
+            defaultValue: 'number',
+          },
+          responseShape: 'number',
+        },
+        matrix: {
+          purpose: 'Rate multiple rows on a common scale.',
+          fields: ['label', 'description'],
+          config: {
+            rows: 'string[]',
+            min: 'number',
+            max: 'number',
+            defaultValue: 'number',
+          },
+          responseShape: 'Record<rowLabel, number>',
+        },
+        radar: {
+          purpose: 'Score several dimensions for charting and synthesis.',
+          fields: ['label', 'description'],
+          config: {
+            dimensions: '{ id, label }[]',
+          },
+          responseShape: 'Record<dimensionLabel, number>',
+        },
+        quadrant: {
+          purpose: 'Place a point on a two-axis model and optionally justify it.',
+          fields: ['label', 'description'],
+          config: {
+            xLeft: 'string',
+            xRight: 'string',
+            yBottom: 'string',
+            yTop: 'string',
+            rationaleRequired: 'boolean',
+            instructions: 'string',
+          },
+          responseShape: '{ x: number, y: number, rationale?: string }',
+        },
+        swot: {
+          purpose: 'Categorise text responses into board columns.',
+          fields: ['label', 'description'],
+          config: {
+            categories: '{ id, label }[]',
+          },
+          responseShape: 'Record<categoryId, { text: string }[]>',
+        },
+        imagePrompt: {
+          purpose: 'Display an image prompt with optional response placeholder.',
+          fields: ['label', 'description'],
+          config: {
+            imageUrl: 'string',
+            altText: 'string',
+            placeholder: 'string',
+          },
+          responseShape: 'string',
+        },
+        video: {
+          purpose: 'Embed a direct video URL with an optional response prompt.',
+          fields: ['label', 'description'],
+          config: {
+            videoUrl: 'string',
+            altText: 'string',
+            placeholder: 'string',
+          },
+          responseShape: 'string',
+        },
+        youtube: {
+          purpose: 'Embed a YouTube video via watch/share URL with an optional response prompt.',
+          fields: ['label', 'description'],
+          config: {
+            videoUrl: 'string',
+            altText: 'string',
+            placeholder: 'string',
+          },
+          responseShape: 'string',
+        },
+      },
     },
     analytics: {
       supportedOutputs: ['student synthesis', 'teacher report', 'class PDF export'],
@@ -476,7 +728,7 @@ function SystemGuidePage() {
       teacherSignals: ['strengths', 'weaknesses', 'mean scores', 'group trends'],
     },
     timers: {
-      model: 'Page-scoped timer with enabled and durationSeconds.',
+      model: 'Page-scoped timer with enabled, durationSeconds, and behaviour.',
       default: 'Off by default unless a worksheet explicitly enables one.',
     },
   }
@@ -639,6 +891,7 @@ function formatTimerValue(seconds: number) {
 }
 
 function WorksheetPlayer({ definition, previewMode = false }: { definition: WorksheetDefinition; previewMode?: boolean }) {
+  const navigate = useNavigate()
   const [pageIndex, setPageIndex] = useState(0)
   const [responseId, setResponseId] = useState(() => {
     const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
@@ -827,6 +1080,15 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
     pdf.save(`${definition.id}-response.pdf`)
   }
 
+  const handleBackToBuilder = () => {
+    if (previewMode && window.opener && !window.opener.closed) {
+      window.close()
+      return
+    }
+
+    navigate('/builder')
+  }
+
   if (!currentPage) {
     return (
       <main className="mx-auto max-w-4xl px-6 py-12 text-slate-700">
@@ -838,7 +1100,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   const progress = ((pageIndex + 1) / totalPages) * 100
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8">
+    <main className="mx-auto max-w-7xl px-4 py-8">
       <header className="mb-6 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{definition.id}</p>
@@ -847,7 +1109,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
         <div className="flex flex-wrap gap-2">
           <Link to="/" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to start</Link>
           {previewMode && (
-            <Link to="/builder" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to builder</Link>
+            <button type="button" onClick={handleBackToBuilder} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to builder</button>
           )}
           {!previewMode && (
             <>
@@ -881,7 +1143,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(260px,1fr)]">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-2xl font-semibold text-slate-900">{currentPage.title}</h2>
           <div className="space-y-6">
@@ -898,36 +1160,38 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
           </div>
         </section>
 
-        <aside className="rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+        <aside className="space-y-5 rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
           {quizSummary.totalQuestions > 0 && (
-            <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-emerald-700">Quiz score</p>
               <p className="mt-2 text-2xl font-bold text-emerald-900">{quizSummary.totalScore}/{quizSummary.totalMax}</p>
               <p className="text-sm text-emerald-700">{quizSummary.percent.toFixed(0)}% correct</p>
             </div>
           )}
 
-          <h3 className="mb-3 text-lg font-semibold text-slate-900">Progress snapshot</h3>
-          <ul className="space-y-2 text-sm text-slate-700">
-            {definition.pages.map((page, index) => (
-              <li key={page.id}>
-                <button
-                  type="button"
-                  onClick={() => goToPage(index)}
-                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    {page.title}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-xs">
-                    {index + 1}
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div>
+            <h3 className="mb-3 text-lg font-semibold text-slate-900">Progress snapshot</h3>
+            <ul className="space-y-2 text-sm text-slate-700">
+              {definition.pages.map((page, index) => (
+                <li key={page.id}>
+                  <button
+                    type="button"
+                    onClick={() => goToPage(index)}
+                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      {page.title}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-xs">
+                      {index + 1}
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         </aside>
       </div>
     </main>
@@ -1502,7 +1766,22 @@ function RichTextSurface({
   editable?: boolean
 }) {
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: [
+      StarterKit,
+      LinkExtension.configure({
+        autolink: true,
+        defaultProtocol: 'https',
+        HTMLAttributes: {
+          class: 'text-blue-600 underline underline-offset-2',
+          rel: 'noopener noreferrer',
+          target: '_blank',
+        },
+        openOnClick: false,
+      }),
+      TextAlign.configure({
+        types: ['heading', 'paragraph'],
+      }),
+    ],
     content: value || '',
     editable,
     immediatelyRender: false,
@@ -1532,34 +1811,146 @@ function RichTextSurface({
     )
   }
 
-  const toolbarActions = [
-    { label: 'B', run: () => editor.chain().focus().toggleBold().run(), isActive: editor.isActive('bold') },
-    { label: 'I', run: () => editor.chain().focus().toggleItalic().run(), isActive: editor.isActive('italic') },
-    { label: '• List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList') },
-    { label: '1. List', run: () => editor.chain().focus().toggleOrderedList().run(), isActive: editor.isActive('orderedList') },
+  const inlineActions = [
+    { label: 'Bold', shortLabel: 'B', run: () => editor.chain().focus().toggleBold().run(), isActive: editor.isActive('bold'), canRun: editor.can().chain().focus().toggleBold().run() },
+    { label: 'Italic', shortLabel: 'I', run: () => editor.chain().focus().toggleItalic().run(), isActive: editor.isActive('italic'), canRun: editor.can().chain().focus().toggleItalic().run() },
+    { label: 'Strike', shortLabel: 'S', run: () => editor.chain().focus().toggleStrike().run(), isActive: editor.isActive('strike'), canRun: editor.can().chain().focus().toggleStrike().run() },
+    { label: 'Inline code', shortLabel: '</>', run: () => editor.chain().focus().toggleCode().run(), isActive: editor.isActive('code'), canRun: editor.can().chain().focus().toggleCode().run() },
+  ]
+
+  const blockActions = [
+    { label: 'Paragraph', run: () => editor.chain().focus().setParagraph().run(), isActive: editor.isActive('paragraph'), canRun: editor.can().chain().focus().setParagraph().run() },
+    { label: 'H2', run: () => editor.chain().focus().toggleHeading({ level: 2 }).run(), isActive: editor.isActive('heading', { level: 2 }), canRun: editor.can().chain().focus().toggleHeading({ level: 2 }).run() },
+    { label: 'H3', run: () => editor.chain().focus().toggleHeading({ level: 3 }).run(), isActive: editor.isActive('heading', { level: 3 }), canRun: editor.can().chain().focus().toggleHeading({ level: 3 }).run() },
+    { label: 'Quote', run: () => editor.chain().focus().toggleBlockquote().run(), isActive: editor.isActive('blockquote'), canRun: editor.can().chain().focus().toggleBlockquote().run() },
+    { label: 'Code block', run: () => editor.chain().focus().toggleCodeBlock().run(), isActive: editor.isActive('codeBlock'), canRun: editor.can().chain().focus().toggleCodeBlock().run() },
+  ]
+
+  const listActions = [
+    { label: 'Bullet list', shortLabel: '• List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
+    { label: 'Numbered list', shortLabel: '1. List', run: () => editor.chain().focus().toggleOrderedList().run(), isActive: editor.isActive('orderedList'), canRun: editor.can().chain().focus().toggleOrderedList().run() },
+  ]
+
+  const historyActions = [
+    { label: 'Undo', run: () => editor.chain().focus().undo().run(), canRun: editor.can().chain().focus().undo().run() },
+    { label: 'Redo', run: () => editor.chain().focus().redo().run(), canRun: editor.can().chain().focus().redo().run() },
+  ]
+
+  const handleSetLink = () => {
+    const previousUrl = editor.getAttributes('link').href as string | undefined
+    const nextUrl = window.prompt('Enter a URL', previousUrl || 'https://')
+    if (nextUrl === null) return
+
+    const trimmedUrl = nextUrl.trim()
+    if (!trimmedUrl) {
+      editor.chain().focus().unsetLink().run()
+      return
+    }
+
+    const normalizedUrl = /^https?:\/\//i.test(trimmedUrl) ? trimmedUrl : `https://${trimmedUrl}`
+    editor.chain().focus().extendMarkRange('link').setLink({ href: normalizedUrl }).run()
+  }
+
+  const linkActions = [
+    { label: 'Link', run: handleSetLink, isActive: editor.isActive('link') },
+    { label: 'Unlink', run: () => editor.chain().focus().unsetLink().run(), isActive: false, disabled: !editor.isActive('link') },
+  ]
+
+  const alignmentActions = [
+    { label: 'Left', run: () => editor.chain().focus().setTextAlign('left').run(), isActive: editor.isActive({ textAlign: 'left' }) },
+    { label: 'Center', run: () => editor.chain().focus().setTextAlign('center').run(), isActive: editor.isActive({ textAlign: 'center' }) },
+    { label: 'Right', run: () => editor.chain().focus().setTextAlign('right').run(), isActive: editor.isActive({ textAlign: 'right' }) },
   ]
 
   return (
     <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
       {editable && (
-        <div className="flex flex-wrap gap-2">
-          {toolbarActions.map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              onClick={action.run}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${action.isActive ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'}`}
-            >
-              {action.label}
-            </button>
-          ))}
+        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="flex flex-wrap gap-2">
+            {inlineActions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.run}
+                disabled={!action.canRun}
+                title={action.label}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${action.isActive ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'}`}
+              >
+                {action.shortLabel}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {blockActions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.run}
+                disabled={!action.canRun}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${action.isActive ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'}`}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-2">
+            {linkActions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.run}
+                disabled={action.disabled}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${action.isActive ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'}`}
+              >
+                {action.label}
+              </button>
+            ))}
+            {alignmentActions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.run}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${action.isActive ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'}`}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-2">
+            <div className="flex flex-wrap gap-2">
+              {listActions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  onClick={action.run}
+                  disabled={!action.canRun}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${action.isActive ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'}`}
+                >
+                  {action.shortLabel}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              {historyActions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  onClick={action.run}
+                  disabled={!action.canRun}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
       <div className="relative">
         {!value && editable && (
           <p className="pointer-events-none absolute left-3 top-3 z-10 text-sm text-slate-400">{placeholder}</p>
         )}
-        <div className={`min-h-40 rounded-xl border bg-white px-3 py-2.5 text-slate-800 transition ${editable ? 'border-slate-300 focus-within:border-blue-500' : 'border-slate-200'} [&_.ProseMirror]:min-h-32 [&_.ProseMirror]:outline-none [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_p]:mb-3 [&_.ProseMirror_p:last-child]:mb-0 [&_.ProseMirror_strong]:font-semibold [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-6`}>
+        <div className={`min-h-40 rounded-xl border bg-white px-3 py-2.5 text-slate-800 transition ${editable ? 'border-slate-300 focus-within:border-blue-500' : 'border-slate-200'} [&_.ProseMirror]:min-h-32 [&_.ProseMirror]:outline-none [&_.ProseMirror_a]:text-blue-600 [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:underline-offset-2 [&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-slate-300 [&_.ProseMirror_blockquote]:pl-4 [&_.ProseMirror_blockquote]:italic [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-slate-100 [&_.ProseMirror_code]:px-1.5 [&_.ProseMirror_code]:py-0.5 [&_.ProseMirror_h2]:mb-3 [&_.ProseMirror_h2]:mt-4 [&_.ProseMirror_h2]:text-2xl [&_.ProseMirror_h2]:font-bold [&_.ProseMirror_h3]:mb-3 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-xl [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_p]:mb-3 [&_.ProseMirror_p:last-child]:mb-0 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:bg-slate-900 [&_.ProseMirror_pre]:p-3 [&_.ProseMirror_pre]:text-slate-100 [&_.ProseMirror_strong]:font-semibold [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-6`}>
           <EditorContent editor={editor} />
         </div>
       </div>
@@ -3216,7 +3607,7 @@ function BuilderPage({
             Load worksheet JSON
             <input type="file" accept="application/json" className="hidden" onChange={importWorksheetDefinition} />
           </label>
-          <Link to="/preview" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"><Eye className="h-4 w-4" />Preview<ExternalLink className="h-3.5 w-3.5" /></Link>
+          <Link to="/preview" className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"><Eye className="h-4 w-4" />Preview</Link>
           <button
             onClick={() => {
               const blob = new Blob([JSON.stringify(definition, null, 2)], { type: 'application/json' })
