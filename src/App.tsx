@@ -2323,6 +2323,18 @@ function RandomizerBlock({ block, responses, updateResponse }: { block: Workshee
     setPendingWheelValue(null)
   }, [block.id, pendingWheelValue, updateResponse])
 
+  useEffect(() => {
+    if (!isAnimating || !pendingWheelValue || displayStyle !== 'wheel') return undefined
+
+    const fallbackTimer = window.setTimeout(() => {
+      handleWheelRest()
+    }, animationDurationMs + 200)
+
+    return () => {
+      window.clearTimeout(fallbackTimer)
+    }
+  }, [animationDurationMs, displayStyle, handleWheelRest, isAnimating, pendingWheelValue])
+
   const handleCardPick = useCallback((cardIndex: number) => {
     if (!cardCanPick || isAnimating || isLocked) return
 
@@ -2344,6 +2356,10 @@ function RandomizerBlock({ block, responses, updateResponse }: { block: Workshee
       setCardDeckItems([])
       setCardPhase('preview')
       setRevealedCardIndex(null)
+      return
+    }
+
+    if (displayStyle === 'wheel' && (isAnimating || pendingWheelValue)) {
       return
     }
 
@@ -2370,7 +2386,7 @@ function RandomizerBlock({ block, responses, updateResponse }: { block: Workshee
     }
 
     setCardDeckItems(items)
-  }, [currentValue, displayStyle, items])
+  }, [currentValue, displayStyle, isAnimating, items, pendingWheelValue])
 
   const displayClasses = isAnimating
     ? {
@@ -2471,8 +2487,15 @@ function RandomizerBlock({ block, responses, updateResponse }: { block: Workshee
         {displayStyle === 'wheel' ? (
           <div className="flex flex-col items-center gap-4" aria-live="polite">
             <SpinWheelDisplay items={items} spinToken={wheelSpinToken} targetIndex={wheelTargetIndex} durationMs={animationDurationMs} onRest={handleWheelRest} />
-            <div className="min-h-12 min-w-48 rounded-xl border border-white/60 bg-white/80 px-4 py-2 text-center text-sm font-semibold text-blue-900 shadow-inner">
-              {displayValue || (isAnimating ? 'Generating...' : 'Click Generate to spin')}
+            <div className="w-full max-w-md rounded-2xl border border-blue-300 bg-white px-4 py-3 text-center shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Selected item</p>
+              <p className="mt-2 min-h-8 text-lg font-bold text-slate-900">
+                {displayValue
+                  ? displayValue
+                  : isAnimating
+                    ? 'Spinning...'
+                    : 'Click Generate to spin'}
+              </p>
             </div>
           </div>
         ) : displayStyle === 'card-shuffle' ? (
