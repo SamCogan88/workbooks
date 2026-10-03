@@ -105,6 +105,19 @@ describe('worksheet engine core logic', () => {
     expect(grouped.map((group) => group.label)).toEqual(['Diffit', 'NotebookLM'])
   })
 
+  it('can regroup the same responses using another response block', () => {
+    const responses = [
+      createResponse('response-1', { 'tool-name': 'Aurora Crater', 'group-name': 'Team Ares' }),
+      createResponse('response-2', { 'tool-name': 'Aurora Crater', 'group-name': 'Team Phobos' }),
+    ]
+    const byColony = groupResponsesByKey(synthesisDefinition as any, responses).groups
+    const byTeamDefinition = { ...synthesisDefinition, synthesis: { ...synthesisDefinition.synthesis, groupByBlockId: 'group-name', groupLabel: 'Review team' } }
+    const byTeam = groupResponsesByKey(byTeamDefinition as any, responses).groups
+
+    expect(byColony.map((group) => group.label)).toEqual(['Aurora Crater'])
+    expect(byTeam.map((group) => group.label)).toEqual(['Team Ares', 'Team Phobos'])
+  })
+
   it('uses randomizer output as a grouping value', () => {
     const response = createResponse('response-1', { 'tool-name': 'Gamma', 'group-name': 'Group 4' })
 

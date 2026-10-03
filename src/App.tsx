@@ -83,6 +83,7 @@ const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
 const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating', 'categorize', 'hotspot', 'numeric', 'wordCloud', 'confidence'])
 const REPORT_EXCLUDED_BLOCK_TYPES = new Set(['randomizer'])
+const SYNTHESIS_GROUPABLE_BLOCK_TYPES = new Set(['shortText', 'singleSelect', 'multipleChoice', 'trueFalse', 'verdict', 'confidence', 'checklist', 'randomizer', 'numeric'])
 
 interface ReportPageSection {
   page: WorksheetPage
@@ -1278,6 +1279,8 @@ function SystemGuidePage() {
               <li>Missing grouping values are placed under Unspecified.</li>
               <li>If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
               <li>Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
+              <li>Group report by can regroup the current response set using another simple response block without editing or republishing the worksheet.</li>
+              <li>Response-label chips are interactive filters; selecting a chip focuses the report on that response label and selecting it again clears the filter.</li>
               <li>Only worksheet pages with meaningful response data become report sections; procedural-only pages remain hidden unless they contain evidence worth showing.</li>
             </ul>
           </div>
@@ -3812,17 +3815,37 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
   const [mode, setMode] = useState<'student' | 'teacher'>(initialMode)
+  const [reportGroupByBlockId, setReportGroupByBlockId] = useState(definition.synthesis?.groupByBlockId || '')
   const [groupingFilter, setGroupingFilter] = useState('all')
   const [responseLabelFilter, setResponseLabelFilter] = useState('all')
   const [verdictFilter, setVerdictFilter] = useState('all')
   const [searchFilter, setSearchFilter] = useState('')
   const [expandedReportSections, setExpandedReportSections] = useState<Set<string>>(() => new Set())
   const structure = useMemo(() => getWorksheetStructure(definition), [definition])
+  const groupableBlockOptions = useMemo(() => getResponseProducingBlocks(definition)
+    .filter((block) => SYNTHESIS_GROUPABLE_BLOCK_TYPES.has(block.type)), [definition])
+  const reportDefinition = useMemo<WorksheetDefinition>(() => {
+    const selectedGroupingBlock = groupableBlockOptions.find((block) => block.id === reportGroupByBlockId)
+    const configuredGroupByBlockId = definition.synthesis?.groupByBlockId
+    const configuredResponseLabelBlockId = definition.synthesis?.responseLabelBlockId
+    const responseLabelBlockId = reportGroupByBlockId === configuredResponseLabelBlockId
+      ? configuredGroupByBlockId
+      : configuredResponseLabelBlockId
+    return {
+      ...definition,
+      synthesis: {
+        ...definition.synthesis,
+        groupByBlockId: reportGroupByBlockId || undefined,
+        groupLabel: selectedGroupingBlock ? getBlockDisplayLabel(selectedGroupingBlock) : 'Response group',
+        responseLabelBlockId,
+      },
+    }
+  }, [definition, groupableBlockOptions, reportGroupByBlockId])
   const responseLabelLookup = useMemo(
-    () => Object.fromEntries(responses.map((response) => [response.responseId, getResponseLabel(response, definition)])),
-    [definition, responses],
+    () => Object.fromEntries(responses.map((response) => [response.responseId, getResponseLabel(response, reportDefinition)])),
+    [reportDefinition, responses],
   )
-  const synthesisResult = useMemo(() => groupResponsesByKey(definition, responses), [definition, responses])
+  const synthesisResult = useMemo(() => groupResponsesByKey(reportDefinition, responses), [reportDefinition, responses])
   const groupings = synthesisResult.groups
   const synthesisConfig = synthesisResult.config
   const reportPages = useMemo<ReportPageSection[]>(
@@ -4285,6 +4308,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       getVisiblePageSections(grouping.responses).map((section) => `${grouping.key}:${section.page.id}`))))
   }
 
+  const toggleResponseLabelFilter = (label: string) => {
+    setResponseLabelFilter((current) => current === label ? 'all' : label)
+    setExpandedReportSections(new Set())
+  }
+
   const renderFilters = (title: string, description: string) => (
     <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -4299,9 +4327,17 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <label className="block text-sm font-medium text-slate-700">
-          {synthesisConfig.groupLabel}
+          Group report by
+          <select value={reportGroupByBlockId} onChange={(event) => { setReportGroupByBlockId(event.target.value); setGroupingFilter('all'); setResponseLabelFilter('all'); setExpandedReportSections(new Set()) }} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
+            <option value="">No grouping</option>
+            {groupableBlockOptions.map((block) => <option key={block.id} value={block.id}>{getBlockDisplayLabel(block)}</option>)}
+          </select>
+        </label>
+
+        <label className="block text-sm font-medium text-slate-700">
+          Filter {synthesisConfig.groupLabel}
           <select value={groupingFilter} onChange={(event) => setGroupingFilter(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2">
             <option value="all">All {pluralizeLabel(synthesisConfig.groupLabel, groupings.length)}</option>
             {groupings.map((grouping) => (
@@ -4346,6 +4382,13 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   useEffect(() => {
     setMode(initialMode)
   }, [initialMode])
+
+  useEffect(() => {
+    setReportGroupByBlockId(definition.synthesis?.groupByBlockId || '')
+    setGroupingFilter('all')
+    setResponseLabelFilter('all')
+    setExpandedReportSections(new Set())
+  }, [definition.id, definition.synthesis?.groupByBlockId, definition.version])
 
   useEffect(() => {
     if (!initialResponses) return
@@ -4694,11 +4737,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
               </div>
               <p className="mt-3 text-sm text-slate-600">This {synthesisConfig.groupLabel.toLowerCase()} contains {formatCountLabel(grouping.responses.length, 'response')}. Expand its worksheet sections to inspect the recorded evidence.</p>
               <div className="mt-4 flex flex-wrap gap-2">
-                {grouping.responses.map((response) => (
-                  <span key={response.responseId} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700">
-                    {responseLabelLookup[response.responseId]}
-                  </span>
-                ))}
+                {grouping.responses.map((response) => {
+                  const label = responseLabelLookup[response.responseId]
+                  return <button type="button" key={response.responseId} aria-pressed={responseLabelFilter === label} onClick={() => toggleResponseLabelFilter(label)} className={`rounded-full border px-3 py-1 text-sm transition ${responseLabelFilter === label ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-300 hover:bg-blue-50'}`}>{label}</button>
+                })}
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">Aggregate</span>
               </div>
 
@@ -4776,9 +4818,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
               </div>
 
               <div className="mb-5 flex flex-wrap gap-2">
-                {grouping.responses.map((response) => (
-                  <span key={response.responseId} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700">{responseLabelLookup[response.responseId]}</span>
-                ))}
+                {grouping.responses.map((response) => {
+                  const label = responseLabelLookup[response.responseId]
+                  return <button type="button" key={response.responseId} aria-pressed={responseLabelFilter === label} onClick={() => toggleResponseLabelFilter(label)} className={`rounded-full border px-3 py-1 text-sm transition ${responseLabelFilter === label ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-300 hover:bg-blue-50'}`}>{label}</button>
+                })}
               </div>
 
               {renderPageSections(grouping, 'teacher')}
