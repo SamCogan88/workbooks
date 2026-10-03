@@ -4673,9 +4673,9 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
 
         <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
           <h3 className="text-lg font-semibold text-emerald-900">What the class could do next</h3>
-          <ul className="mt-3 space-y-2 text-sm text-emerald-800">
+          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-emerald-800 marker:text-emerald-600">
             {studentSynthesis.recommendations.map((recommendation, index) => (
-              <li key={index} className="flex gap-2"><span className="mt-0.5 text-base">���</span><span>{recommendation}</span></li>
+              <li key={index} className="pl-1">{recommendation}</li>
             ))}
           </ul>
         </div>
