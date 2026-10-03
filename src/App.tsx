@@ -3816,6 +3816,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   const [responseLabelFilter, setResponseLabelFilter] = useState('all')
   const [verdictFilter, setVerdictFilter] = useState('all')
   const [searchFilter, setSearchFilter] = useState('')
+  const [expandedReportSections, setExpandedReportSections] = useState<Set<string>>(() => new Set())
   const structure = useMemo(() => getWorksheetStructure(definition), [definition])
   const responseLabelLookup = useMemo(
     () => Object.fromEntries(responses.map((response) => [response.responseId, getResponseLabel(response, definition)])),
@@ -4239,15 +4240,22 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   const renderPageSections = (grouping: GroupedResponseSet, viewerMode: 'student' | 'teacher') => {
     const visibleSections = getVisiblePageSections(grouping.responses)
 
-    return visibleSections.map((section) => (
-      <section key={`${grouping.key}-${section.page.id}`} className="mt-8 rounded-[26px] border border-slate-200 bg-slate-50/70 p-5">
-        <div className="border-b border-slate-300 pb-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Worksheet section</p>
-          <h3 className="mt-2 text-2xl font-bold text-slate-900">{section.page.title}</h3>
-          {section.contextText && <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{section.contextText}</p>}
-        </div>
+    return <div className="mt-6 space-y-3">{visibleSections.map((section) => {
+      const sectionKey = `${grouping.key}:${section.page.id}`
+      const isExpanded = expandedReportSections.has(sectionKey)
+      return <section key={sectionKey} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70">
+        <button type="button" aria-expanded={isExpanded} aria-controls={`report-section-${sectionKey}`} onClick={() => setExpandedReportSections((current) => { const next = new Set(current); if (next.has(sectionKey)) next.delete(sectionKey); else next.add(sectionKey); return next })} className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-100">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Worksheet section</p>
+            <h3 className="mt-1 text-lg font-bold text-slate-900">{section.page.title}</h3>
+            <p className="mt-1 text-sm text-slate-500">{section.visibleBlocks.length} response area{section.visibleBlocks.length === 1 ? '' : 's'} · {formatCountLabel(grouping.responses.length, 'response')}</p>
+          </div>
+          <span className="inline-flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-blue-700">{isExpanded ? 'Hide details' : 'View details'}<ChevronRight className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} /></span>
+        </button>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        {isExpanded && <div id={`report-section-${sectionKey}`} className="border-t border-slate-200 p-5">
+          {section.contextText && <p className="mb-5 max-w-3xl text-sm leading-6 text-slate-600">{section.contextText}</p>}
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           {section.visibleBlocks.map((block) => {
             const content = renderReportBlockCard(block, grouping.responses, viewerMode)
             if (!content) return null
@@ -4258,9 +4266,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
               </div>
             )
           })}
+          </div>
         </div>
+        }
       </section>
-    ))
+    })}</div>
   }
 
   const clearFilters = () => {
@@ -4270,6 +4280,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     setSearchFilter('')
   }
 
+  const expandAllReportSections = () => {
+    setExpandedReportSections(new Set(filteredGroupings.flatMap((grouping) =>
+      getVisiblePageSections(grouping.responses).map((section) => `${grouping.key}:${section.page.id}`))))
+  }
+
   const renderFilters = (title: string, description: string) => (
     <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -4277,13 +4292,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           <p className="mt-1 text-sm text-slate-600">{description}</p>
         </div>
-        <button
-          type="button"
-          onClick={clearFilters}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"
-        >
-          Clear filters
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={expandAllReportSections} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">Expand all sections</button>
+          <button type="button" onClick={() => setExpandedReportSections(new Set())} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">Collapse all</button>
+          <button type="button" onClick={clearFilters} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">Clear filters</button>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
