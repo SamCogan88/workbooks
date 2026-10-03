@@ -50,7 +50,7 @@ import {
 } from 'lucide-react'
 import { GlobalBreadcrumb, HomeScreen } from './components/AppChrome'
 import { TeacherAccountPage, TeacherAuthProvider, useTeacherAuth } from './components/TeacherAuth'
-import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings, WorksheetSynthesisSettings } from './lib/types'
+import type { ConditionOperator, GroupedResponseSet, WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings, WorksheetSynthesisSettings } from './lib/types'
 import {
   aggregateQuadrantMean,
   aggregateRadarValues,
@@ -64,9 +64,12 @@ import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses,
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
+  getImageDisplayConfig,
   getMissingRequiredBlocks,
   getQuizSummary,
   getStructuredDefaultResponse,
+  getVisibleBlocks,
+  getVisiblePages,
   hasMeaningfulResponseValue,
   isResponseProducingBlock,
   stripHtml,
@@ -688,6 +691,7 @@ function SystemGuidePage() {
         'Teacher reporting with radar, quadrant, and SWOT analysis',
         'Student-facing summaries and recommendations',
         'Optional page timers and progress tracking',
+        'Conditional page and block display based on earlier responses',
       ],
     },
     schema: {
@@ -721,6 +725,7 @@ function SystemGuidePage() {
             id: 'string',
             title: 'string',
             timer: 'optional PageTimer',
+            condition: 'optional WorksheetCondition',
             blocks: 'WorksheetBlock[]',
           },
         },
@@ -738,8 +743,15 @@ function SystemGuidePage() {
             title: 'optional string',
             description: 'optional string',
             required: 'optional boolean',
+            condition: 'optional WorksheetCondition',
             config: 'optional object',
           },
+        },
+        condition: {
+          blockId: 'id of an earlier response-producing block',
+          operator: ['equals', 'notEquals', 'contains', 'notContains'],
+          value: 'string | number | boolean',
+          behavior: 'The page or block is visible only while this rule matches. Hidden responses are retained and hidden required blocks are not validated.',
         },
       },
       response: {
@@ -988,6 +1000,8 @@ function SystemGuidePage() {
             imageUrl: 'string',
             altText: 'string',
             placeholder: 'string',
+            imageFit: ['contain', 'cover'],
+            imageSize: ['small', 'medium', 'large', 'full'],
           },
           responseShape: 'string',
         },
@@ -1397,9 +1411,14 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     }
   }, [definition, isSessionHydrated, pageIndex, responseId, responses])
 
-  const totalPages = definition.pages.length
+  const visiblePages = useMemo(() => getVisiblePages(definition, responses), [definition, responses])
+  const visiblePageIndexes = useMemo(() => visiblePages.map((page) => definition.pages.indexOf(page)), [definition.pages, visiblePages])
+  const totalPages = visiblePages.length
   const currentPage = definition.pages[pageIndex]
-  const visibleBlocks = currentPage?.blocks.filter((block) => previewMode || getBlockAudience(block) === 'student') || []
+  const currentVisiblePageIndex = visiblePageIndexes.indexOf(pageIndex)
+  const visibleBlocks = currentPage
+    ? getVisibleBlocks(currentPage, responses).filter((block) => previewMode || getBlockAudience(block) === 'student')
+    : []
   const currentTimer = currentPage?.timer ?? null
   const [pageRemainingSeconds, setPageRemainingSeconds] = useState<number | null>(null)
   const quizSummary = useMemo(() => getQuizSummary(definition, responses), [definition, responses])
@@ -1426,6 +1445,14 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     return `Please complete the required items before continuing:
 ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
   }, [currentPage, missingRequiredBlocks])
+
+  useEffect(() => {
+    if (!isSessionHydrated || visiblePageIndexes.length === 0 || visiblePageIndexes.includes(pageIndex)) return
+    const nearest = visiblePageIndexes.find((index) => index > pageIndex) ?? visiblePageIndexes[visiblePageIndexes.length - 1]
+    setPageIndex(nearest)
+    setNavigationWarning('')
+    setValidationAttempted(false)
+  }, [isSessionHydrated, pageIndex, visiblePageIndexes])
 
   useEffect(() => {
     const nextDefaults = currentPage?.blocks.reduce<Record<string, any>>((accumulator, block) => {
@@ -1479,8 +1506,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         setStatus('Required responses missing')
         return
       }
-      if (pageIndex < totalPages - 1) {
-        setPageIndex((value) => value + 1)
+      if (currentVisiblePageIndex < totalPages - 1) {
+        setPageIndex(visiblePageIndexes[currentVisiblePageIndex + 1])
         return
       }
       setStatus('Time expired')
@@ -1488,7 +1515,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }
 
     setStatus('Time expired')
-  }, [buildNavigationWarning, canLeaveCurrentPage, currentPage?.id, currentTimer, pageIndex, pageRemainingSeconds, totalPages])
+  }, [buildNavigationWarning, canLeaveCurrentPage, currentPage?.id, currentTimer, currentVisiblePageIndex, pageRemainingSeconds, totalPages, visiblePageIndexes])
 
   const updateResponse = (blockId: string, value: any) => {
     setNavigationWarning('')
@@ -1549,7 +1576,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }
 
   const goToPage = (index: number) => {
-    if (index < 0 || index > totalPages - 1) return
+    if (!visiblePageIndexes.includes(index)) return
     if (index > pageIndex && !tryLeaveCurrentPage()) return
     setPageIndex(index)
   }
@@ -1557,8 +1584,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   const handleNext = async () => {
     if (!tryLeaveCurrentPage()) return
 
-    if (pageIndex < totalPages - 1) {
-      setPageIndex((value) => value + 1)
+    if (currentVisiblePageIndex < totalPages - 1) {
+      setPageIndex(visiblePageIndexes[currentVisiblePageIndex + 1])
       return
     }
     if (onlineWorksheetId) {
@@ -1588,8 +1615,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }
 
   const handleBack = () => {
-    if (pageIndex > 0) {
-      goToPage(pageIndex - 1)
+    if (currentVisiblePageIndex > 0) {
+      goToPage(visiblePageIndexes[currentVisiblePageIndex - 1])
     }
   }
 
@@ -1819,7 +1846,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     navigate('/')
   }
 
-  if (!currentPage) {
+  if (!currentPage || totalPages === 0) {
     return (
       <main className="mx-auto max-w-4xl px-6 py-12 text-slate-700">
         This worksheet has no pages.
@@ -1827,7 +1854,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     )
   }
 
-  const progress = ((pageIndex + 1) / totalPages) * 100
+  const progress = totalPages > 0 ? ((currentVisiblePageIndex + 1) / totalPages) * 100 : 0
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -1856,7 +1883,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       {definition.settings.showProgress && (
         <div className="mb-6">
           <div className="mb-2 flex justify-between text-sm text-slate-600">
-            <span>Page {pageIndex + 1} of {totalPages}</span>
+            <span>Page {currentVisiblePageIndex + 1} of {totalPages}</span>
             <span>{status}</span>
           </div>
           {currentTimer?.enabled && (
@@ -1904,9 +1931,9 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           )}
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
-            <button onClick={handleBack} disabled={pageIndex === 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
+            <button onClick={handleBack} disabled={currentVisiblePageIndex <= 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
             <button onClick={() => void handleNext()} disabled={status === 'Submitting…'} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
-              {status === 'Submitting…' ? 'Submitting…' : pageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
+              {status === 'Submitting…' ? 'Submitting…' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
             </button>
           </div>
         </section>
@@ -1923,7 +1950,9 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           <div>
             <h3 className="mb-3 text-lg font-semibold text-slate-900">Progress snapshot</h3>
             <ul className="space-y-2 text-sm text-slate-700">
-              {definition.pages.map((page, index) => (
+              {visiblePages.map((page, visibleIndex) => {
+                const index = definition.pages.indexOf(page)
+                return (
                 <li key={page.id}>
                   <button
                     type="button"
@@ -1935,12 +1964,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
                       {page.title}
                     </span>
                     <span className="inline-flex items-center gap-1 text-xs">
-                      {index + 1}
+                      {visibleIndex + 1}
                       <ChevronRight className="h-3.5 w-3.5" />
                     </span>
                   </button>
                 </li>
-              ))}
+              )})}
             </ul>
           </div>
         </aside>
@@ -3363,10 +3392,20 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
       )
     }
     case 'imagePrompt':
+      {
+      const { imageFit, imageSize } = getImageDisplayConfig(block)
+      const containSizeClass = imageSize === 'small' ? 'max-h-48' : imageSize === 'medium' ? 'max-h-72' : imageSize === 'full' ? 'max-h-none' : 'max-h-[32rem]'
+      const coverSizeClass = imageSize === 'small' ? 'h-48' : imageSize === 'medium' ? 'h-72' : imageSize === 'full' ? 'aspect-video' : 'h-[32rem]'
       return (
         <div className="space-y-3">
           {block.config?.imageUrl && (
-            <img src={block.config.imageUrl} alt={block.config.altText || block.label || 'Worksheet image'} className="h-56 w-full rounded-2xl object-cover" />
+            <div className={`flex w-full justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 ${imageFit === 'cover' ? coverSizeClass : ''}`}>
+              <img
+                src={block.config.imageUrl}
+                alt={block.config.altText || block.label || 'Worksheet image'}
+                className={`w-full ${imageFit === 'cover' ? 'h-full object-cover' : `h-auto object-contain ${containSizeClass}`}`}
+              />
+            </div>
           )}
           {block.label && <p className="text-sm font-medium text-slate-700">{block.label}</p>}
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
@@ -3378,6 +3417,7 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
           />
         </div>
       )
+      }
     case 'video':
     case 'youtube': {
       const videoUrl = block.config?.videoUrl || ''
@@ -4576,6 +4616,74 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   return mode === 'student' ? renderStudentView() : renderTeacherView()
 }
 
+function getConditionOptions(block: WorksheetBlock) {
+  if (block.type === 'trueFalse') return [{ label: 'True', value: true }, { label: 'False', value: false }]
+  const configured = Array.isArray(block.config?.options) ? block.config.options : []
+  return configured.map((option: unknown) => ({ label: String(option), value: String(option) }))
+}
+
+function ConditionalDisplayEditor({
+  condition,
+  candidates,
+  onChange,
+}: {
+  condition?: WorksheetCondition
+  candidates: WorksheetBlock[]
+  onChange: (condition: WorksheetCondition | undefined) => void
+}) {
+  const source = candidates.find((block) => block.id === condition?.blockId)
+  const expectedOptions = source ? getConditionOptions(source) : []
+  const enableCondition = () => {
+    const first = candidates[0]
+    if (!first) return
+    const firstOption = getConditionOptions(first)[0]
+    onChange({ blockId: first.id, operator: 'equals', value: firstOption?.value ?? '' })
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+      <p className="text-sm font-semibold text-slate-800">Visibility / Conditional display</p>
+      <div className="mt-2 flex gap-2">
+        <button type="button" onClick={() => onChange(undefined)} className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${!condition ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600'}`}>Always show</button>
+        <button type="button" onClick={enableCondition} disabled={candidates.length === 0} className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${condition ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-300 text-slate-600'}`}>Show when…</button>
+      </div>
+      {candidates.length === 0 && <p className="mt-2 text-xs text-slate-500">Add a response question earlier in the worksheet to use conditional display.</p>}
+      {condition && (
+        <div className="mt-3 grid gap-2">
+          <label className="text-xs font-medium text-slate-600">Earlier question
+            <select value={condition.blockId} onChange={(event) => {
+              const nextSource = candidates.find((block) => block.id === event.target.value)
+              const firstOption = nextSource ? getConditionOptions(nextSource)[0] : undefined
+              onChange({ ...condition, blockId: event.target.value, value: firstOption?.value ?? '' })
+            }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              {candidates.map((block) => <option key={block.id} value={block.id}>{getBlockDisplayLabel(block)}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-600">Rule
+            <select value={condition.operator} onChange={(event) => onChange({ ...condition, operator: event.target.value as ConditionOperator })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <option value="equals">equals</option>
+              <option value="notEquals">does not equal</option>
+              <option value="contains">contains</option>
+              <option value="notContains">does not contain</option>
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-600">Expected answer
+            {expectedOptions.length > 0 ? (
+              <select value={String(condition.value)} onChange={(event) => {
+                const option = expectedOptions.find((candidate) => String(candidate.value) === event.target.value)
+                onChange({ ...condition, value: option?.value ?? event.target.value })
+              }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                {expectedOptions.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
+              </select>
+            ) : <input value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
+          </label>
+          <button type="button" onClick={() => onChange(undefined)} className="justify-self-start text-xs font-medium text-red-700">Remove condition</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function BuilderPage({
   definition,
   setDefinition,
@@ -4670,6 +4778,14 @@ function BuilderPage({
 
   const selectedPage = definition.pages.find((page) => page.id === selectedPageId) || definition.pages[0]
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) || selectedPage?.blocks[0]
+  const selectedPageIndex = selectedPage ? definition.pages.findIndex((page) => page.id === selectedPage.id) : -1
+  const priorPageResponseBlocks = definition.pages
+    .slice(0, Math.max(0, selectedPageIndex))
+    .flatMap((page) => page.blocks)
+    .filter(isResponseProducingBlock)
+  const priorBlockResponseBlocks = selectedPage && selectedBlock
+    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isResponseProducingBlock)]
+    : priorPageResponseBlocks
 
   const addPage = () => {
     const timestamp = Date.now()
@@ -5672,6 +5788,12 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   )}
                 </div>
 
+                <ConditionalDisplayEditor
+                  condition={selectedPage.condition}
+                  candidates={priorPageResponseBlocks}
+                  onChange={(condition) => updatePageSettings({ condition })}
+                />
+
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" onClick={() => moveSelectedPage(-1)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">Move page up</button>
                   <button type="button" onClick={() => moveSelectedPage(1)} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">Move page down</button>
@@ -5825,6 +5947,12 @@ Make the language concise and appropriate for the learners. Do not include Markd
                 Required
                 <input type="checkbox" checked={Boolean(selectedBlock.required)} onChange={(event) => updateSelectedBlock({ required: event.target.checked })} className="mt-2 ml-2" />
               </label>
+
+              <ConditionalDisplayEditor
+                condition={selectedBlock.condition}
+                candidates={priorBlockResponseBlocks}
+                onChange={(condition) => updateSelectedBlock({ condition })}
+              />
 
               {(selectedBlock.type === 'shortText' || selectedBlock.type === 'longText') && (
                 <label className="block text-sm font-medium text-slate-700">
@@ -6254,10 +6382,28 @@ Make the language concise and appropriate for the learners. Do not include Markd
                         Alt text
                         <input value={selectedConfig.altText || ''} onChange={(event) => updateSelectedConfig({ altText: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
                       </label>
-                      {selectedBlock.type === 'imagePrompt' && <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-                        Placeholder
-                        <input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
-                      </label>}
+                      {selectedBlock.type === 'imagePrompt' && <>
+                        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                          Placeholder
+                          <input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
+                        </label>
+                        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                          Image fit
+                          <select value={selectedConfig.imageFit || 'contain'} onChange={(event) => updateSelectedConfig({ imageFit: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
+                            <option value="contain">Fit whole image</option>
+                            <option value="cover">Fill area / crop</option>
+                          </select>
+                        </label>
+                        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                          Display size
+                          <select value={selectedConfig.imageSize || 'large'} onChange={(event) => updateSelectedConfig({ imageSize: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
+                            <option value="small">Small</option>
+                            <option value="medium">Medium</option>
+                            <option value="large">Large</option>
+                            <option value="full">Full width</option>
+                          </select>
+                        </label>
+                      </>}
                       {selectedBlock.type === 'hotspot' && <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={Boolean(selectedConfig.allowMultiple)} onChange={(event) => updateSelectedConfig({ allowMultiple: event.target.checked })} />Allow multiple hotspots</label>}
                     </div>
                   )}

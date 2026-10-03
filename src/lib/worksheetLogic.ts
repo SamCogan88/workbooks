@@ -1,4 +1,4 @@
-import type { WorksheetBlock, WorksheetDefinition, WorksheetPage } from './types'
+import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage } from './types'
 
 const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
 
@@ -19,6 +19,55 @@ export function hasMeaningfulResponseValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasMeaningfulResponseValue)
   if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some(hasMeaningfulResponseValue)
   return false
+}
+
+function comparableValue(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLocaleLowerCase() : value
+}
+
+export function isConditionMet(condition: WorksheetCondition | undefined, responses: Record<string, unknown>) {
+  if (!condition) return true
+  const response = responses[condition.blockId]
+  if (!hasMeaningfulResponseValue(response)) return false
+  const expected = comparableValue(condition.value)
+  const values = Array.isArray(response) ? response.map(comparableValue) : [comparableValue(response)]
+  const equals = values.some((value) => value === expected)
+  const contains = Array.isArray(response)
+    ? equals
+    : typeof values[0] === 'string' && typeof expected === 'string'
+      ? values[0].includes(expected)
+      : equals
+
+  switch (condition.operator) {
+    case 'equals': return equals
+    case 'notEquals': return !equals
+    case 'contains': return contains
+    case 'notContains': return !contains
+    default: return false
+  }
+}
+
+export function getVisibleBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
+  return page.blocks.filter((block) => isConditionMet(block.condition, responses))
+}
+
+export function getVisiblePages(definition: WorksheetDefinition, responses: Record<string, unknown>) {
+  return definition.pages.filter((page) => isConditionMet(page.condition, responses))
+}
+
+export function getAdjacentVisiblePageIndex(definition: WorksheetDefinition, responses: Record<string, unknown>, currentIndex: number, direction: 1 | -1) {
+  const visibleIndexes = getVisiblePages(definition, responses).map((page) => definition.pages.indexOf(page))
+  const position = visibleIndexes.indexOf(currentIndex)
+  return position < 0 ? undefined : visibleIndexes[position + direction]
+}
+
+export function getImageDisplayConfig(block: WorksheetBlock) {
+  return {
+    imageFit: block.config?.imageFit === 'cover' ? 'cover' as const : 'contain' as const,
+    imageSize: ['small', 'medium', 'large', 'full'].includes(block.config?.imageSize)
+      ? block.config?.imageSize as 'small' | 'medium' | 'large' | 'full'
+      : 'large' as const,
+  }
 }
 
 export function getMatrixRows(block: WorksheetBlock) {
@@ -134,7 +183,7 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
 }
 
 export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
-  return page.blocks.filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
+  return getVisibleBlocks(page, responses).filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
 }
 
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, unknown>) {
@@ -215,7 +264,7 @@ export function getDefaultBlockConfig(type: string, timestamp: number): Record<s
     case 'wordCloud': return { maxEntries: 3, placeholder: 'Add a word or short phrase' }
     case 'confidence': return { options: ['Not sure yet', 'Somewhat confident', 'Very confident'] }
     case 'matrix': return { rows: ['Criteria 1', 'Criteria 2', 'Criteria 3'], min: 1, max: 5, defaultValue: 3 }
-    case 'imagePrompt': return { imageUrl: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80', altText: 'Worksheet image prompt' }
+    case 'imagePrompt': return { imageUrl: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80', altText: 'Worksheet image prompt', imageFit: 'contain', imageSize: 'large' }
     case 'video':
     case 'youtube': return { videoUrl: type === 'youtube' ? 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' : 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4', altText: type === 'youtube' ? 'YouTube video prompt' : 'Video prompt' }
     case 'quiz': return { question: 'Which answer is correct?', options: ['Option A', 'Option B', 'Option C'], correctAnswer: 'Option A', showFeedback: true, points: 1, explanation: 'Explain why the correct answer is right.' }

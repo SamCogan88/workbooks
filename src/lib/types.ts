@@ -1,5 +1,12 @@
 export type WorksheetNavigation = 'sequential' | 'free'
 export type TimerBehavior = 'advisory' | 'auto-advance'
+export type ConditionOperator = 'equals' | 'notEquals' | 'contains' | 'notContains'
+
+export interface WorksheetCondition {
+  blockId: string
+  operator: ConditionOperator
+  value: string | number | boolean
+}
 
 export interface RadarDimension {
   id: string
@@ -15,6 +22,7 @@ export interface WorksheetBlock {
   description?: string
   required?: boolean
   config?: Record<string, any>
+  condition?: WorksheetCondition
 }
 
 export interface WorksheetPage {
@@ -26,6 +34,7 @@ export interface WorksheetPage {
     behaviour: TimerBehavior
   }
   blocks: WorksheetBlock[]
+  condition?: WorksheetCondition
 }
 
 export interface WorksheetSettings {

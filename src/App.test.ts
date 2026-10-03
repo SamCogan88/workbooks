@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildStudentSynthesis } from './lib/aggregation'
-import { getDefaultBlockConfig, getDefaultPageTimer, getMissingRequiredBlocks, getQuizSummary, isRequiredBlockSatisfied } from './lib/worksheetLogic'
+import { getAdjacentVisiblePageIndex, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -18,6 +18,8 @@ describe('worksheet block defaults', () => {
     expect(getDefaultBlockConfig('imagePrompt', 1)).toMatchObject({
       imageUrl: expect.any(String),
       altText: 'Worksheet image prompt',
+      imageFit: 'contain',
+      imageSize: 'large',
     })
     expect(getDefaultBlockConfig('video', 1)).toMatchObject({
       videoUrl: expect.any(String),
@@ -81,6 +83,60 @@ describe('worksheet block defaults', () => {
       buttonText: 'Open link',
       audience: 'student',
     })
+  })
+})
+
+describe('conditional visibility', () => {
+  const definition = {
+    id: 'branching', version: 1, title: 'Branching', description: '',
+    settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+    pages: [
+      { id: 'choice', title: 'Choose', blocks: [{ id: 'lms', type: 'singleSelect', label: 'Choose an LMS', config: { options: ['Teams', 'Moodle'] } }] },
+      { id: 'teams', title: 'Teams', condition: { blockId: 'lms', operator: 'equals', value: 'Teams' }, blocks: [
+        { id: 'teams-info', type: 'content', condition: { blockId: 'lms', operator: 'equals', value: 'Teams' } },
+        { id: 'hidden-required', type: 'shortText', required: true, condition: { blockId: 'lms', operator: 'equals', value: 'Moodle' } },
+      ] },
+      { id: 'finish', title: 'Finish', blocks: [] },
+    ],
+  } as any
+
+  it('updates page and block visibility when an earlier answer changes', () => {
+    expect(getVisiblePages(definition, { lms: 'Teams' }).map((page) => page.id)).toEqual(['choice', 'teams', 'finish'])
+    expect(getVisiblePages(definition, { lms: 'Moodle' }).map((page) => page.id)).toEqual(['choice', 'finish'])
+    expect(getVisibleBlocks(definition.pages[1], { lms: 'Teams' }).map((block) => block.id)).toEqual(['teams-info'])
+    expect(getVisibleBlocks(definition.pages[1], { lms: 'Moodle' }).map((block) => block.id)).toEqual(['hidden-required'])
+  })
+
+  it('supports equals, not equals, contains and does not contain', () => {
+    expect(isConditionMet({ blockId: 'choice', operator: 'equals', value: 'Teams' }, { choice: 'teams' })).toBe(true)
+    expect(isConditionMet({ blockId: 'choice', operator: 'notEquals', value: 'Moodle' }, { choice: 'Teams' })).toBe(true)
+    expect(isConditionMet({ blockId: 'choice', operator: 'contains', value: 'Teams' }, { choice: ['Teams', 'Moodle'] })).toBe(true)
+    expect(isConditionMet({ blockId: 'choice', operator: 'notContains', value: 'Canvas' }, { choice: ['Teams'] })).toBe(true)
+  })
+
+  it('ignores hidden required blocks and skips hidden pages in navigation and progress inputs', () => {
+    expect(getMissingRequiredBlocks(definition.pages[1], { lms: 'Teams' })).toHaveLength(0)
+    expect(getAdjacentVisiblePageIndex(definition, { lms: 'Moodle' }, 0, 1)).toBe(2)
+    expect(getAdjacentVisiblePageIndex(definition, { lms: 'Moodle' }, 2, -1)).toBe(0)
+    expect(getVisiblePages(definition, { lms: 'Moodle' })).toHaveLength(2)
+  })
+
+  it('preserves conditions through JSON serialization', () => {
+    const restored = JSON.parse(JSON.stringify(definition))
+    expect(restored.pages[1].condition).toEqual({ blockId: 'lms', operator: 'equals', value: 'Teams' })
+    expect(restored.pages[1].blocks[0].condition).toEqual({ blockId: 'lms', operator: 'equals', value: 'Teams' })
+  })
+})
+
+describe('image prompt display configuration', () => {
+  it('defaults existing image prompts safely to contain and large', () => {
+    expect(getImageDisplayConfig({ id: 'image', type: 'imagePrompt', config: { imageUrl: '/diagram.png' } })).toEqual({ imageFit: 'contain', imageSize: 'large' })
+  })
+
+  it('preserves configured fit and size through serialization', () => {
+    const block = { id: 'image', type: 'imagePrompt', config: { imageFit: 'cover', imageSize: 'medium' } } as any
+    const restored = JSON.parse(JSON.stringify(block))
+    expect(getImageDisplayConfig(restored)).toEqual({ imageFit: 'cover', imageSize: 'medium' })
   })
 })
 
