@@ -2,6 +2,8 @@
 
 A Vite + React + TypeScript application for classroom worksheets, learner response capture, synthesis and a reusable builder.
 
+This repository is the Supabase-enabled next version. The stable classroom version remains separate.
+
 ## Development
 
 ```bash
@@ -13,9 +15,9 @@ npm run dev
 
 This project is configured for static deployment from GitHub Pages and uses a hash-based router so it works reliably without server rewrites.
 
-1. Push the project to GitHub.
-2. Enable GitHub Pages using the GitHub Actions workflow in `.github/workflows/deploy.yml`.
-3. Commit and push to the default branch.
+The project deploys to `https://samcogan88.github.io/workbooks/` from the `main` branch using `.github/workflows/deploy.yml`.
+
+The workflow supplies the browser-safe Supabase project URL and publishable key during the Vite build. Never add a Supabase secret or service-role key to this repository.
 
 ## Worksheet JSON
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildStudentSynthesis, getDefaultBlockConfig, getDefaultPageTimer, getMissingRequiredBlocks, getQuizSummary, isRequiredBlockSatisfied } from './App'
+import { buildStudentSynthesis } from './lib/aggregation'
+import { getDefaultBlockConfig, getDefaultPageTimer, getMissingRequiredBlocks, getQuizSummary, isRequiredBlockSatisfied } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {

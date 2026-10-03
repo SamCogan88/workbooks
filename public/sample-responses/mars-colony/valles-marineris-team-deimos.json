@@ -1,0 +1,14 @@
+{
+  "responseSchema": "interactive-worksheet-response", "schemaVersion": 1, "worksheetId": "mars-colony-design-review", "worksheetVersion": 1,
+  "responseId": "mars-valles-team-deimos", "createdAt": "2026-10-03T09:12:00.000Z", "updatedAt": "2026-10-03T09:39:00.000Z", "group": "Team Deimos", "subject": "Valles Marineris",
+  "responses": {
+    "review-team": "Team Deimos", "colony-concept": "Valles Marineris", "initial-confidence": "Very confident",
+    "systems-radar": { "Water security": 5, "Energy resilience": 9, "Food production": 9, "Radiation safety": 7, "Repairability": 9, "Crew wellbeing": 8 },
+    "backup-days": 90, "system-priority": ["Water recycling", "Radiation shielding", "Food production", "Power storage"],
+    "risk-board": { "strengths": [{"text":"Strong solar generation and modular surface infrastructure."}], "weaknesses": [{"text":"The initial settlement footprint is spread too widely."}], "opportunities": [{"text":"Modular construction can scale into a genuine town."}], "threats": [{"text":"Dust storms could isolate critical modules from one another."}] },
+    "critical-risk": "Essential systems are distributed across exposed modules without protected connecting routes.",
+    "risk-position": { "x": 86, "y": 58, "rationale": "High scientific and social value, with engineering risks that can be reduced through a more compact first phase." },
+    "culture-words": ["Agency", "Learning", "Community"], "crew-policy": "Give residents an elected council with authority over schedules, shared spaces, and non-emergency mission rules.",
+    "overall-verdict": "Approve for launch", "best-feature": "Expandable modular settlement", "required-change": "Build shielded tunnels between all life-critical modules before crew arrival."
+  }
+}

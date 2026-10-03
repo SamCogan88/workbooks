@@ -1,0 +1,14 @@
+{
+  "responseSchema": "interactive-worksheet-response", "schemaVersion": 1, "worksheetId": "mars-colony-design-review", "worksheetVersion": 1,
+  "responseId": "mars-valles-team-olympus", "createdAt": "2026-10-03T09:10:00.000Z", "updatedAt": "2026-10-03T09:35:00.000Z", "group": "Team Olympus", "subject": "Valles Marineris",
+  "responses": {
+    "review-team": "Team Olympus", "colony-concept": "Valles Marineris", "initial-confidence": "Somewhat confident",
+    "systems-radar": { "Water security": 6, "Energy resilience": 9, "Food production": 8, "Radiation safety": 6, "Repairability": 8, "Crew wellbeing": 9 },
+    "backup-days": 75, "system-priority": ["Radiation shielding", "Water recycling", "Power storage", "Food production"],
+    "risk-board": { "strengths": [{"text":"Long daylight periods and excellent space for expansion."}], "weaknesses": [{"text":"Water extraction requires more energy and transport."}], "opportunities": [{"text":"The canyon geology supports exceptional scientific research."}], "threats": [{"text":"Dust movement and exposed habitats increase maintenance demands."}] },
+    "critical-risk": "The water plan depends on a long supply route with too few backup extraction sites.",
+    "risk-position": { "x": 91, "y": 64, "rationale": "Outstanding research potential, but exposed infrastructure and water logistics increase mission risk." },
+    "culture-words": ["Discovery", "Openness", "Cooperation"], "crew-policy": "Reserve one mission day each fortnight for cross-team science, maintenance learning, and recreation.",
+    "overall-verdict": "Approve after redesign", "best-feature": "Scientific access and room to expand", "required-change": "Establish a secondary local water source before permanent occupation."
+  }
+}

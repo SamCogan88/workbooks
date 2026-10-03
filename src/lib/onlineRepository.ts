@@ -1,0 +1,130 @@
+import type { WorksheetDefinition, WorksheetResponse } from './types'
+import { requireSupabase } from './supabase'
+
+export type OnlineWorksheetStatus = 'draft' | 'published' | 'archived'
+export type OnlineResponseStatus = 'draft' | 'submitted'
+
+interface WorksheetRow {
+  id: string
+  owner_id: string
+  public_code: string
+  title: string
+  definition: WorksheetDefinition
+  status: OnlineWorksheetStatus
+  created_at: string
+  updated_at: string
+}
+
+interface ResponseRow {
+  id: string
+  worksheet_id: string
+  participant_id: string
+  participant_label: string | null
+  answers: WorksheetResponse
+  status: OnlineResponseStatus
+  created_at: string
+  updated_at: string
+  submitted_at: string | null
+}
+
+function createPublicCode(length = 8) {
+  const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const bytes = crypto.getRandomValues(new Uint8Array(length))
+  return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('')
+}
+
+export async function ensureAnonymousLearnerSession() {
+  const client = requireSupabase()
+  const { data: sessionData } = await client.auth.getSession()
+  if (sessionData.session) return sessionData.session
+
+  const { data, error } = await client.auth.signInAnonymously()
+  if (error) throw error
+  if (!data.session) throw new Error('Supabase did not create an anonymous learner session.')
+  return data.session
+}
+
+export async function publishWorksheet(definition: WorksheetDefinition) {
+  const client = requireSupabase()
+  const { data: userData, error: userError } = await client.auth.getUser()
+  if (userError) throw userError
+  if (!userData.user || userData.user.is_anonymous) throw new Error('A permanent teacher account is required to publish worksheets.')
+
+  const now = new Date().toISOString()
+  const { data, error } = await client
+    .from('worksheets')
+    .insert({
+      owner_id: userData.user.id,
+      public_code: createPublicCode(),
+      title: definition.title,
+      definition,
+      status: 'published',
+      updated_at: now,
+    })
+    .select()
+    .single<WorksheetRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function loadPublishedWorksheet(publicCode: string) {
+  const client = requireSupabase()
+  await ensureAnonymousLearnerSession()
+  const { data, error } = await client
+    .from('worksheets')
+    .select('*')
+    .eq('public_code', publicCode.trim().toUpperCase())
+    .eq('status', 'published')
+    .single<WorksheetRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function saveOnlineResponse(worksheetId: string, response: WorksheetResponse, participantLabel?: string) {
+  const client = requireSupabase()
+  const session = await ensureAnonymousLearnerSession()
+  const { data, error } = await client
+    .from('responses')
+    .upsert({
+      worksheet_id: worksheetId,
+      participant_id: session.user.id,
+      participant_label: participantLabel?.trim() || null,
+      answers: response,
+      status: 'draft',
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'worksheet_id,participant_id' })
+    .select()
+    .single<ResponseRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function submitOnlineResponse(responseId: string) {
+  const client = requireSupabase()
+  const submittedAt = new Date().toISOString()
+  const { data, error } = await client
+    .from('responses')
+    .update({ status: 'submitted', submitted_at: submittedAt, updated_at: submittedAt })
+    .eq('id', responseId)
+    .select()
+    .single<ResponseRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function listSubmittedResponses(worksheetId: string) {
+  const client = requireSupabase()
+  const { data, error } = await client
+    .from('responses')
+    .select('*')
+    .eq('worksheet_id', worksheetId)
+    .eq('status', 'submitted')
+    .order('submitted_at', { ascending: true })
+
+  if (error) throw error
+  return (data as ResponseRow[]).map((row) => row.answers)
+}

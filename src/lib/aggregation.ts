@@ -202,3 +202,41 @@ export function aggregateQuadrantMean(responses: WorksheetResponse[], quadrantBl
     y: averageArray(yValues),
   }
 }
+
+export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBlockId = 'radar-eval', groupLabel = 'Response group') {
+  if (!groupings.length) {
+    return {
+      headline: 'The class is ready to begin synthesising their responses.',
+      summary: 'Upload a set of response files to generate a student-friendly summary of the class findings.',
+      highlights: ['No responses are available yet.', 'Once students submit results, this synthesis will show the strongest patterns.'],
+      recommendations: ['Review the prompts with students.', 'Discuss the most common strengths and areas for improvement.'],
+      topGroup: `No ${groupLabel.toLowerCase()} yet`,
+    }
+  }
+
+  const rankedGroups = groupings.map((group) => {
+    const total = group.responses.reduce((sum, response) => {
+      const radar = response.responses?.[radarBlockId] || {}
+      const scores = Object.values(radar).filter((value) => typeof value === 'number') as number[]
+      return sum + (scores.length ? scores.reduce((innerSum, score) => innerSum + Number(score), 0) / scores.length : 0)
+    }, 0)
+    return { label: group.label, score: group.responses.length ? total / group.responses.length : 0 }
+  }).sort((left, right) => right.score - left.score)
+
+  const topGroup = rankedGroups[0]
+  return {
+    headline: `${topGroup?.label || 'This response set'} stands out as the strongest overall result for the class.`,
+    summary: `Across the current responses, students most often highlight the strongest patterns associated with ${topGroup?.label || 'the current grouping'}, while also identifying a few areas to improve.`,
+    highlights: [
+      `${topGroup?.label || 'The leading group'} has the strongest average response pattern in the class.`,
+      'The class is showing a clear set of shared strengths and practical opportunities.',
+      'Patterns suggest the most successful responses are the ones that are clear, evidence-based, and reflective.',
+    ],
+    recommendations: [
+      'Ask students to compare what worked well across the strongest examples.',
+      'Use the class patterns to identify one next step for improvement.',
+      'Turn the strongest responses into a shared class resource or exemplar.',
+    ],
+    topGroup: topGroup?.label || `No ${groupLabel.toLowerCase()} yet`,
+  }
+}

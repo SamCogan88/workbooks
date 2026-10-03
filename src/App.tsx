@@ -1,4 +1,4 @@
-import { HashRouter, Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useNavigate } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type PointerEvent } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
@@ -7,39 +7,65 @@ import LinkExtension from '@tiptap/extension-link'
 import TextAlign from '@tiptap/extension-text-align'
 import { Wheel as CanvasWheel } from 'spin-wheel'
 import {
+  AlignLeft,
   ArrowLeft,
-  BarChart3,
+  BadgeCheck,
+  CheckSquare,
   ChevronRight,
+  CircleDot,
   Clock3,
   Download,
   Eye,
   ExternalLink,
   FileUp,
   FileText,
-  GraduationCap,
-  Home,
+  Grid2X2,
+  Heading,
+  Image,
+  Link as LinkIcon,
+  ListChecks,
+  ListOrdered,
+  MoreVertical,
   Plus,
   Play,
-  Trash2,
+  Scale,
+  Search,
+  Shuffle,
+  SlidersHorizontal,
+  Table2,
+  TextCursorInput,
+  TextQuote,
+  ToggleLeft,
   Upload,
-  User,
+  Video,
   Wrench,
 } from 'lucide-react'
+import { GlobalBreadcrumb, HomeScreen } from './components/AppChrome'
 import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings, WorksheetSynthesisSettings } from './lib/types'
 import {
   aggregateQuadrantMean,
   aggregateRadarValues,
+  buildStudentSynthesis,
   getResponseLabel,
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
 import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import {
+  getDefaultBlockConfig,
+  getDefaultPageTimer,
+  getMissingRequiredBlocks,
+  getQuizSummary,
+  getStructuredDefaultResponse,
+  hasMeaningfulResponseValue,
+  isResponseProducingBlock,
+  stripHtml,
+} from './lib/worksheetLogic'
 
 const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
-const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
-const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating'])
+const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating', 'categorize', 'hotspot', 'numeric', 'wordCloud', 'confidence'])
 const REPORT_EXCLUDED_BLOCK_TYPES = new Set(['randomizer'])
 
 interface ReportPageSection {
@@ -48,14 +74,47 @@ interface ReportPageSection {
   contextText?: string
 }
 
-function getBlockDisplayLabel(block: WorksheetBlock) {
-  return block.label || block.title || block.id
+const BLOCK_TYPE_ICONS: Record<string, typeof FileText> = {
+  content: TextQuote,
+  richText: AlignLeft,
+  richTextInfo: TextQuote,
+  richTextResponse: AlignLeft,
+  shortText: TextCursorInput,
+  longText: AlignLeft,
+  section: Heading,
+  multipleChoice: CircleDot,
+  trueFalse: ToggleLeft,
+  shortAnswer: TextCursorInput,
+  matching: Grid2X2,
+  fillBlank: TextCursorInput,
+  singleSelect: CircleDot,
+  randomizer: Shuffle,
+  checklist: CheckSquare,
+  ranking: ListOrdered,
+  verdict: BadgeCheck,
+  rating: Scale,
+  matrix: Table2,
+  radar: SlidersHorizontal,
+  quadrant: Grid2X2,
+  swot: ListChecks,
+  imagePrompt: Image,
+  video: Video,
+  youtube: Play,
+  url: LinkIcon,
+  categorize: Grid2X2,
+  hotspot: Image,
+  numeric: Scale,
+  wordCloud: TextQuote,
+  confidence: SlidersHorizontal,
 }
 
-function isResponseProducingBlock(block: WorksheetBlock) {
-  if (NON_RESPONSE_BLOCK_TYPES.has(block.type)) return false
-  if (block.type === 'richText' && block.config?.mode === 'information') return false
-  return true
+function BlockTypeIcon({ type, className = 'h-4 w-4' }: { type: string; className?: string }) {
+  const Icon = BLOCK_TYPE_ICONS[type] || FileText
+  return <Icon aria-hidden="true" className={className} />
+}
+
+function getBlockDisplayLabel(block: WorksheetBlock) {
+  return block.label || block.title || block.id
 }
 
 function pluralizeLabel(label: string, count: number) {
@@ -157,10 +216,6 @@ function getWorksheetStructure(definition: WorksheetDefinition) {
   }
 }
 
-function stripHtml(value: string) {
-  return value.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()
-}
-
 function truncateText(value: string, maxLength = 180) {
   if (value.length <= maxLength) return value
   const snippet = value.slice(0, maxLength).trimEnd()
@@ -187,16 +242,6 @@ function getPageContextText(page: WorksheetPage) {
   return text ? truncateText(String(text).trim()) : undefined
 }
 
-function hasMeaningfulResponseValue(value: unknown): boolean {
-  if (value === undefined || value === null) return false
-  if (typeof value === 'string') return stripHtml(value).length > 0
-  if (typeof value === 'number') return Number.isFinite(value)
-  if (typeof value === 'boolean') return true
-  if (Array.isArray(value)) return value.some((item) => hasMeaningfulResponseValue(item))
-  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some((item) => hasMeaningfulResponseValue(item))
-  return false
-}
-
 function getRequiredLabel(block: WorksheetBlock) {
   return block.required ? 'Required' : ''
 }
@@ -209,121 +254,6 @@ function getBlockWrapperId(blockId: string) {
   return `worksheet-block-${blockId}`
 }
 
-function getMatrixRows(block: WorksheetBlock) {
-  return Array.isArray(block.config?.rows) ? block.config.rows.map((row: unknown) => String(row)).filter(Boolean) : []
-}
-
-function getRadarDimensionLabels(block: WorksheetBlock) {
-  return Array.isArray(block.config?.dimensions)
-    ? block.config.dimensions
-      .map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || '')))
-      .filter(Boolean)
-    : []
-}
-
-function getStructuredDefaultResponse(block: WorksheetBlock) {
-  switch (block.type) {
-    case 'rating': {
-      const configured = block.config?.defaultValue
-      const fallback = Math.round((Number(block.config?.min ?? 0) + Number(block.config?.max ?? 10)) / 2)
-      const value = Number(configured ?? fallback)
-      return Number.isFinite(value) ? value : undefined
-    }
-    case 'matrix': {
-      const rows = getMatrixRows(block)
-      if (!rows.length) return undefined
-      const configured = block.config?.defaultValue
-      const fallback = Number(block.config?.min ?? 1)
-      const value = Number(configured ?? fallback)
-      if (!Number.isFinite(value)) return undefined
-      return Object.fromEntries(rows.map((row) => [row, value]))
-    }
-    case 'radar': {
-      const labels = getRadarDimensionLabels(block)
-      if (!labels.length) return undefined
-      return Object.fromEntries(labels.map((label) => [label, 5]))
-    }
-    default:
-      return undefined
-  }
-}
-
-export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Record<string, any>) {
-  if (!block.required) return true
-
-  const value = responses[block.id]
-
-  switch (block.type) {
-    case 'shortText':
-    case 'longText':
-    case 'imagePrompt':
-    case 'video':
-    case 'youtube':
-    case 'randomizer':
-    case 'shortAnswer':
-    case 'fillBlank':
-      return typeof value === 'string' && stripHtml(value).length > 0
-    case 'richText':
-      return typeof value === 'string' && stripHtml(value).length > 0
-    case 'singleSelect':
-    case 'verdict':
-      return typeof value === 'string' && value.trim().length > 0
-    case 'checklist':
-      return Array.isArray(value) && value.some((item) => typeof item === 'string' ? item.trim().length > 0 : hasMeaningfulResponseValue(item))
-    case 'ranking':
-      return Array.isArray(value) && value.length > 0
-    case 'rating':
-      return Number.isFinite(Number(value))
-    case 'matrix': {
-      if (!value || typeof value !== 'object') return false
-      const rows = getMatrixRows(block)
-      return rows.length > 0 && rows.every((row) => Number.isFinite(Number((value as Record<string, unknown>)[row])))
-    }
-    case 'radar': {
-      if (!value || typeof value !== 'object') return false
-      const labels = getRadarDimensionLabels(block)
-      return labels.length > 0 && labels.every((label) => Number.isFinite(Number((value as Record<string, unknown>)[label])))
-    }
-    case 'quadrant': {
-      if (!value || typeof value !== 'object') return false
-      const point = value as Record<string, unknown>
-      const hasPoint = Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
-      if (!hasPoint) return false
-      if (block.config?.rationaleRequired) {
-        return typeof point.rationale === 'string' && point.rationale.trim().length > 0
-      }
-      return true
-    }
-    case 'swot': {
-      if (!value || typeof value !== 'object') return false
-      return Object.values(value as Record<string, unknown>).some((entries) => Array.isArray(entries)
-        && entries.some((entry) => hasMeaningfulResponseValue((entry as Record<string, unknown>)?.text)))
-    }
-    case 'multipleChoice':
-    case 'quiz':
-      return Array.isArray(value)
-        ? value.some((entry) => entry !== undefined && entry !== null && String(entry).trim() !== '')
-        : value !== undefined && value !== null && String(value).trim() !== ''
-    case 'trueFalse':
-      return typeof value === 'boolean' || value === 'True' || value === 'False'
-    case 'matching': {
-      if (!value || typeof value !== 'object') return false
-      const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
-      return pairs.length > 0 && pairs.every((pair: any, index: number) => {
-        const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
-        const selected = (value as Record<string, unknown>)[pairKey]
-        return typeof selected === 'string' && selected.trim().length > 0
-      })
-    }
-    default:
-      return hasMeaningfulResponseValue(value)
-  }
-}
-
-export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, any>) {
-  return page.blocks.filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
-}
-
 function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
   const requiredLabel = getRequiredLabel(block)
 
@@ -333,70 +263,6 @@ function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
       {requiredLabel && <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700">{requiredLabel}</span>}
     </span>
   )
-}
-
-export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, any>) {
-  const quizTypes = new Set(['quiz', 'multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank'])
-
-  const items = definition.pages.flatMap((page) => page.blocks)
-    .filter((block) => quizTypes.has(block.type))
-    .map((block) => {
-      const answer = responses[block.id]
-      const points = Number(block.config?.points ?? 1)
-      const type = block.type
-      let isCorrect = false
-
-      if (type === 'trueFalse') {
-        isCorrect = answer !== undefined && String(answer) === String(block.config?.correctAnswer)
-      } else if (type === 'shortAnswer') {
-        const expected = typeof block.config?.correctAnswer === 'string' ? block.config.correctAnswer.trim().toLowerCase() : ''
-        const actual = typeof answer === 'string' ? answer.trim().toLowerCase() : ''
-        isCorrect = actual !== '' && actual === expected
-      } else if (type === 'matching') {
-        const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
-        const selections = answer && typeof answer === 'object' ? answer : {}
-        isCorrect = pairs.length > 0 && pairs.every((pair: any) => {
-          const selected = selections[pair.id] ?? selections[pair.prompt]
-          return String(selected ?? '').trim().toLowerCase() === String(pair.answer ?? '').trim().toLowerCase()
-        })
-      } else if (type === 'fillBlank') {
-        const acceptedAnswers = Array.isArray(block.config?.answers)
-          ? block.config.answers
-          : [block.config?.correctAnswer ?? block.config?.answer].filter((value) => typeof value === 'string' && value.trim())
-        const actual = typeof answer === 'string' ? answer.trim().toLowerCase() : ''
-        isCorrect = actual !== '' && acceptedAnswers.some((option: string) => String(option).trim().toLowerCase() === actual)
-      } else {
-        const expected = block.config?.correctAnswer
-        const selected = Array.isArray(answer) ? answer : [answer].filter((value) => value !== undefined)
-        if (block.config?.multipleAnswers) {
-          const normalizedExpected = Array.isArray(expected) ? expected : [expected].filter((value) => value !== undefined)
-          isCorrect = JSON.stringify([...selected].sort()) === JSON.stringify([...normalizedExpected].sort())
-        } else {
-          isCorrect = answer !== undefined && answer === expected
-        }
-      }
-
-      return {
-        blockId: block.id,
-        label: block.label || block.config?.question || 'Quiz question',
-        answer,
-        correctAnswer: block.config?.correctAnswer,
-        points,
-        achievedPoints: isCorrect ? points : 0,
-        isCorrect,
-      }
-    })
-
-  const totalMax = items.reduce((total, item) => total + Number(item.points || 0), 0)
-  const totalScore = items.reduce((total, item) => total + Number(item.achievedPoints || 0), 0)
-
-  return {
-    totalQuestions: items.length,
-    totalScore,
-    totalMax,
-    percent: totalMax === 0 ? 0 : (totalScore / totalMax) * 100,
-    items,
-  }
 }
 
 function App() {
@@ -503,135 +369,6 @@ function App() {
   )
 }
 
-function GlobalBreadcrumb() {
-  const location = useLocation()
-
-  const routeLabel =
-    location.pathname === '/builder'
-      ? 'Worksheet builder'
-      : location.pathname === '/system-guide'
-        ? 'System guide'
-        : location.pathname === '/synthesis' || location.pathname === '/synthesis/ai-tool-lab'
-          ? 'Student synthesis'
-          : location.pathname === '/report' || location.pathname === '/report/ai-tool-lab'
-            ? 'Teacher report'
-            : location.pathname === '/worksheet' || location.pathname === '/worksheet/ai-tool-lab'
-              ? 'Worksheet player'
-              : location.pathname === '/preview'
-                ? 'Worksheet preview'
-                : 'Start'
-
-  return (
-    <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 text-sm text-slate-600">
-        <Link to="/" className="inline-flex items-center gap-1.5 font-medium text-slate-800 hover:text-blue-700">
-          <Home className="h-4 w-4" />
-          Home
-        </Link>
-        <span aria-hidden="true">/</span>
-        <span>{routeLabel}</span>
-      </div>
-    </div>
-  )
-}
-
-function HomeScreen({
-  definition,
-  definitionStatus,
-  importAndOpenWorksheet,
-  clearWorksheetDefinition,
-}: {
-  definition: WorksheetDefinition
-  definitionStatus: string
-  importAndOpenWorksheet: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
-  clearWorksheetDefinition: () => void
-}) {
-  const hasLoadedWorksheet = definition.pages.length > 0
-
-  return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col justify-center gap-8 px-6 py-12">
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Interactive worksheet platform</p>
-        <h1 className="text-4xl font-bold tracking-tight text-slate-900">Central Worksheet Hub</h1>
-        <p className="mt-4 max-w-2xl text-slate-600">
-          Use the student and teacher entry points below to quickly get to the right tools.
-        </p>
-
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Active worksheet</p>
-          <h2 className="mt-1 text-xl font-bold text-slate-900">{definition.title}</h2>
-          <p className="mt-1 text-sm text-slate-600">{definition.id} -� version {definition.version} -� {definition.pages.length} pages</p>
-          <p className="mt-2 text-sm text-slate-600">{definitionStatus}</p>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button onClick={clearWorksheetDefinition} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400">
-              <Trash2 className="h-4 w-4" />
-              Clear active worksheet
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-8 grid gap-4 md:grid-cols-2">
-          <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-            <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.15em] text-blue-700">
-              <User className="h-4 w-4" />
-              Student
-            </p>
-            <h3 className="mt-1 text-lg font-bold text-slate-900">Complete worksheet</h3>
-            <p className="mt-1 text-sm text-slate-600">Open the active worksheet and submit your response.</p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              {hasLoadedWorksheet ? (
-                <Link to="/worksheet" className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-500">
-                  <Play className="h-4 w-4" />
-                  Continue worksheet
-                </Link>
-              ) : (
-                <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-500">
-                  <Upload className="h-4 w-4" />
-                  Load worksheet
-                  <input type="file" accept="application/json" className="hidden" onChange={importAndOpenWorksheet} />
-                </label>
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-            <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.15em] text-emerald-700">
-              <GraduationCap className="h-4 w-4" />
-              Teacher
-            </p>
-            <h3 className="mt-1 text-lg font-bold text-slate-900">Create and analyze</h3>
-            <p className="mt-1 text-sm text-slate-600">Build worksheets and combine class response files into one synthesis report.</p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <Link to="/builder" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400">
-                <Wrench className="h-4 w-4" />
-                Worksheet builder
-              </Link>
-              <Link to="/synthesis" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400">
-                <BarChart3 className="h-4 w-4" />
-                Student synthesis
-              </Link>
-              <Link to="/report" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400">
-                <FileText className="h-4 w-4" />
-                Teacher report
-              </Link>
-            </div>
-          </section>
-        </div>
-
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Reference</p>
-          <div className="mt-3 flex flex-wrap gap-3">
-            <Link to="/system-guide" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400">
-              <FileText className="h-4 w-4" />
-              Open system guide
-            </Link>
-          </div>
-        </div>
-      </div>
-    </main>
-  )
-}
-
 function SystemGuidePage() {
   const blockCatalog = [
     { type: 'content', summary: 'Static text, headings, and instructional panels.' },
@@ -646,8 +383,12 @@ function SystemGuidePage() {
     { type: 'fillBlank', summary: 'Fill in the blank using a correct phrase or value.' },
     { type: 'checklist', summary: 'Multi-select checklist with multiple valid values.' },
     { type: 'ranking', summary: 'Order items from most to least important.' },
+    { type: 'categorize', summary: 'Assign every item to one of the teacher-defined categories.' },
+    { type: 'wordCloud', summary: 'Capture several short words or phrases for response aggregation.' },
+    { type: 'confidence', summary: 'Quick confidence pulse using teacher-defined response levels.' },
     { type: 'matrix', summary: 'Rate multiple rows against a shared numeric rubric.' },
     { type: 'imagePrompt', summary: 'Display an image and capture a written response beneath it.' },
+    { type: 'hotspot', summary: 'Place one or more percentage-based markers directly on an image.' },
     { type: 'video', summary: 'Direct media URL rendered with a native video player.' },
     { type: 'youtube', summary: 'YouTube embed derived from a share or watch URL.' },
     { type: 'section', summary: 'Divider or heading to visually group worksheet content.' },
@@ -656,6 +397,7 @@ function SystemGuidePage() {
     { type: 'quadrant', summary: 'Two-axis placement activity for value/risk or similar dimensions.' },
     { type: 'swot', summary: 'Board for strengths, weaknesses, opportunities, and threats.' },
     { type: 'verdict', summary: 'Single pick among recommendation or decision choices.' },
+    { type: 'numeric', summary: 'Graded numeric response with optional tolerance, units, and points.' },
   ]
 
   const capabilityManifest = {
@@ -748,10 +490,10 @@ function SystemGuidePage() {
     blocks: {
       categories: {
         textAndPrompting: ['content', 'richText', 'shortText', 'longText', 'section'],
-        quiz: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank'],
-        choiceAndSelection: ['singleSelect', 'randomizer', 'checklist', 'ranking', 'verdict'],
-        analysisAndAssessment: ['rating', 'matrix', 'radar', 'quadrant', 'swot'],
-        mediaAndEvidence: ['imagePrompt', 'video', 'youtube', 'url'],
+        quiz: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'],
+        choiceAndSelection: ['singleSelect', 'randomizer', 'checklist', 'ranking', 'categorize', 'confidence', 'verdict'],
+        analysisAndAssessment: ['rating', 'matrix', 'radar', 'quadrant', 'swot', 'wordCloud'],
+        mediaAndEvidence: ['imagePrompt', 'hotspot', 'video', 'youtube', 'url'],
       },
       definitions: {
         content: {
@@ -889,6 +631,26 @@ function SystemGuidePage() {
           config: { options: 'string[]' },
           responseShape: 'string[]',
         },
+        categorize: {
+          purpose: 'Assign each teacher-defined item to a category.',
+          fields: ['label', 'description', 'required'],
+          config: { items: 'string[]', categories: 'string[]' },
+          responseShape: 'Record<itemLabel, categoryLabel>',
+          requiredRule: 'Every configured item must have a non-empty category assignment.',
+        },
+        wordCloud: {
+          purpose: 'Collect a bounded set of short learner words or phrases.',
+          fields: ['label', 'description', 'required'],
+          config: { maxEntries: 'number from 1 to 10', placeholder: 'string' },
+          responseShape: 'string[]',
+          requiredRule: 'At least one non-empty entry is required.',
+        },
+        confidence: {
+          purpose: 'Capture a quick self-assessment of learner confidence.',
+          fields: ['label', 'description', 'required'],
+          config: { options: 'string[]' },
+          responseShape: 'string',
+        },
         verdict: {
           purpose: 'Final recommendation or decision pick.',
           fields: ['label', 'description'],
@@ -958,6 +720,31 @@ function SystemGuidePage() {
           },
           responseShape: 'string',
         },
+        hotspot: {
+          purpose: 'Place one or more markers on a teacher-supplied image.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            imageUrl: 'string',
+            altText: 'string',
+            allowMultiple: 'boolean',
+          },
+          responseShape: '{ x: number, y: number }[] where x and y are image percentages from 0 to 100',
+          requiredRule: 'At least one marker must be placed.',
+        },
+        numeric: {
+          purpose: 'Grade a numeric answer using an optional absolute tolerance.',
+          fields: ['label', 'description', 'required'],
+          config: {
+            correctAnswer: 'number',
+            tolerance: 'non-negative number',
+            unit: 'string',
+            placeholder: 'string',
+            showFeedback: 'boolean',
+            points: 'number',
+          },
+          responseShape: 'number',
+          scoringRule: 'Correct when abs(response - correctAnswer) <= tolerance.',
+        },
         video: {
           purpose: 'Embed a direct video URL with an optional response prompt.',
           fields: ['label', 'description'],
@@ -994,7 +781,7 @@ function SystemGuidePage() {
         invalidGroupingConfig: 'Shows a warning and falls back gracefully to ungrouped synthesis.',
         compatibility: 'AI Tool Lab can still fall back to subject/tool-name grouping when explicit synthesis settings are absent.',
       },
-      chartTypes: ['radar', 'quadrant', 'summary badges', 'verdict distribution', 'matrix averages'],
+      chartTypes: ['radar', 'quadrant', 'summary badges', 'verdict distribution', 'matrix averages', 'word cloud terms', 'image hotspot coordinates'],
       sharedFilters: ['grouping key', 'response label', 'verdict', 'free-text search'],
       reportHierarchy: ['synthesis group', 'worksheet page section', 'response block card'],
       finishBehavior: ['checks required items before allowing completion', 'exports the learner response JSON', 'shows a completion popup using settings.completionMessage when configured'],
@@ -1078,7 +865,7 @@ function SystemGuidePage() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
+    <main className="mx-auto max-w-6xl px-6 py-10 [&_ul]:list-disc [&_ul]:pl-5">
       <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">System guide</p>
         <h1 className="mt-3 text-4xl font-bold tracking-tight text-slate-900">Worksheet system reference</h1>
@@ -1091,29 +878,29 @@ function SystemGuidePage() {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-bold text-slate-900">What the system does</h2>
           <ul className="mt-4 space-y-3 text-sm text-slate-600">
-            <li>��� Builds interactive worksheets from structured JSON.</li>
-            <li>��� Supports sequential or free navigation through pages.</li>
-            <li>��� Captures student responses and persists autosave sessions.</li>
-            <li>��� Exports worksheet definitions and response JSON.</li>
-            <li>��� Can export the learner JSON automatically on Finish and show a teacher-authored completion popup.</li>
-            <li>��� Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
-            <li>��� Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
-            <li>��� Organises synthesis and report output into page-based sections using the worksheet's existing page structure.</li>
-            <li>��� Supports radar, quadrant, SWOT, and media-based prompts.</li>
+            <li>Builds interactive worksheets from structured JSON.</li>
+            <li>Supports sequential or free navigation through pages.</li>
+            <li>Captures student responses and persists autosave sessions.</li>
+            <li>Exports worksheet definitions and response JSON.</li>
+            <li>Can export the learner JSON automatically on Finish and show a teacher-authored completion popup.</li>
+            <li>Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
+            <li>Applies the same group, response label, verdict, and keyword filters in student synthesis and teacher report views.</li>
+            <li>Organises synthesis and report output into page-based sections using the worksheet's existing page structure.</li>
+            <li>Supports radar, quadrant, SWOT, and media-based prompts.</li>
           </ul>
         </section>
 
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-xl font-bold text-slate-900">AI authoring guidance</h2>
           <ul className="mt-4 space-y-3 text-sm text-slate-600">
-            <li>��� Keep each page in a clear learning sequence.</li>
-            <li>��� Use descriptive IDs like block-intro or block-matrix-1.</li>
-            <li>��� Prefer stable labels and simple option arrays for choice blocks.</li>
-            <li>��� Put media URLs in config.videoUrl or config.imageUrl.</li>
-            <li>��� Configure `synthesis.groupByBlockId` and `synthesis.responseLabelBlockId` when you want grouped synthesis output.</li>
-            <li>��� Configure `settings.completionMessage` when learners need a custom hand-in or next-step popup after finishing.</li>
-            <li>��� For synthesis, use radar, quadrant, matrix, SWOT, or verdict blocks where possible.</li>
-            <li>��� Keep definitions versioned for future schema updates.</li>
+            <li>Keep each page in a clear learning sequence.</li>
+            <li>Use descriptive IDs like block-intro or block-matrix-1.</li>
+            <li>Prefer stable labels and simple option arrays for choice blocks.</li>
+            <li>Put media URLs in config.videoUrl or config.imageUrl.</li>
+            <li>Configure `synthesis.groupByBlockId` and `synthesis.responseLabelBlockId` when you want grouped synthesis output.</li>
+            <li>Configure `settings.completionMessage` when learners need a custom hand-in or next-step popup after finishing.</li>
+            <li>For synthesis, use radar, quadrant, matrix, SWOT, or verdict blocks where possible.</li>
+            <li>Keep definitions versioned for future schema updates.</li>
           </ul>
         </section>
       </div>
@@ -1124,17 +911,17 @@ function SystemGuidePage() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Learner flow</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>��� Finish exports the current response JSON automatically.</li>
-              <li>��� After export, the learner sees a completion popup.</li>
-              <li>��� The popup can tell learners where to upload or hand in the JSON file.</li>
+              <li>Finish exports the current response JSON automatically.</li>
+              <li>After export, the learner sees a completion popup.</li>
+              <li>The popup can tell learners where to upload or hand in the JSON file.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Worksheet setting</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>��� Store custom popup copy in `settings.completionMessage`.</li>
-              <li>��� Leave it blank to use the default completion text.</li>
-              <li>��� This is a worksheet-level setup option, not a page-level option.</li>
+              <li>Store custom popup copy in `settings.completionMessage`.</li>
+              <li>Leave it blank to use the default completion text.</li>
+              <li>This is a worksheet-level setup option, not a page-level option.</li>
             </ul>
           </div>
         </div>
@@ -1146,22 +933,22 @@ function SystemGuidePage() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Builder settings</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>��� Group responses by: selects the response-producing block used as the synthesis grouping key.</li>
-              <li>��� Group label: sets the human-readable name used across synthesis and report views.</li>
-              <li>��� Label individual responses by: chooses the block used to name each submission inside a synthesis group.</li>
-              <li>��� If a referenced block is deleted, the builder warns first and clears the broken synthesis setting if deletion proceeds.</li>
-              <li>��� Report hierarchy stays schema-light: grouped responses render first by synthesis key, then by worksheet page, then by block.</li>
+              <li>Group responses by: selects the response-producing block used as the synthesis grouping key.</li>
+              <li>Group label: sets the human-readable name used across synthesis and report views.</li>
+              <li>Label individual responses by: chooses the block used to name each submission inside a synthesis group.</li>
+              <li>If a referenced block is deleted, the builder warns first and clears the broken synthesis setting if deletion proceeds.</li>
+              <li>Report hierarchy stays schema-light: grouped responses render first by synthesis key, then by worksheet page, then by block.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Import behavior</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>��� Multiple responses with the same grouping value stay separate and also generate an aggregate view.</li>
-              <li>��� Grouping values are normalized by trimming and collapsing whitespace and comparing case-insensitively.</li>
-              <li>��� Missing grouping values are placed under Unspecified.</li>
-              <li>��� If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
-              <li>��� Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
-              <li>��� Only worksheet pages with meaningful response data become report sections; procedural-only pages remain hidden unless they contain evidence worth showing.</li>
+              <li>Multiple responses with the same grouping value stay separate and also generate an aggregate view.</li>
+              <li>Grouping values are normalized by trimming and collapsing whitespace and comparing case-insensitively.</li>
+              <li>Missing grouping values are placed under Unspecified.</li>
+              <li>If no grouping is configured, synthesis falls back to a neutral All responses group.</li>
+              <li>Student synthesis and teacher report share the same filter controls for group, response label, verdict, and keyword search.</li>
+              <li>Only worksheet pages with meaningful response data become report sections; procedural-only pages remain hidden unless they contain evidence worth showing.</li>
             </ul>
           </div>
         </div>
@@ -1173,19 +960,19 @@ function SystemGuidePage() {
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Hierarchy</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>��� Level 1: synthesis group, such as an AI tool or other configured grouping value.</li>
-              <li>��� Level 2: worksheet page heading pulled from `page.title`.</li>
-              <li>��� Level 3: response block cards shown inside the owning page section.</li>
-              <li>��� This preserves conceptual grouping without adding new report schema.</li>
+              <li>Level 1: synthesis group, such as an AI tool or other configured grouping value.</li>
+              <li>Level 2: worksheet page heading pulled from `page.title`.</li>
+              <li>Level 3: response block cards shown inside the owning page section.</li>
+              <li>This preserves conceptual grouping without adding new report schema.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Rendering rules</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>��� Content, section, and URL blocks are used only as optional context, not as response cards.</li>
-              <li>��� Related matrix blocks stay together inside the same worksheet page section.</li>
-              <li>��� SWOT stays grouped as one conceptual block rather than four unrelated cards.</li>
-              <li>��� The class PDF export follows the same group ��� page section ��� block hierarchy.</li>
+              <li>Content, section, and URL blocks are used only as optional context, not as response cards.</li>
+              <li>Related matrix blocks stay together inside the same worksheet page section.</li>
+              <li>SWOT stays grouped as one conceptual block rather than four unrelated cards.</li>
+              <li>The class PDF export follows the same group → page section → block hierarchy.</li>
             </ul>
           </div>
         </div>
@@ -1222,11 +1009,11 @@ function SystemGuidePage() {
         <div className="mt-4 space-y-3 text-sm text-slate-600">
           <p>Load the AI Tool Lab worksheet JSON first, then import the sample student response files from the grouped comparison folder.</p>
           <ul className="space-y-2">
-            <li>��� Worksheet: public/worksheets/ai-tool-lab.json</li>
-            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-1.json</li>
-            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-4.json</li>
-            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-2.json</li>
-            <li>��� Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-5.json</li>
+            <li>Worksheet: public/worksheets/ai-tool-lab.json</li>
+            <li>Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-1.json</li>
+            <li>Responses: public/sample-responses/tool-comparison/ai-tool-lab-diffit-group-4.json</li>
+            <li>Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-2.json</li>
+            <li>Responses: public/sample-responses/tool-comparison/ai-tool-lab-notebooklm-group-5.json</li>
           </ul>
           <p>This set creates two synthesis groups, Diffit and NotebookLM, each with two individual evaluations and one aggregate view.</p>
         </div>
@@ -2144,189 +1931,6 @@ function getYouTubeEmbedUrl(value: string) {
     return ''
   }
   return ''
-}
-
-export function getDefaultPageTimer() {
-  return {
-    enabled: false,
-    durationSeconds: 300,
-    behaviour: 'advisory' as const,
-  }
-}
-
-export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBlockId = 'radar-eval', groupLabel = 'Response group') {
-  if (!groupings.length) {
-    return {
-      headline: 'The class is ready to begin synthesising their responses.',
-      summary: 'Upload a set of response files to generate a student-friendly summary of the class findings.',
-      highlights: ['No responses are available yet.', 'Once students submit results, this synthesis will show the strongest patterns.'],
-      recommendations: ['Review the prompts with students.', 'Discuss the most common strengths and areas for improvement.'],
-      topGroup: `No ${groupLabel.toLowerCase()} yet`,
-    }
-  }
-
-  const rankedGroups = groupings.map((group) => {
-    const total = group.responses.reduce((sum, response) => {
-      const radar = response.responses?.[radarBlockId] || {}
-      const scores = Object.values(radar).filter((value) => typeof value === 'number') as number[]
-      return sum + (scores.length ? scores.reduce((innerSum, score) => innerSum + Number(score), 0) / scores.length : 0)
-    }, 0)
-
-    return { label: group.label, score: group.responses.length ? total / group.responses.length : 0, responseCount: group.responses.length }
-  }).sort((left, right) => right.score - left.score)
-
-  const topGroup = rankedGroups[0]
-  const headline = `${topGroup?.label || 'This response set'} stands out as the strongest overall result for the class.`
-  const summary = `Across the current responses, students most often highlight the strongest patterns associated with ${topGroup?.label || 'the current grouping'}, while also identifying a few areas to improve.`
-
-  return {
-    headline,
-    summary,
-    highlights: [
-      `${topGroup?.label || 'The leading group'} has the strongest average response pattern in the class.`,
-      'The class is showing a clear set of shared strengths and practical opportunities.',
-      'Patterns suggest the most successful responses are the ones that are clear, evidence-based, and reflective.',
-    ],
-    recommendations: [
-      'Ask students to compare what worked well across the strongest examples.',
-      'Use the class patterns to identify one next step for improvement.',
-      'Turn the strongest responses into a shared class resource or exemplar.',
-    ],
-    topGroup: topGroup?.label || `No ${groupLabel.toLowerCase()} yet`,
-  }
-}
-
-export function getDefaultBlockConfig(type: string, timestamp: number): Record<string, any> {
-  switch (type) {
-    case 'singleSelect':
-      return {
-        options: ['Option 1', 'Option 2'],
-      }
-    case 'richText':
-      return {
-        placeholder: 'Write and format your response here.',
-        mode: 'response',
-        contentHtml: '<p>Add rich text information for students here.</p>',
-      }
-    case 'url':
-      return {
-        url: 'https://example.com',
-        buttonText: 'Open link',
-        audience: 'student',
-      }
-    case 'randomizer':
-      return {
-        prompt: 'Generate a random item from this list.',
-        items: ['Item 1', 'Item 2', 'Item 3'],
-        shuffle: true,
-        requireFirstGeneration: false,
-        displayStyle: 'word-flicker',
-        animationDurationMs: 1800,
-      }
-    case 'multipleChoice':
-      return {
-        question: 'Which answer is correct?',
-        options: ['Option A', 'Option B', 'Option C'],
-        correctAnswer: 'Option A',
-        multipleAnswers: false,
-        showFeedback: true,
-        points: 1,
-        explanation: 'Explain why the correct answer is right.',
-      }
-    case 'trueFalse':
-      return {
-        question: 'Is this statement true?',
-        correctAnswer: true,
-        showFeedback: true,
-        points: 1,
-        explanation: 'Explain the reasoning behind the correct answer.',
-      }
-    case 'shortAnswer':
-      return {
-        question: 'Provide the correct term or phrase.',
-        correctAnswer: 'answer',
-        showFeedback: true,
-        points: 1,
-        explanation: 'Explain the correct answer briefly.',
-      }
-    case 'matching':
-      return {
-        pairs: [
-          { id: 'pair-1', prompt: 'Photosynthesis', answer: 'Light energy' },
-          { id: 'pair-2', prompt: 'Mitochondria', answer: 'Cellular respiration' },
-        ],
-        options: ['Light energy', 'Cellular respiration', 'DNA replication'],
-        showFeedback: true,
-        points: 1,
-      }
-    case 'fillBlank':
-      return {
-        question: 'The capital of France is ______.',
-        correctAnswer: 'Paris',
-        showFeedback: true,
-        points: 1,
-        explanation: 'Paris is the capital city of France.',
-      }
-    case 'checklist':
-      return {
-        options: ['Option 1', 'Option 2'],
-      }
-    case 'ranking':
-      return {
-        options: ['Option 1', 'Option 2', 'Option 3'],
-      }
-    case 'matrix':
-      return {
-        rows: ['Criteria 1', 'Criteria 2', 'Criteria 3'],
-        min: 1,
-        max: 5,
-        defaultValue: 3,
-      }
-    case 'imagePrompt':
-      return {
-        imageUrl: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80',
-        altText: 'Worksheet image prompt',
-      }
-    case 'video':
-    case 'youtube':
-      return {
-        videoUrl: type === 'youtube' ? 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' : 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-        altText: type === 'youtube' ? 'YouTube video prompt' : 'Video prompt',
-      }
-    case 'quiz':
-      return {
-        question: 'Which answer is correct?',
-        options: ['Option A', 'Option B', 'Option C'],
-        correctAnswer: 'Option A',
-        showFeedback: true,
-        points: 1,
-        explanation: 'Explain why the correct answer is right.',
-      }
-    case 'section':
-      return {
-        title: 'Section heading',
-      }
-    case 'radar':
-      return {
-        dimensions: [
-          { id: `radar-dimension-${timestamp}`, label: 'Dimension 1' },
-          { id: `radar-dimension-${timestamp + 1}`, label: 'Dimension 2' },
-        ],
-      }
-    case 'quadrant':
-      return { xLeft: 'Left', xRight: 'Right', yBottom: 'Bottom', yTop: 'Top', rationaleRequired: true }
-    case 'swot':
-      return {
-        categories: [
-          { id: 'strengths', label: 'Strengths' },
-          { id: 'weaknesses', label: 'Weaknesses' },
-          { id: 'opportunities', label: 'Opportunities' },
-          { id: 'threats', label: 'Threats' },
-        ],
-      }
-    default:
-      return {}
-  }
 }
 
 function SpinWheelDisplay({
@@ -3337,6 +2941,89 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
         </div>
       )
     }
+    case 'categorize': {
+      const items = Array.isArray(block.config?.items) ? block.config.items : []
+      const categories = Array.isArray(block.config?.categories) ? block.config.categories : []
+      const assignments = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
+      return (
+        <fieldset className="space-y-3" aria-invalid={showRequiredError}>
+          <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
+          {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
+          <div className="grid gap-2">
+            {items.map((item: string) => (
+              <label key={item} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
+                <span className="text-sm font-medium text-slate-700">{item}</span>
+                <select value={assignments[item] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                  <option value="">Choose a category</option>
+                  {categories.map((category: string) => <option key={category} value={category}>{category}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Categorize every item to continue.</p>}
+        </fieldset>
+      )
+    }
+    case 'hotspot': {
+      const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      return (
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
+          {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
+          <div
+            className={`relative overflow-hidden rounded-xl border bg-slate-100 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              const point = { x: Math.round(((event.clientX - rect.left) / rect.width) * 1000) / 10, y: Math.round(((event.clientY - rect.top) / rect.height) * 1000) / 10 }
+              updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
+            }}
+          >
+            <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
+            {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
+          </div>
+          <div className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'Click the image to place a hotspot.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
+        </div>
+      )
+    }
+    case 'numeric': {
+      const value = responses[block.id] ?? ''
+      const actual = Number(value)
+      const expected = Number(block.config?.correctAnswer)
+      const tolerance = Math.max(0, Number(block.config?.tolerance || 0))
+      const isCorrect = value !== '' && Number.isFinite(actual) && Math.abs(actual - expected) <= tolerance
+      return (
+        <label className="block">
+          <span className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
+          {block.description && <p className="mb-2 text-xs text-slate-500">{block.description}</p>}
+          <div className="flex items-center gap-2"><input type="number" value={value} onChange={(event) => updateResponse(block.id, event.target.value === '' ? '' : Number(event.target.value))} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5" placeholder={block.config?.placeholder || 'Enter a number'} />{block.config?.unit && <span className="text-sm font-medium text-slate-600">{block.config.unit}</span>}</div>
+          {value !== '' && block.config?.showFeedback !== false && <p className={`mt-2 text-sm font-medium ${isCorrect ? 'text-emerald-700' : 'text-red-700'}`}>{isCorrect ? 'Correct.' : `Try again${tolerance ? ` (within ±${tolerance})` : ''}.`}</p>}
+        </label>
+      )
+    }
+    case 'wordCloud': {
+      const maxEntries = Math.max(1, Number(block.config?.maxEntries || 3))
+      const values = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      return (
+        <fieldset className="space-y-2">
+          <legend className="mb-1 text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
+          {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
+          {Array.from({ length: maxEntries }, (_, index) => <input key={index} value={values[index] || ''} onChange={(event) => { const next = [...values]; next[index] = event.target.value; updateResponse(block.id, next) }} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5" placeholder={`${block.config?.placeholder || 'Add a word or short phrase'} ${index + 1}`} />)}
+          {values.some((entry: string) => entry?.trim()) && <div className="flex flex-wrap gap-2 pt-2">{values.filter((entry: string) => entry?.trim()).map((entry: string, index: number) => <span key={`${entry}-${index}`} className="rounded-full bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-800">{entry}</span>)}</div>}
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Add at least one word or phrase.</p>}
+        </fieldset>
+      )
+    }
+    case 'confidence': {
+      const options = Array.isArray(block.config?.options) ? block.config.options : []
+      return (
+        <fieldset className="space-y-3">
+          <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
+          <div className="grid gap-2 sm:grid-cols-3">{options.map((option: string, index: number) => <button type="button" key={option} onClick={() => updateResponse(block.id, option)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${responses[block.id] === option ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option}</button>)}</div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
+        </fieldset>
+      )
+    }
     case 'matrix': {
       const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
       const values = responses[block.id] || {}
@@ -3477,6 +3164,9 @@ function formatBlockValue(block: WorksheetBlock, value: any) {
   if (value === undefined || value === null || value === '') return ''
   if (typeof value === 'string') return value
   if (typeof value === 'number') return String(value)
+  if (block.type === 'wordCloud') return value.filter(Boolean).join(', ')
+  if (block.type === 'hotspot') return value.map((point: any) => `(${point.x}%, ${point.y}%)`).join(', ')
+  if (block.type === 'categorize') return Object.entries(value).map(([item, category]) => `${item}: ${category}`).join('; ')
   if (block.type === 'radar') return `Radar: ${Object.entries(value as Record<string, number>).map(([label, score]) => `${label}: ${score}`).join(', ')}`
   if (block.type === 'quadrant') return `Quadrant: x=${value.x}, y=${value.y}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'swot') {
@@ -4581,9 +4271,10 @@ function BuilderPage({
   setDefinition: WorksheetBuilderSetter
   importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
 }) {
-  const blockLibrary = [
-    { type: 'content', description: 'Static instructional text, prompts, or section headings.' },
-    { type: 'richText', description: 'Rich text response area with basic formatting controls.' },
+  const blockLibrary: Array<{ type: string; label?: string; description: string }> = [
+    { type: 'content', label: 'Information panel', description: 'Static instructional text, prompts, or explanatory copy.' },
+    { type: 'richTextInfo', label: 'Rich text information', description: 'Teacher-authored formatted information displayed to learners.' },
+    { type: 'richTextResponse', label: 'Rich text response', description: 'Formatted response area completed by the learner.' },
     { type: 'shortText', description: 'Single-line response for short answers like names or titles.' },
     { type: 'longText', description: 'Multi-line response for detailed written reflection.' },
     { type: 'url', description: 'Open a teacher-defined web link in a new browser tab.' },
@@ -4596,8 +4287,12 @@ function BuilderPage({
     { type: 'fillBlank', description: 'Fill in the blank with the correct wording or value.' },
     { type: 'checklist', description: 'Multi-select checklist for choosing several items or behaviours.' },
     { type: 'ranking', description: 'Prioritise items by reordering them from most to least important.' },
+    { type: 'categorize', label: 'Categorize', description: 'Sort a set of items into teacher-defined categories.' },
+    { type: 'wordCloud', label: 'Word cloud', description: 'Collect a small set of words or short phrases from each learner.' },
+    { type: 'confidence', label: 'Confidence check', description: 'Capture a quick learner confidence pulse with clear levels.' },
     { type: 'matrix', description: 'Compare multiple rows against a common scale or rubric.' },
     { type: 'imagePrompt', description: 'Display an image and invite a written reflection or analysis.' },
+    { type: 'hotspot', label: 'Image hotspot', description: 'Ask learners to mark one or more locations directly on an image.' },
     { type: 'video', description: 'Embed a generic video from a direct URL or media file.' },
     { type: 'youtube', description: 'Embed a YouTube clip using a YouTube share or watch URL.' },
     { type: 'section', description: 'Add a clear visual divider or section label to structure the worksheet.' },
@@ -4606,23 +4301,30 @@ function BuilderPage({
     { type: 'quadrant', description: 'Two-axis placement activity for value vs risk mapping.' },
     { type: 'swot', description: 'Card-based SWOT board with strengths, weaknesses, opportunities, threats.' },
     { type: 'verdict', description: 'Final recommendation/decision options for concluding judgement.' },
+    { type: 'numeric', label: 'Numeric answer', description: 'Graded number input with an optional tolerance and unit.' },
   ]
 
   const blockCategories = [
-    { key: 'text', label: 'Text & prompts', types: ['content', 'richText', 'shortText', 'longText', 'section'] },
-    { key: 'quiz', label: 'Quiz', types: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank'] },
-    { key: 'choice', label: 'Choice & selection', types: ['singleSelect', 'randomizer', 'checklist', 'ranking', 'verdict'] },
+    { key: 'information', label: 'Information & structure', types: ['content', 'richTextInfo', 'section', 'url'] },
+    { key: 'input', label: 'Learner input', types: ['richTextResponse', 'shortText', 'longText', 'singleSelect', 'checklist', 'ranking', 'categorize', 'wordCloud', 'confidence'] },
+    { key: 'quiz', label: 'Quiz', types: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'] },
+    { key: 'interactive', label: 'Interactive & decisions', types: ['randomizer', 'verdict'] },
     { key: 'analysis', label: 'Assessment & analysis', types: ['rating', 'matrix', 'radar', 'quadrant', 'swot'] },
-    { key: 'media', label: 'Media & evidence', types: ['imagePrompt', 'video', 'youtube', 'url'] },
+    { key: 'media', label: 'Media & evidence', types: ['imagePrompt', 'hotspot', 'video', 'youtube'] },
   ]
 
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({
-    text: true,
-    quiz: true,
-    choice: true,
-    analysis: true,
-    media: true,
+    information: true,
+    input: true,
+    quiz: false,
+    interactive: false,
+    analysis: false,
+    media: false,
   })
+  const [builderMode, setBuilderMode] = useState<'setup' | 'pages'>(() => definition.pages.length > 0 ? 'pages' : 'setup')
+  const [librarySearch, setLibrarySearch] = useState('')
+  const [openBlockMenuId, setOpenBlockMenuId] = useState<string | null>(null)
+  const [aiPromptCopied, setAiPromptCopied] = useState(false)
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -4658,6 +4360,56 @@ function BuilderPage({
     setDefinition((previous) => ({ ...previous, pages: [...previous.pages, nextPage] }))
     setSelectedPageId(nextPage.id)
     setSelectedBlockId(nextPage.blocks[0].id)
+    setBuilderMode('pages')
+  }
+
+  const startWorksheet = (template: 'blank' | 'quiz' | 'reflection') => {
+    const timestamp = Date.now()
+    const templateBlocks: WorksheetBlock[] = template === 'quiz'
+      ? [
+          {
+            id: `block-${timestamp}-1`,
+            type: 'content',
+            title: 'Quiz introduction',
+            description: 'Add instructions for learners before they begin.',
+          },
+          {
+            id: `block-${timestamp}-2`,
+            type: 'multipleChoice',
+            label: 'Question 1',
+            required: true,
+            config: getDefaultBlockConfig('multipleChoice', timestamp),
+          },
+        ]
+      : template === 'reflection'
+        ? [
+            {
+              id: `block-${timestamp}-1`,
+              type: 'content',
+              title: 'Reflection',
+              description: 'Introduce the activity and explain what learners should reflect on.',
+            },
+            {
+              id: `block-${timestamp}-2`,
+              type: 'longText',
+              label: 'What did you learn?',
+              required: true,
+              config: { placeholder: 'Write your reflection here.' },
+            },
+          ]
+        : []
+
+    const page: WorksheetPage = {
+      id: `page-${timestamp}`,
+      title: template === 'quiz' ? 'Quiz' : template === 'reflection' ? 'Reflection' : 'Page 1',
+      timer: getDefaultPageTimer(),
+      blocks: templateBlocks,
+    }
+
+    setDefinition((previous) => ({ ...previous, pages: [page] }))
+    setSelectedPageId(page.id)
+    setSelectedBlockId(page.blocks[0]?.id || '')
+    setBuilderMode('pages')
   }
 
   const moveSelectedPage = (direction: -1 | 1) => {
@@ -4737,14 +4489,28 @@ function BuilderPage({
     }
   }
 
-  const createBlockFromType = (type: string): WorksheetBlock => {
+  const createBlockFromType = (libraryType: string): WorksheetBlock => {
     const timestamp = Date.now()
+    const type = libraryType === 'richTextInfo' || libraryType === 'richTextResponse' ? 'richText' : libraryType
+    const config = getDefaultBlockConfig(type, timestamp)
+    if (libraryType === 'richTextInfo') {
+      config.mode = 'information'
+      config.contentHtml = '<p>Add rich text information for learners here.</p>'
+    }
+    if (libraryType === 'richTextResponse') config.mode = 'response'
+
+    const label = libraryType === 'richTextInfo'
+      ? 'Rich text information'
+      : libraryType === 'richTextResponse'
+        ? 'Rich text response'
+        : `New ${type} block`
+
     return {
       id: `block-${timestamp}`,
       type,
-      label: `New ${type} block`,
+      label,
       title: type === 'content' ? 'New content block' : type === 'section' ? 'Section heading' : undefined,
-      config: getDefaultBlockConfig(type, timestamp),
+      config,
     }
   }
 
@@ -4932,6 +4698,27 @@ function BuilderPage({
     duplicateBlockAtIndex(selectedPage.id, selectedBlock.id, currentIndex)
   }
 
+  const deleteBlockAtIndex = (pageId: string, blockId: string) => {
+    const block = definition.pages.find((page) => page.id === pageId)?.blocks.find((candidate) => candidate.id === blockId)
+    if (!block) return
+
+    const synthesisEffects = [
+      definition.synthesis?.groupByBlockId === blockId ? 'group synthesis results' : '',
+      definition.synthesis?.responseLabelBlockId === blockId ? 'label individual responses in synthesis' : '',
+    ].filter(Boolean)
+    if (synthesisEffects.length > 0 && !window.confirm(`This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`)) return
+
+    setDefinition((previous) => ({
+      ...previous,
+      synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
+      pages: previous.pages.map((page) => page.id === pageId
+        ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
+        : page),
+    }))
+    if (selectedBlockId === blockId) setSelectedBlockId('')
+    setOpenBlockMenuId(null)
+  }
+
   const selectedConfig = (selectedBlock?.config || {}) as Record<string, any>
   const optionList = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
   const randomizerItems = Array.isArray(selectedConfig.items) ? (selectedConfig.items as string[]) : []
@@ -4998,21 +4785,70 @@ function BuilderPage({
     })
   }
 
+  const aiWorksheetPrompt = `Create an interactive worksheet as valid JSON that I can import into the Worksheet Builder.
+
+Topic: [insert topic]
+Learners: [insert age, year group, or level]
+Learning goal: [insert the outcome learners should achieve]
+Duration: [insert approximate time]
+
+Structure the worksheet into clear pages that move from explanation to practice, reflection, and a final check for understanding. Use a varied but purposeful selection of these block types: content, richText, section, shortText, longText, singleSelect, checklist, ranking, categorize, wordCloud, confidence, multipleChoice, trueFalse, shortAnswer, matching, fillBlank, numeric, imagePrompt, hotspot, video, youtube, url, randomizer, rating, matrix, radar, quadrant, swot, and verdict.
+
+Return JSON only. The root object must include id, version, title, description, settings, and pages. Every page must include id, title, and blocks. Every block must include a unique id and supported type. Add clear labels, helpful descriptions, sensible config values, and required: true only where a response is genuinely necessary. For graded blocks, include correctAnswer, points, showFeedback, and a useful explanation. Use richText with config.mode = "information" for teacher-authored formatted guidance and config.mode = "response" for learner-authored formatted answers.
+
+Use this settings shape:
+{
+  "navigation": "sequential",
+  "allowPageJumping": false,
+  "autosave": true,
+  "showProgress": true,
+  "completionMessage": "Your work has been exported. Follow your teacher's instructions to submit it.",
+  "exports": { "json": true, "pdf": true }
+}
+
+Make the language concise and appropriate for the learners. Do not include Markdown fences, commentary, or properties outside the JSON.`
+
   return (
     <main className="mx-auto max-w-[1600px] px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 grid items-center gap-4 lg:grid-cols-[1fr_auto_1fr]">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Builder</p>
           <h1 className="text-3xl font-bold text-slate-900">Worksheet Builder</h1>
         </div>
-        <div className="flex gap-2">
-          <Link to="/" className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"><ArrowLeft className="h-4 w-4" />Back to start</Link>
-          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <div className="inline-flex rounded-xl border border-slate-300 bg-white p-1 shadow-sm" aria-label="Builder section">
+            <button
+              type="button"
+              aria-pressed={builderMode === 'setup'}
+              onClick={() => setBuilderMode('setup')}
+              className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${builderMode === 'setup' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-100'}`}
+            >
+              Setup
+            </button>
+            <button
+              type="button"
+              aria-pressed={builderMode === 'pages'}
+              onClick={() => setBuilderMode('pages')}
+              className={`rounded-lg px-5 py-2 text-sm font-semibold transition ${builderMode === 'pages' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-700 hover:bg-slate-100'}`}
+            >
+              Pages &amp; blocks
+            </button>
+          </div>
+          {definition.pages.length > 0 && (
+            <span className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-700">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-xs text-white" aria-hidden="true">✓</span>
+              Setup complete
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Link to="/" title="Back to start" aria-label="Back to start" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><ArrowLeft className="h-3.5 w-3.5" />Back</Link>
+          <label title="Load worksheet JSON" className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
             <Upload className="h-4 w-4" />
-            Load worksheet JSON
+            Load JSON
             <input type="file" accept="application/json" className="hidden" onChange={importWorksheetDefinition} />
           </label>
-          <Link to="/preview" className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"><Eye className="h-4 w-4" />Preview</Link>
+          <Link to="/preview" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><Eye className="h-3.5 w-3.5" />Preview</Link>
           <button
             onClick={() => {
               const blob = new Blob([JSON.stringify(definition, null, 2)], { type: 'application/json' })
@@ -5023,44 +4859,66 @@ function BuilderPage({
               anchor.click()
               URL.revokeObjectURL(url)
             }}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white"
+            className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white shadow-sm hover:bg-blue-500"
           >
-            <FileUp className="h-4 w-4" />
-            Export worksheet
+            <FileUp className="h-3.5 w-3.5" />
+            Export
           </button>
         </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
-        <aside className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 inline-flex items-center gap-2 text-lg font-semibold text-slate-900">
             <Wrench className="h-5 w-5" />
             Block library
           </h2>
+          {builderMode === 'pages' && !selectedPage && (
+            <p className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm leading-6 text-blue-800">
+              Create your first page before adding blocks.
+            </p>
+          )}
+          <label className="relative mb-4 block">
+            <span className="sr-only">Search blocks</span>
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={librarySearch}
+              onChange={(event) => setLibrarySearch(event.target.value)}
+              placeholder="Search blocks..."
+              className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            />
+          </label>
           <div className="space-y-3">
             {blockCategories.map((category) => {
-              const categoryEntries = blockLibrary.filter((entry) => category.types.includes(entry.type))
+              const query = librarySearch.trim().toLowerCase()
+              const categoryEntries = blockLibrary.filter((entry) => category.types.includes(entry.type)
+                && (!query || entry.type.toLowerCase().includes(query) || entry.label?.toLowerCase().includes(query) || entry.description.toLowerCase().includes(query)))
               const isExpanded = expandedCategories[category.key] ?? true
+
+              if (categoryEntries.length === 0) return null
 
               return (
                 <div key={category.key} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                   <button
                     type="button"
+                    aria-expanded={isExpanded}
                     onClick={() => setExpandedCategories((previous) => ({ ...previous, [category.key]: !isExpanded }))}
                     className="flex w-full items-center justify-between bg-slate-100 px-3 py-2 text-left text-sm font-semibold text-slate-700"
                   >
                     <span>{category.label}</span>
-                    <span className="text-slate-500">{isExpanded ? '���' : '+'}</span>
+                    <ChevronRight aria-hidden="true" className={`h-4 w-4 text-slate-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                   </button>
 
-                  {isExpanded && (
+                  {(isExpanded || Boolean(query)) && (
                     <div className="space-y-2 p-2">
                       {categoryEntries.map((entry) => (
                         <button
                           key={entry.type}
                           onClick={() => addBlock(entry.type)}
                           title={entry.description}
-                          draggable
+                          disabled={!selectedPage}
+                          draggable={Boolean(selectedPage)}
                           onDragStart={(event) => {
                             event.dataTransfer.effectAllowed = 'copyMove'
                             setActiveDrag({ kind: 'library', id: entry.type })
@@ -5071,11 +4929,13 @@ function BuilderPage({
                             createDragGhost(event)
                           }}
                           onDragEnd={() => setActiveDrag(null)}
-                          className={`flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 hover:border-slate-400 ${activeDrag?.kind === 'library' && activeDrag.id === entry.type ? 'border-blue-400 bg-blue-100 shadow-lg ring-2 ring-blue-200 opacity-100' : ''}`}
+                          className={`flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 ${activeDrag?.kind === 'library' && activeDrag.id === entry.type ? 'border-blue-400 bg-blue-100 shadow-lg ring-2 ring-blue-200 opacity-100' : ''}`}
                         >
                           <span className="inline-flex items-center gap-2">
-                            <FileText className="h-4 w-4" />
-                            {entry.type}
+                            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+                              <BlockTypeIcon type={entry.type} />
+                            </span>
+                            {entry.label || entry.type}
                           </span>
                           <Plus className="h-4 w-4" />
                         </button>
@@ -5088,7 +4948,58 @@ function BuilderPage({
           </div>
         </aside>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          {builderMode === 'pages' && !selectedPage && (
+            <div className="mb-4 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-6 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
+                <Plus className="h-6 w-6" />
+              </div>
+              <p className="mt-4 text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Start building</p>
+              <h2 className="mt-2 text-2xl font-bold text-slate-900">Create your first page</h2>
+              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                Begin with a blank page or use a simple starter structure. You can change every block afterwards.
+              </p>
+              <div className="mt-5 flex flex-wrap justify-center gap-3">
+                <button type="button" onClick={() => startWorksheet('blank')} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500">Blank page</button>
+                <button type="button" onClick={() => startWorksheet('quiz')} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:border-blue-400">Quiz starter</button>
+                <button type="button" onClick={() => startWorksheet('reflection')} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:border-blue-400">Reflection starter</button>
+              </div>
+            </div>
+          )}
+          {builderMode === 'setup' && (
+            <>
+          <div className="mb-4 overflow-hidden rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 via-white to-blue-50 p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-2xl">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-700">Build with your AI</p>
+                <h2 className="mt-1 text-lg font-semibold text-slate-900">Ask an AI assistant to draft the worksheet JSON</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">Replace the bracketed details in the sample prompt, send it to your preferred AI assistant, then save its JSON response and use <strong>Load JSON</strong> above. Preview and check every question before sharing it with learners.</p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(aiWorksheetPrompt)
+                    setAiPromptCopied(true)
+                    window.setTimeout(() => setAiPromptCopied(false), 1800)
+                  } catch {
+                    setAiPromptCopied(false)
+                  }
+                }}
+                className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg bg-violet-700 px-3 text-xs font-semibold text-white shadow-sm hover:bg-violet-600"
+              >
+                {aiPromptCopied ? 'Prompt copied' : 'Copy sample prompt'}
+              </button>
+            </div>
+            <details className="mt-4 rounded-xl border border-violet-200 bg-white">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">View sample prompt</summary>
+              <div className="border-t border-violet-100 p-4">
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-slate-600">{aiWorksheetPrompt}</pre>
+              </div>
+            </details>
+            <p className="mt-3 text-xs text-slate-500">AI-generated content can be inaccurate. Check curriculum alignment, answer keys, external links, accessibility text, and age suitability.</p>
+          </div>
+
           <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="mb-3">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Worksheet setup</p>
@@ -5237,20 +5148,40 @@ function BuilderPage({
             )}
           </div>
 
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setBuilderMode('pages')}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+            >
+              Continue to pages &amp; blocks
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+
+            </>
+          )}
+
+          {builderMode === 'pages' && (
+            <>
+          <div className="mb-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Build worksheet</p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-900">Pages &amp; blocks</h2>
+          </div>
           <div className="mb-4 flex items-center justify-between">
             <div className="flex flex-wrap gap-2">
               {definition.pages.map((page) => (
-                <button key={page.id} onClick={() => setSelectedPageId(page.id)} className={`rounded-xl px-3 py-2 text-sm font-medium ${page.id === selectedPageId ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                <button key={page.id} onClick={() => setSelectedPageId(page.id)} className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${page.id === selectedPageId ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-400'}`}>
                   {page.title}
                 </button>
               ))}
             </div>
-            <button onClick={addPage} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">Add page</button>
+            <button onClick={addPage} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-blue-400 hover:text-blue-700"><Plus className="h-4 w-4" />Add page</button>
           </div>
 
           {selectedPage && (
             <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <label className="block text-sm font-medium text-slate-700">Page title</label>
                 <input value={selectedPage.title} onChange={(event) => updatePageSettings({ title: event.target.value })} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2" />
 
@@ -5350,7 +5281,7 @@ function BuilderPage({
                         createDragGhost(event)
                       }}
                       onDragEnd={() => setActiveDrag(null)}
-                      className={`cursor-grab rounded-2xl border p-3 transition ${selectedBlockId === block.id ? 'border-blue-400 bg-blue-50' : 'border-slate-200 bg-slate-50'} ${activeDrag?.kind === 'existing' && activeDrag.id === block.id ? 'border-blue-500 bg-blue-100 shadow-xl ring-2 ring-blue-200 opacity-100' : ''}`}
+                      className={`cursor-grab rounded-xl border p-3 transition ${selectedBlockId === block.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 bg-white'} ${activeDrag?.kind === 'existing' && activeDrag.id === block.id ? 'border-blue-500 bg-blue-100 shadow-xl ring-2 ring-blue-200 opacity-100' : ''}`}
                     >
                       {dropIndicator?.blockId === block.id && dropIndicator.edge === 'top' && (
                         <div className="pointer-events-none absolute -top-1.5 left-2 right-2 h-2 rounded-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-500 shadow-[0_0_0_3px_rgba(59,130,246,0.25)] animate-pulse" />
@@ -5361,7 +5292,9 @@ function BuilderPage({
                       <div className="flex items-start justify-between gap-2">
                         <button type="button" onClick={() => setSelectedBlockId(block.id)} className="flex w-full items-center justify-between text-left">
                           <span className="inline-flex items-center gap-2 font-medium text-slate-800">
-                            <FileText className="h-4 w-4" />
+                            <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-700 shadow-sm">
+                              <BlockTypeIcon type={block.type} className="h-5 w-5" />
+                            </span>
                             {block.label || block.title || block.type}
                           </span>
                           <span className="text-xs uppercase tracking-[0.15em] text-slate-500">{block.type}</span>
@@ -5370,12 +5303,35 @@ function BuilderPage({
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation()
-                            duplicateBlockAtIndex(selectedPage.id, block.id, index)
+                            setOpenBlockMenuId((current) => current === block.id ? null : block.id)
                           }}
-                          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-700 hover:border-slate-400"
+                          aria-label={`Actions for ${block.label || block.title || block.type}`}
+                          aria-expanded={openBlockMenuId === block.id}
+                          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                         >
-                          Duplicate
+                          <MoreVertical className="h-5 w-5" />
                         </button>
+                        {openBlockMenuId === block.id && (
+                          <div className="absolute right-2 top-10 z-10 w-36 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                duplicateBlockAtIndex(selectedPage.id, block.id, index)
+                                setOpenBlockMenuId(null)
+                              }}
+                              className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                            >
+                              Duplicate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteBlockAtIndex(selectedPage.id, block.id)}
+                              className="w-full px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
                         Drag block to reorder
@@ -5397,10 +5353,20 @@ function BuilderPage({
               </div>
             </div>
           )}
+            </>
+          )}
         </section>
 
-        <aside className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">Selected block</h2>
+          {!selectedBlock && (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-center">
+              <p className="text-sm font-semibold text-slate-800">No block selected</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Create a page, then add or select a block to edit its content and settings here.
+              </p>
+            </div>
+          )}
           {selectedBlock && (
             <div className="space-y-4">
               <label className="block text-sm font-medium text-slate-700">
@@ -5643,7 +5609,7 @@ function BuilderPage({
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {(selectedBlock.type === 'multipleChoice' || selectedBlock.type === 'singleSelect' || selectedBlock.type === 'verdict' || selectedBlock.type === 'checklist' || selectedBlock.type === 'ranking' || selectedBlock.type === 'quiz' || selectedBlock.type === 'trueFalse' || selectedBlock.type === 'matching') && (
+                  {(selectedBlock.type === 'multipleChoice' || selectedBlock.type === 'singleSelect' || selectedBlock.type === 'verdict' || selectedBlock.type === 'checklist' || selectedBlock.type === 'ranking' || selectedBlock.type === 'quiz' || selectedBlock.type === 'trueFalse' || selectedBlock.type === 'matching' || selectedBlock.type === 'confidence') && (
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">{selectedBlock.type === 'ranking' ? 'Ranking options' : selectedBlock.type === 'trueFalse' ? 'True/false choices' : selectedBlock.type === 'matching' ? 'Matching choices' : selectedBlock.type === 'quiz' ? 'Quiz options' : 'Options'}</p>
                       {(selectedBlock.type === 'trueFalse' ? ['True', 'False'] : selectedBlock.type === 'matching' ? (selectedConfig.options || ['Option 1', 'Option 2']) : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option: string, index: number) => (
@@ -5678,6 +5644,30 @@ function BuilderPage({
                       >
                         Add option
                       </button>
+                    </div>
+                  )}
+
+                  {selectedBlock.type === 'categorize' && (
+                    <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={(selectedConfig.items || []).join('\n')} onChange={(event) => updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Categories, one per line<textarea value={(selectedConfig.categories || []).join('\n')} onChange={(event) => updateSelectedConfig({ categories: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                    </div>
+                  )}
+
+                  {selectedBlock.type === 'wordCloud' && (
+                    <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Maximum entries<input type="number" min={1} max={10} value={Number(selectedConfig.maxEntries || 3)} onChange={(event) => updateSelectedConfig({ maxEntries: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Placeholder<input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                    </div>
+                  )}
+
+                  {selectedBlock.type === 'numeric' && (
+                    <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={Number(selectedConfig.correctAnswer ?? 0)} onChange={(event) => updateSelectedConfig({ correctAnswer: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Tolerance<input type="number" min={0} step="any" value={Number(selectedConfig.tolerance || 0)} onChange={(event) => updateSelectedConfig({ tolerance: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Unit<input value={selectedConfig.unit || ''} onChange={(event) => updateSelectedConfig({ unit: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Points<input type="number" min={0} value={Number(selectedConfig.points ?? 1)} onChange={(event) => updateSelectedConfig({ points: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500 sm:col-span-2"><input type="checkbox" checked={selectedConfig.showFeedback !== false} onChange={(event) => updateSelectedConfig({ showFeedback: event.target.checked })} />Show feedback</label>
                     </div>
                   )}
 
@@ -5814,7 +5804,7 @@ function BuilderPage({
                     </div>
                   )}
 
-                  {selectedBlock.type === 'imagePrompt' && (
+                  {(selectedBlock.type === 'imagePrompt' || selectedBlock.type === 'hotspot') && (
                     <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
                         Image URL
@@ -5824,10 +5814,11 @@ function BuilderPage({
                         Alt text
                         <input value={selectedConfig.altText || ''} onChange={(event) => updateSelectedConfig({ altText: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
                       </label>
-                      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+                      {selectedBlock.type === 'imagePrompt' && <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
                         Placeholder
                         <input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
-                      </label>
+                      </label>}
+                      {selectedBlock.type === 'hotspot' && <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={Boolean(selectedConfig.allowMultiple)} onChange={(event) => updateSelectedConfig({ allowMultiple: event.target.checked })} />Allow multiple hotspots</label>}
                     </div>
                   )}
 
@@ -5966,8 +5957,8 @@ function BuilderPage({
                   )}
 
                   <div className="flex gap-2">
-                    <button type="button" onClick={duplicateSelectedBlock} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">Duplicate selected block</button>
-                    <button onClick={deleteSelectedBlock} className="w-full rounded-xl bg-red-100 px-3 py-2 text-sm font-medium text-red-700">Delete selected block</button>
+                    <button type="button" onClick={duplicateSelectedBlock} className="h-9 w-full whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:border-slate-400">Duplicate</button>
+                    <button onClick={deleteSelectedBlock} className="h-9 w-full whitespace-nowrap rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 hover:border-red-300">Delete</button>
                   </div>
                 </div>
               )}

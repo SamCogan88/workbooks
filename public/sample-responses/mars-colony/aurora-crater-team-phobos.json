@@ -1,0 +1,14 @@
+{
+  "responseSchema": "interactive-worksheet-response", "schemaVersion": 1, "worksheetId": "mars-colony-design-review", "worksheetVersion": 1,
+  "responseId": "mars-aurora-team-phobos", "createdAt": "2026-10-03T09:05:00.000Z", "updatedAt": "2026-10-03T09:28:00.000Z", "group": "Team Phobos", "subject": "Aurora Crater",
+  "responses": {
+    "review-team": "Team Phobos", "colony-concept": "Aurora Crater", "initial-confidence": "Very confident",
+    "systems-radar": { "Water security": 10, "Energy resilience": 6, "Food production": 8, "Radiation safety": 9, "Repairability": 7, "Crew wellbeing": 6 },
+    "backup-days": 120, "system-priority": ["Power storage", "Radiation shielding", "Food production", "Water recycling"],
+    "risk-board": { "strengths": [{"text":"Excellent natural shielding and reliable water deposits."}], "weaknesses": [{"text":"The enclosed terrain restricts views and surface mobility."}], "opportunities": [{"text":"Lava tubes may allow low-cost habitat expansion."}], "threats": [{"text":"Isolation and limited daylight may damage crew morale."}] },
+    "critical-risk": "Psychological strain from darkness, enclosure, and limited access to open terrain.",
+    "risk-position": { "x": 68, "y": 44, "rationale": "Technically robust, but human factors need more attention than the proposal currently gives them." },
+    "culture-words": ["Belonging", "Routine", "Exploration"], "crew-policy": "Rotate surface and habitat duties so no crew member remains in the enclosed habitat for extended periods.",
+    "overall-verdict": "Approve after redesign", "best-feature": "Natural radiation shielding", "required-change": "Redesign communal areas with circadian lighting, private spaces, and regular surface rotations."
+  }
+}

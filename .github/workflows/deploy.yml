@@ -35,6 +35,9 @@ jobs:
 
       - name: Build app
         run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://jxgojkbcvyfjmbuompem.supabase.co
+          VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_2sLqhxZdsn7zMEajjMf0HA_hyWsAZbK
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

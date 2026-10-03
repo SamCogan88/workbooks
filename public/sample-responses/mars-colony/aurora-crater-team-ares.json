@@ -1,0 +1,14 @@
+{
+  "responseSchema": "interactive-worksheet-response", "schemaVersion": 1, "worksheetId": "mars-colony-design-review", "worksheetVersion": 1,
+  "responseId": "mars-aurora-team-ares", "createdAt": "2026-10-03T09:00:00.000Z", "updatedAt": "2026-10-03T09:22:00.000Z", "group": "Team Ares", "subject": "Aurora Crater",
+  "responses": {
+    "review-team": "Team Ares", "colony-concept": "Aurora Crater", "initial-confidence": "Somewhat confident",
+    "systems-radar": { "Water security": 9, "Energy resilience": 7, "Food production": 7, "Radiation safety": 9, "Repairability": 6, "Crew wellbeing": 7 },
+    "backup-days": 100, "system-priority": ["Power storage", "Food production", "Water recycling", "Radiation shielding"],
+    "risk-board": { "strengths": [{"text":"Subsurface ice is close to the habitat."},{"text":"Crater walls provide strong radiation protection."}], "weaknesses": [{"text":"Limited sunlight during the long winter."}], "opportunities": [{"text":"Ice extraction could support fuel production."}], "threats": [{"text":"A power failure during winter could become unrecoverable."}] },
+    "critical-risk": "Seasonal loss of solar generation creates a dangerous dependency on stored power.",
+    "risk-position": { "x": 72, "y": 38, "rationale": "Strong science and water access with manageable risk if redundant nuclear power is added." },
+    "culture-words": ["Trust", "Curiosity", "Resilience"], "crew-policy": "Protect two hours of private, communication-free time for every crew member each day.",
+    "overall-verdict": "Approve after redesign", "best-feature": "Protected access to subsurface ice", "required-change": "Add a redundant nuclear microreactor and double winter power storage."
+  }
+}

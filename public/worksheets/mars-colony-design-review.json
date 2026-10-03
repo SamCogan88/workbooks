@@ -1,0 +1,37 @@
+{
+  "id": "mars-colony-design-review",
+  "version": 1,
+  "title": "Mars Colony Design Review",
+  "description": "Evaluate competing plans for humanity's first permanent settlement on Mars.",
+  "settings": { "navigation": "sequential", "allowPageJumping": false, "autosave": true, "showProgress": true, "completionMessage": "Mission review exported successfully.", "exports": { "json": true, "pdf": true } },
+  "synthesis": { "groupByBlockId": "colony-concept", "groupLabel": "Colony concept", "responseLabelBlockId": "review-team" },
+  "pages": [
+    { "id": "mission", "title": "Mission brief", "blocks": [
+      { "id": "brief", "type": "content", "title": "The year is 2042", "description": "Your review board must decide which proposed settlement is safest, most sustainable, and most likely to support a thriving community." },
+      { "id": "review-team", "type": "shortText", "label": "Review team", "required": true },
+      { "id": "colony-concept", "type": "singleSelect", "label": "Colony concept under review", "required": true, "config": { "options": ["Aurora Crater", "Valles Marineris"] } },
+      { "id": "initial-confidence", "type": "confidence", "label": "How confident are you in your initial assessment?", "config": { "options": ["Not sure yet", "Somewhat confident", "Very confident"] } }
+    ]},
+    { "id": "systems", "title": "Life-support systems", "blocks": [
+      { "id": "systems-radar", "type": "radar", "label": "Rate the proposal", "config": { "dimensions": [
+        { "id": "water", "label": "Water security" }, { "id": "energy", "label": "Energy resilience" }, { "id": "food", "label": "Food production" }, { "id": "safety", "label": "Radiation safety" }, { "id": "repair", "label": "Repairability" }, { "id": "wellbeing", "label": "Crew wellbeing" }
+      ] } },
+      { "id": "backup-days", "type": "numeric", "label": "Recommended minimum emergency reserves, in days", "config": { "correctAnswer": 90, "tolerance": 30, "unit": "days", "showFeedback": false, "points": 1 } },
+      { "id": "system-priority", "type": "ranking", "label": "Rank the systems to upgrade first", "config": { "options": ["Water recycling", "Power storage", "Food production", "Radiation shielding"] } }
+    ]},
+    { "id": "risk", "title": "Risk analysis", "blocks": [
+      { "id": "risk-board", "type": "swot", "label": "Mission SWOT", "config": { "categories": [{ "id": "strengths", "label": "Strengths" }, { "id": "weaknesses", "label": "Weaknesses" }, { "id": "opportunities", "label": "Opportunities" }, { "id": "threats", "label": "Threats" }] } },
+      { "id": "critical-risk", "type": "longText", "label": "What is the most important risk the mission director must address?", "required": true },
+      { "id": "risk-position", "type": "quadrant", "label": "Plot the concept by scientific value and mission risk", "config": { "xLeft": "Lower scientific value", "xRight": "Higher scientific value", "yBottom": "Lower mission risk", "yTop": "Higher mission risk", "rationaleRequired": true } }
+    ]},
+    { "id": "culture", "title": "A community, not just a base", "blocks": [
+      { "id": "culture-words", "type": "wordCloud", "label": "Three qualities this colony must nurture", "config": { "maxEntries": 3, "placeholder": "Quality" } },
+      { "id": "crew-policy", "type": "longText", "label": "Recommend one policy that would protect crew wellbeing and social cohesion.", "required": true }
+    ]},
+    { "id": "verdict", "title": "Mission verdict", "blocks": [
+      { "id": "overall-verdict", "type": "verdict", "label": "Final recommendation", "required": true, "config": { "options": ["Approve for launch", "Approve after redesign", "Do not approve"] } },
+      { "id": "best-feature", "type": "shortText", "label": "Strongest feature", "required": true },
+      { "id": "required-change", "type": "longText", "label": "Most important change before launch", "required": true }
+    ]}
+  ]
+}
