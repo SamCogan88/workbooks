@@ -203,6 +203,32 @@ export function aggregateQuadrantMean(responses: WorksheetResponse[], quadrantBl
   }
 }
 
+export function aggregateContinuum(responses: WorksheetResponse[], blockId: string) {
+  const positions = responses
+    .map((response) => Number(response.responses?.[blockId]?.position))
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 100)
+    .sort((left, right) => left - right)
+  const middle = Math.floor(positions.length / 2)
+  const median = positions.length === 0 ? 0 : positions.length % 2 ? positions[middle] : (positions[middle - 1] + positions[middle]) / 2
+  return { count: positions.length, mean: averageArray(positions), median, positions }
+}
+
+export function aggregateDecisionMatrix(
+  responses: WorksheetResponse[],
+  blockId: string,
+  options: Array<{ id: string; label: string }>,
+  criteria: Array<{ id: string; label: string }>,
+) {
+  return options.map((option) => {
+    const criterionResults = criteria.map((criterion) => {
+      const values = responses.map((response) => Number(response.responses?.[blockId]?.[option.id]?.[criterion.id])).filter(Number.isFinite)
+      return { ...criterion, count: values.length, average: averageArray(values) }
+    })
+    const populated = criterionResults.filter((criterion) => criterion.count > 0)
+    return { ...option, criteria: criterionResults, count: Math.max(0, ...criterionResults.map((criterion) => criterion.count)), overallMean: populated.length ? averageArray(populated.map((criterion) => criterion.average)) : 0 }
+  })
+}
+
 export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBlockId = 'radar-eval', groupLabel = 'Response group') {
   if (!groupings.length) {
     return {

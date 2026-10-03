@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { buildStudentSynthesis } from './lib/aggregation'
-import { getAdjacentVisiblePageIndex, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
+// @vitest-environment jsdom
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { renderBlock } from './App'
+import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
+import { getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -137,6 +140,86 @@ describe('image prompt display configuration', () => {
     const block = { id: 'image', type: 'imagePrompt', config: { imageFit: 'cover', imageSize: 'medium' } } as any
     const restored = JSON.parse(JSON.stringify(block))
     expect(getImageDisplayConfig(restored)).toEqual({ imageFit: 'cover', imageSize: 'medium' })
+  })
+})
+
+describe('visual thinking blocks', () => {
+  it('creates continuum defaults and requires intentional completion plus configured rationale', () => {
+    const config = getDefaultBlockConfig('continuum', 10)
+    expect(config).toMatchObject({ leftLabel: 'Low', rightLabel: 'High', defaultValue: 50 })
+    const block = { id: 'continuum', type: 'continuum', required: true, config: { ...config, rationaleRequired: true } } as any
+    expect(isRequiredBlockSatisfied(block, {})).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { continuum: { rationale: 'Not positioned yet.' } })).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { continuum: { position: 50 } })).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { continuum: { position: 50, rationale: 'Evidence.' } })).toBe(true)
+  })
+
+  it('updates a continuum value through its accessible range control', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'continuum', type: 'continuum', label: 'Confidence', config: getDefaultBlockConfig('continuum', 1) }, {}, update))
+    const range = screen.getByRole('slider', { name: 'Confidence' })
+    expect(range.getAttribute('min')).toBe('0')
+    expect(range.getAttribute('max')).toBe('100')
+    fireEvent.change(range, { target: { value: '72' } })
+    expect(update).toHaveBeenCalledWith('continuum', { position: 72 })
+  })
+
+  it('requires every stable-ID decision matrix cell and aggregates valid ratings', () => {
+    const config = getDefaultBlockConfig('decisionMatrix', 20) as any
+    const block = { id: 'decision', type: 'decisionMatrix', required: true, config } as any
+    const complete = Object.fromEntries(config.options.map((option: any) => [option.id, Object.fromEntries(config.criteria.map((criterion: any) => [criterion.id, 4]))]))
+    expect(isRequiredBlockSatisfied(block, { decision: { [config.options[0].id]: { [config.criteria[0].id]: 4 } } })).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { decision: complete })).toBe(true)
+    const responses = [complete, complete].map((matrix, index) => ({ responseSchema: 'interactive-worksheet-response', schemaVersion: 1, worksheetId: 'w', worksheetVersion: 1, responseId: String(index), createdAt: '', updatedAt: '', responses: { decision: matrix } })) as any
+    const summary = aggregateDecisionMatrix(responses, 'decision', config.options, config.criteria)
+    expect(summary[0].criteria[0]).toMatchObject({ average: 4, count: 2 })
+  })
+
+  it('renders all decision matrix cells and persists a selected rating', () => {
+    const update = vi.fn()
+    const config = getDefaultBlockConfig('decisionMatrix', 30)
+    render(renderBlock({ id: 'decision', type: 'decisionMatrix', label: 'Compare', config }, {}, update))
+    expect(screen.getAllByRole('radiogroup')).toHaveLength(4)
+    fireEvent.click(screen.getAllByRole('radio')[0])
+    expect(update).toHaveBeenCalled()
+  })
+
+  it('builds every board preset and validates meaningful entries', () => {
+    expect(getBoardPresetColumns('pmi').map((column) => column.label)).toEqual(['Plus', 'Minus', 'Interesting'])
+    expect(getBoardPresetColumns('kwl').map((column) => column.label)).toEqual(['Know', 'Want to know', 'Learned'])
+    expect(getBoardPresetColumns('start-stop-continue').map((column) => column.label)).toEqual(['Start', 'Stop', 'Continue'])
+    expect(getBoardPresetColumns('pros-cons').map((column) => column.label)).toEqual(['Pros', 'Cons'])
+    expect(getBoardPresetColumns('rose-bud-thorn').map((column) => column.label)).toEqual(['Rose', 'Bud', 'Thorn'])
+    expect(getBoardPresetColumns('what-so-what-now-what').map((column) => column.label)).toEqual(['What?', 'So What?', 'Now What?'])
+    const block = { id: 'board', type: 'board', required: true, config: getDefaultBlockConfig('board', 40) } as any
+    expect(isRequiredBlockSatisfied(block, {})).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { board: { anything: [{ id: 'entry', text: 'An idea' }] } })).toBe(true)
+  })
+
+  it('adds, edits, and deletes stable-ID board entries', () => {
+    const update = vi.fn()
+    const config = { columns: [{ id: 'plus', label: 'Plus' }], allowMultipleEntries: true, placeholder: 'Idea' }
+    const { rerender } = render(renderBlock({ id: 'board', type: 'board', label: 'PMI', config }, {}, update))
+    fireEvent.click(screen.getByRole('button', { name: 'Add entry' }))
+    const added = update.mock.calls[0][1]
+    expect(added.plus[0].id).toMatch(/^board-entry-/)
+    rerender(renderBlock({ id: 'board', type: 'board', label: 'PMI', config }, { board: added }, update))
+    fireEvent.change(screen.getByPlaceholderText('Idea'), { target: { value: 'Useful' } })
+    expect(update.mock.calls.at(-1)?.[1].plus[0].text).toBe('Useful')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete entry from Plus' }))
+    expect(update.mock.calls.at(-1)?.[1].plus).toEqual([])
+  })
+
+  it('calculates continuum mean and median', () => {
+    const responses = [10, 40, 90].map((position, index) => ({ responseSchema: 'interactive-worksheet-response', schemaVersion: 1, worksheetId: 'w', worksheetVersion: 1, responseId: String(index), createdAt: '', updatedAt: '', responses: { continuum: { position } } })) as any
+    expect(aggregateContinuum(responses, 'continuum')).toMatchObject({ count: 3, mean: 140 / 3, median: 40 })
+  })
+
+  it('preserves all visual-thinking configuration through JSON serialization', () => {
+    for (const type of ['continuum', 'decisionMatrix', 'board']) {
+      const block = { id: type, type, config: getDefaultBlockConfig(type, 50) }
+      expect(JSON.parse(JSON.stringify(block))).toEqual(block)
+    }
   })
 })
 

@@ -54,6 +54,8 @@ import type { ConditionOperator, GroupedResponseSet, WorksheetBlock, WorksheetCo
 import {
   aggregateQuadrantMean,
   aggregateRadarValues,
+  aggregateContinuum,
+  aggregateDecisionMatrix,
   buildStudentSynthesis,
   getResponseLabel,
   groupResponsesByKey,
@@ -64,6 +66,7 @@ import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses,
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
+  getBoardPresetColumns,
   getImageDisplayConfig,
   getMissingRequiredBlocks,
   getQuizSummary,
@@ -119,6 +122,9 @@ const BLOCK_TYPE_ICONS: Record<string, typeof FileText> = {
   numeric: Scale,
   wordCloud: TextQuote,
   confidence: SlidersHorizontal,
+  continuum: SlidersHorizontal,
+  decisionMatrix: Table2,
+  board: Grid2X2,
 }
 
 function BlockTypeIcon({ type, className = 'h-4 w-4' }: { type: string; className?: string }) {
@@ -672,6 +678,9 @@ function SystemGuidePage() {
     { type: 'swot', summary: 'Board for strengths, weaknesses, opportunities, and threats.' },
     { type: 'verdict', summary: 'Single pick among recommendation or decision choices.' },
     { type: 'numeric', summary: 'Graded numeric response with optional tolerance, units, and points.' },
+    { type: 'continuum', summary: 'Place a judgement on a labelled 0–100 spectrum with an optional rationale.' },
+    { type: 'decisionMatrix', summary: 'Compare stable-ID options against stable-ID criteria using a shared rating scale.' },
+    { type: 'board', summary: 'Collect editable ideas in teacher-configured columns, with reusable authoring presets.' },
   ]
 
   const capabilityManifest = {
@@ -775,7 +784,7 @@ function SystemGuidePage() {
         textAndPrompting: ['content', 'richText', 'shortText', 'longText', 'section'],
         quiz: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'],
         choiceAndSelection: ['singleSelect', 'randomizer', 'checklist', 'ranking', 'categorize', 'confidence', 'verdict'],
-        analysisAndAssessment: ['rating', 'matrix', 'radar', 'quadrant', 'swot', 'wordCloud'],
+        analysisAndAssessment: ['rating', 'continuum', 'matrix', 'decisionMatrix', 'radar', 'quadrant', 'swot', 'board', 'wordCloud'],
         mediaAndEvidence: ['imagePrompt', 'hotspot', 'video', 'youtube', 'url'],
       },
       definitions: {
@@ -953,6 +962,14 @@ function SystemGuidePage() {
           },
           responseShape: 'number',
         },
+        continuum: {
+          purpose: 'Place an idea or judgement on a labelled horizontal spectrum.',
+          fields: ['label', 'description', 'required'],
+          config: { leftLabel: 'string', rightLabel: 'string', instructions: 'optional string', rationaleRequired: 'boolean', defaultValue: 'visual starting position from 0 to 100; does not count as a response' },
+          responseShape: '{ position: number from 0 to 100, rationale?: string }',
+          requiredRule: 'The learner must intentionally change the position. A required rationale must also contain meaningful text.',
+          synthesis: 'Plots submitted positions together and reports count, mean, median, and rationales.',
+        },
         matrix: {
           purpose: 'Rate multiple rows on a common scale.',
           fields: ['label', 'description'],
@@ -963,6 +980,14 @@ function SystemGuidePage() {
             defaultValue: 'number',
           },
           responseShape: 'Record<rowLabel, number>',
+        },
+        decisionMatrix: {
+          purpose: 'Compare several options against shared criteria.',
+          fields: ['label', 'description', 'required'],
+          config: { options: '{ id, label }[]', criteria: '{ id, label }[]', min: 'number', max: 'number', showTotals: 'boolean' },
+          responseShape: 'Record<optionId, Record<criterionId, number>>',
+          requiredRule: 'Every configured option and criterion cell must have a numeric rating.',
+          synthesis: 'Shows averages and valid response counts for every option/criterion cell plus each option overall mean.',
         },
         radar: {
           purpose: 'Score several dimensions for charting and synthesis.',
@@ -992,6 +1017,14 @@ function SystemGuidePage() {
             categories: '{ id, label }[]',
           },
           responseShape: 'Record<categoryId, { text: string }[]>',
+        },
+        board: {
+          purpose: 'Collect ideas in configurable columns; presets are builder conveniences rather than separate block types.',
+          fields: ['label', 'description', 'required'],
+          config: { columns: '{ id, label, description? }[]', allowMultipleEntries: 'boolean', maxEntriesPerColumn: '0 for unlimited or a positive number', placeholder: 'string' },
+          responseShape: 'Record<columnId, { id: string, text: string }[]>',
+          requiredRule: 'At least one meaningful entry must exist in any configured column.',
+          synthesis: 'Groups entries by configured column and retains their source response labels.',
         },
         imagePrompt: {
           purpose: 'Display an image prompt with optional response placeholder.',
@@ -2972,7 +3005,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   )
 }
 
-function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void, options?: { showRequiredError?: boolean }) {
+export function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void, options?: { showRequiredError?: boolean }) {
   const showRequiredError = options?.showRequiredError ?? false
 
   switch (block.type) {
@@ -3484,6 +3517,104 @@ function renderBlock(block: WorksheetBlock, responses: Record<string, any>, upda
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Set a rating to continue.</p>}
         </div>
       )
+    case 'continuum': {
+      const current = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : undefined
+      const position = Number(current?.position ?? block.config?.defaultValue ?? 50)
+      return (
+        <div className={`space-y-4 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`}>
+          <div>
+            <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
+            {block.config?.instructions && <p className="mt-1 text-sm text-slate-500">{block.config.instructions}</p>}
+          </div>
+          <div className="flex items-center justify-between gap-4 text-sm font-medium text-slate-700">
+            <span>{block.config?.leftLabel || 'Low'}</span>
+            <span className="rounded-full bg-blue-100 px-3 py-1 font-semibold text-blue-700">{Math.round(position)}</span>
+            <span>{block.config?.rightLabel || 'High'}</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={position}
+            aria-label={block.label || 'Continuum position'}
+            aria-required={block.required ? true : undefined}
+            onChange={(event) => updateResponse(block.id, { ...(current || {}), position: Number(event.target.value) })}
+            className="w-full accent-blue-600"
+          />
+          <label className="block text-sm font-medium text-slate-700">
+            Rationale{block.config?.rationaleRequired ? ' *' : ''}
+            <textarea value={current?.rationale || ''} onChange={(event) => updateResponse(block.id, { ...(current || {}), ...(current ? { position } : {}), rationale: event.target.value })} className="mt-2 min-h-24 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Explain your position" />
+          </label>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a position{block.config?.rationaleRequired ? ' and add a rationale' : ''} to continue.</p>}
+        </div>
+      )
+    }
+    case 'decisionMatrix': {
+      const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
+      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
+      const min = Number(block.config?.min ?? 1)
+      const max = Number(block.config?.max ?? 5)
+      const values = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
+      return (
+        <div className={`space-y-4 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`}>
+          <div><p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>{block.description && <p className="mt-1 text-xs text-slate-500">{block.description}</p>}</div>
+          <div className="space-y-4">
+            {matrixOptions.map((option: any) => {
+              const optionValues = values[option.id] || {}
+              const completed = criteria.map((criterion: any) => Number(optionValues[criterion.id])).filter(Number.isFinite)
+              const total = completed.reduce((sum: number, value: number) => sum + value, 0)
+              return (
+                <section key={option.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <h4 className="font-semibold text-slate-900">{option.label}</h4>
+                  <div className="mt-3 space-y-3">
+                    {criteria.map((criterion: any) => <div key={criterion.id} className="grid gap-2 sm:grid-cols-[minmax(140px,1fr)_auto] sm:items-center">
+                      <span className="text-sm text-slate-700">{criterion.label}</span>
+                      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={`${option.label}: ${criterion.label}`}>
+                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={optionValues[criterion.id] === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${optionValues[criterion.id] === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
+                      </div>
+                    </div>)}
+                  </div>
+                  {block.config?.showTotals && completed.length > 0 && <p className="mt-3 text-xs text-slate-600">Total {total} · Average {(total / completed.length).toFixed(1)}. Use these figures as evidence, not an automatic decision.</p>}
+                </section>
+              )
+            })}
+          </div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Rate every option against every criterion.</p>}
+        </div>
+      )
+    }
+    case 'board': {
+      const columns = Array.isArray(block.config?.columns) ? block.config.columns : []
+      const boardValues = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
+      const allowMultiple = block.config?.allowMultipleEntries !== false
+      const maxEntries = Math.max(0, Number(block.config?.maxEntriesPerColumn || 0))
+      const updateColumn = (columnId: string, entries: any[]) => updateResponse(block.id, { ...boardValues, [columnId]: entries })
+      return (
+        <div className={`space-y-4 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`}>
+          <div><p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>{block.description && <p className="mt-1 text-xs text-slate-500">{block.description}</p>}</div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {columns.map((column: any) => {
+              const entries = Array.isArray(boardValues[column.id]) ? boardValues[column.id] : []
+              const canAdd = allowMultiple && (maxEntries === 0 || entries.length < maxEntries)
+              return <section key={column.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <h4 className="font-semibold text-slate-900">{column.label}</h4>
+                {column.description && <p className="mt-1 text-xs text-slate-500">{column.description}</p>}
+                <div className="mt-3 space-y-2">
+                  {entries.map((entry: any, index: number) => <div key={entry.id} className="flex gap-2">
+                    <textarea value={entry.text || ''} onChange={(event) => { const next = [...entries]; next[index] = { ...entry, text: event.target.value }; updateColumn(column.id, next) }} className="min-h-20 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm" placeholder={block.config?.placeholder || 'Add an idea'} />
+                    <button type="button" aria-label={`Delete entry from ${column.label}`} onClick={() => updateColumn(column.id, entries.filter((_: any, itemIndex: number) => itemIndex !== index))} className="self-start rounded-lg border border-red-200 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Delete</button>
+                  </div>)}
+                  {entries.length === 0 && !allowMultiple && <textarea value="" onChange={(event) => updateColumn(column.id, [{ id: `board-entry-${Date.now()}`, text: event.target.value }])} className="min-h-20 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm" placeholder={block.config?.placeholder || 'Add an idea'} />}
+                  {canAdd && <button type="button" onClick={() => updateColumn(column.id, [...entries, { id: `board-entry-${Date.now()}-${entries.length}`, text: '' }])} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add entry</button>}
+                </div>
+              </section>
+            })}
+          </div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Add at least one board entry to continue.</p>}
+        </div>
+      )
+    }
     case 'radar':
       return <RadarBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'swot':
@@ -3517,6 +3648,16 @@ function formatBlockValue(block: WorksheetBlock, value: any) {
   if (block.type === 'categorize') return Object.entries(value).map(([item, category]) => `${item}: ${category}`).join('; ')
   if (block.type === 'radar') return `Radar: ${Object.entries(value as Record<string, number>).map(([label, score]) => `${label}: ${score}`).join(', ')}`
   if (block.type === 'quadrant') return `Quadrant: x=${value.x}, y=${value.y}. Rationale: ${value.rationale || 'No rationale recorded'}`
+  if (block.type === 'continuum') return `Position: ${value.position}. Rationale: ${value.rationale || 'No rationale recorded'}`
+  if (block.type === 'decisionMatrix') {
+    const optionLabels = Object.fromEntries((block.config?.options || []).map((option: any) => [option.id, option.label]))
+    const criterionLabels = Object.fromEntries((block.config?.criteria || []).map((criterion: any) => [criterion.id, criterion.label]))
+    return Object.entries(value as Record<string, any>).map(([option, ratings]) => `${optionLabels[option] || option}: ${Object.entries(ratings).map(([criterion, score]) => `${criterionLabels[criterion] || criterion}: ${score}`).join(', ')}`).join(' | ')
+  }
+  if (block.type === 'board') {
+    const columnLabels = Object.fromEntries((block.config?.columns || []).map((column: any) => [column.id, column.label]))
+    return Object.entries(value as Record<string, any>).map(([column, entries]) => `${columnLabels[column] || column}: ${(entries as any[]).map((entry) => entry.text).join('; ')}`).join(' | ')
+  }
   if (block.type === 'swot') {
     return Object.entries(value as Record<string, any>)
       .map(([key, entries]) => `${key}: ${(entries as any[]).map((entry) => entry.text).join('; ')}`)
@@ -3754,6 +3895,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   const getBlockCardSpanClass = (block: WorksheetBlock) => {
     switch (block.type) {
       case 'swot':
+      case 'board':
+      case 'decisionMatrix':
         return 'md:col-span-2 xl:col-span-6'
       case 'radar':
       case 'quadrant':
@@ -3882,6 +4025,24 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           </div>
         </>
       )
+    }
+
+    if (block.type === 'continuum') {
+      const summary = aggregateContinuum(groupingResponses, block.id)
+      const rationales = entries.filter(({ value }) => typeof value?.rationale === 'string' && value.rationale.trim())
+      return <><div className="flex items-center justify-between gap-3"><div><h4 className="text-base font-semibold text-slate-900">{title}</h4><p className="mt-1 text-sm text-slate-500">{summary.count} recorded position(s).</p></div><span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">Continuum</span></div><div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex justify-between text-xs font-medium text-slate-600"><span>{block.config?.leftLabel || 'Low'}</span><span>{block.config?.rightLabel || 'High'}</span></div><div className="relative mt-5 h-2 rounded-full bg-slate-300">{summary.positions.map((position, index) => <span key={`${position}-${index}`} className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${position}%` }} />)}</div><div className="mt-4 flex gap-4 text-sm text-slate-700"><span>Mean <strong>{summary.mean.toFixed(1)}</strong></span><span>Median <strong>{summary.median.toFixed(1)}</strong></span></div></div>{rationales.length > 0 && <div className="mt-4 space-y-2">{rationales.map(({ response, label, value }) => <div key={response.responseId} className="rounded-xl bg-slate-50 p-3"><span className="text-xs font-semibold text-slate-500">{label} · {Number(value.position).toFixed(0)}</span><p className="mt-1 text-sm text-slate-700">{value.rationale}</p></div>)}</div>}</>
+    }
+
+    if (block.type === 'decisionMatrix') {
+      const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
+      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
+      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria)
+      return <><div className="flex items-center justify-between gap-3"><div><h4 className="text-base font-semibold text-slate-900">{title}</h4><p className="mt-1 text-sm text-slate-500">Average ratings by option and criterion. Counts reflect valid submitted values.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-violet-700">Decision matrix</span></div><div className="mt-4 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-slate-200"><th className="p-2">Option</th>{criteria.map((criterion: any) => <th key={criterion.id} className="p-2">{criterion.label}</th>)}<th className="p-2">Overall</th></tr></thead><tbody>{summary.map((option) => <tr key={option.id} className="border-b border-slate-100"><th className="p-2 font-medium text-slate-800">{option.label}<span className="block text-xs font-normal text-slate-500">{option.count} response(s)</span></th>{option.criteria.map((criterion) => <td key={criterion.id} className="p-2">{criterion.count ? criterion.average.toFixed(1) : '—'}<span className="block text-[10px] text-slate-400">n={criterion.count}</span></td>)}<td className="p-2 font-semibold">{option.overallMean.toFixed(1)}</td></tr>)}</tbody></table></div></>
+    }
+
+    if (block.type === 'board') {
+      const columns = Array.isArray(block.config?.columns) ? block.config.columns : []
+      return <><div className="flex items-center justify-between gap-3"><div><h4 className="text-base font-semibold text-slate-900">{title}</h4><p className="mt-1 text-sm text-slate-500">Ideas remain grouped by board column with source labels attached.</p></div><span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Board</span></div><div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{columns.map((column: any) => { const items = groupingResponses.flatMap((response) => (((response.responses?.[block.id] as Record<string, any>)?.[column.id] || []) as any[]).filter((entry) => hasMeaningfulResponseValue(entry?.text)).map((entry) => ({ text: String(entry.text).trim(), label: responseLabelLookup[response.responseId], responseId: response.responseId }))); return <div key={column.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><h5 className="font-semibold text-slate-800">{column.label}</h5>{column.description && <p className="mt-1 text-xs text-slate-500">{column.description}</p>}<div className="mt-3 space-y-2">{items.length ? items.map((item, index) => <div key={`${item.responseId}-${index}`} className="rounded-xl bg-white p-3 ring-1 ring-slate-200"><span className="text-xs font-medium text-slate-500">{item.label}</span><p className="mt-1 text-sm text-slate-700">{item.text}</p></div>) : <p className="text-sm text-slate-500">No entries recorded.</p>}</div></div> })}</div></>
     }
 
     if (block.type === 'swot') {
@@ -4725,6 +4886,9 @@ function BuilderPage({
     { type: 'swot', description: 'Card-based SWOT board with strengths, weaknesses, opportunities, threats.' },
     { type: 'verdict', description: 'Final recommendation/decision options for concluding judgement.' },
     { type: 'numeric', label: 'Numeric answer', description: 'Graded number input with an optional tolerance and unit.' },
+    { type: 'continuum', label: 'Continuum', description: 'Place an idea or judgement along a labelled spectrum.' },
+    { type: 'decisionMatrix', label: 'Decision Matrix', description: 'Compare several options against shared criteria.' },
+    { type: 'board', label: 'Board', description: 'Collect ideas into configurable labelled columns.' },
   ]
 
   const blockCategories = [
@@ -4732,7 +4896,7 @@ function BuilderPage({
     { key: 'input', label: 'Learner input', types: ['richTextResponse', 'shortText', 'longText', 'singleSelect', 'checklist', 'ranking', 'categorize', 'wordCloud', 'confidence'] },
     { key: 'quiz', label: 'Quiz', types: ['multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'] },
     { key: 'interactive', label: 'Interactive & decisions', types: ['randomizer', 'verdict'] },
-    { key: 'analysis', label: 'Assessment & analysis', types: ['rating', 'matrix', 'radar', 'quadrant', 'swot'] },
+    { key: 'analysis', label: 'Assessment & analysis', types: ['rating', 'continuum', 'matrix', 'decisionMatrix', 'radar', 'quadrant', 'swot', 'board'] },
     { key: 'media', label: 'Media & evidence', types: ['imagePrompt', 'hotspot', 'video', 'youtube'] },
   ]
 
@@ -5162,6 +5326,9 @@ function BuilderPage({
   const randomizerItems = Array.isArray(selectedConfig.items) ? (selectedConfig.items as string[]) : []
   const rankingOptions = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
   const matrixRows = Array.isArray(selectedConfig.rows) ? (selectedConfig.rows as string[]) : []
+  const decisionOptions = Array.isArray(selectedConfig.options) ? selectedConfig.options as Array<{ id: string; label: string }> : []
+  const decisionCriteria = Array.isArray(selectedConfig.criteria) ? selectedConfig.criteria as Array<{ id: string; label: string }> : []
+  const boardColumns = Array.isArray(selectedConfig.columns) ? selectedConfig.columns as Array<{ id: string; label: string; description?: string }> : []
   const radarDimensions = Array.isArray(selectedConfig.dimensions)
     ? (selectedConfig.dimensions as any[]).map((dimension, index) => {
       if (typeof dimension === 'string') {
@@ -5286,7 +5453,7 @@ Learners: [insert age, year group, or level]
 Learning goal: [insert the outcome learners should achieve]
 Duration: [insert approximate time]
 
-Structure the worksheet into clear pages that move from explanation to practice, reflection, and a final check for understanding. Use a varied but purposeful selection of these block types: content, richText, section, shortText, longText, singleSelect, checklist, ranking, categorize, wordCloud, confidence, multipleChoice, trueFalse, shortAnswer, matching, fillBlank, numeric, imagePrompt, hotspot, video, youtube, url, randomizer, rating, matrix, radar, quadrant, swot, and verdict.
+Structure the worksheet into clear pages that move from explanation to practice, reflection, and a final check for understanding. Use a varied but purposeful selection of these block types: content, richText, section, shortText, longText, singleSelect, checklist, ranking, categorize, wordCloud, confidence, multipleChoice, trueFalse, shortAnswer, matching, fillBlank, numeric, imagePrompt, hotspot, video, youtube, url, randomizer, rating, continuum, matrix, decisionMatrix, radar, quadrant, swot, board, and verdict.
 
 Return JSON only. The root object must include id, version, title, description, settings, and pages. Every page must include id, title, and blocks. Every block must include a unique id and supported type. Add clear labels, helpful descriptions, sensible config values, and required: true only where a response is genuinely necessary. For graded blocks, include correctAnswer, points, showFeedback, and a useful explanation. Use richText with config.mode = "information" for teacher-authored formatted guidance and config.mode = "response" for learner-authored formatted answers.
 
@@ -6319,6 +6486,38 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           Show feedback
                         </label>
                       </div>
+                    </div>
+                  )}
+
+                  {selectedBlock.type === 'continuum' && (
+                    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-sm font-semibold text-slate-800">Continuum</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Left label<input value={selectedConfig.leftLabel || ''} onChange={(event) => updateSelectedConfig({ leftLabel: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                        <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Right label<input value={selectedConfig.rightLabel || ''} onChange={(event) => updateSelectedConfig({ rightLabel: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      </div>
+                      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Instructions<textarea value={selectedConfig.instructions || ''} onChange={(event) => updateSelectedConfig({ instructions: event.target.value })} className="mt-1 min-h-20 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Initial marker position<input type="number" min={0} max={100} value={Number(selectedConfig.defaultValue ?? 50)} onChange={(event) => updateSelectedConfig({ defaultValue: Math.max(0, Math.min(100, Number(event.target.value))) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /><span className="mt-1 block normal-case font-normal">This position does not count as an answer until the learner interacts.</span></label>
+                      <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={Boolean(selectedConfig.rationaleRequired)} onChange={(event) => updateSelectedConfig({ rationaleRequired: event.target.checked })} />Require rationale</label>
+                    </div>
+                  )}
+
+                  {selectedBlock.type === 'decisionMatrix' && (
+                    <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div><p className="text-sm font-semibold text-slate-800">Options</p>{decisionOptions.map((option, index) => <div key={option.id} className="mt-2 flex gap-1"><input value={option.label} onChange={(event) => { const next = [...decisionOptions]; next[index] = { ...option, label: event.target.value }; updateSelectedConfig({ options: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...decisionOptions]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ options: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === decisionOptions.length - 1} onClick={() => { const next = [...decisionOptions]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ options: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" onClick={() => updateSelectedConfig({ options: decisionOptions.filter((item) => item.id !== option.id) })} className="rounded border border-red-200 px-2 text-xs text-red-700">Remove</button></div>)}<button type="button" onClick={() => updateSelectedConfig({ options: [...decisionOptions, { id: `option-${Date.now()}`, label: `Option ${decisionOptions.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium">Add option</button></div>
+                      <div><p className="text-sm font-semibold text-slate-800">Criteria</p>{decisionCriteria.map((criterion, index) => <div key={criterion.id} className="mt-2 flex gap-1"><input value={criterion.label} onChange={(event) => { const next = [...decisionCriteria]; next[index] = { ...criterion, label: event.target.value }; updateSelectedConfig({ criteria: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...decisionCriteria]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ criteria: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === decisionCriteria.length - 1} onClick={() => { const next = [...decisionCriteria]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ criteria: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" onClick={() => updateSelectedConfig({ criteria: decisionCriteria.filter((item) => item.id !== criterion.id) })} className="rounded border border-red-200 px-2 text-xs text-red-700">Remove</button></div>)}<button type="button" onClick={() => updateSelectedConfig({ criteria: [...decisionCriteria, { id: `criterion-${Date.now()}`, label: `Criterion ${decisionCriteria.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium">Add criterion</button></div>
+                      <div className="grid grid-cols-2 gap-2"><label className="text-xs font-medium uppercase tracking-wide text-slate-500">Minimum<input type="number" value={Number(selectedConfig.min ?? 1)} onChange={(event) => updateSelectedConfig({ min: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2 text-sm" /></label><label className="text-xs font-medium uppercase tracking-wide text-slate-500">Maximum<input type="number" value={Number(selectedConfig.max ?? 5)} onChange={(event) => updateSelectedConfig({ max: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2 text-sm" /></label></div>
+                      <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={Boolean(selectedConfig.showTotals)} onChange={(event) => updateSelectedConfig({ showTotals: event.target.checked })} />Show totals and averages</label>
+                    </div>
+                  )}
+
+                  {selectedBlock.type === 'board' && (
+                    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Start from a preset<select defaultValue="" onChange={(event) => { const preset = event.target.value as Parameters<typeof getBoardPresetColumns>[0]; if (!preset) return; const isBlank = boardColumns.map((column) => column.label).join('|') === 'Column 1|Column 2|Column 3'; if (!isBlank && !window.confirm('Replace the current board columns with this preset?')) { event.target.value = ''; return } updateSelectedConfig({ columns: getBoardPresetColumns(preset) }); event.target.value = '' }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case"><option value="">Choose preset…</option><option value="blank">Blank board</option><option value="pmi">PMI</option><option value="kwl">KWL</option><option value="start-stop-continue">Start / Stop / Continue</option><option value="pros-cons">Pros / Cons</option><option value="rose-bud-thorn">Rose / Bud / Thorn</option><option value="what-so-what-now-what">What? / So What? / Now What?</option></select></label>
+                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" onClick={() => updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) })} className="rounded border border-red-200 px-2 text-xs text-red-700">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
+                      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Entry placeholder<input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={selectedConfig.allowMultipleEntries !== false} onChange={(event) => updateSelectedConfig({ allowMultipleEntries: event.target.checked })} />Allow multiple entries</label>
+                      {selectedConfig.allowMultipleEntries !== false && <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Maximum per column (0 = unlimited)<input type="number" min={0} value={Number(selectedConfig.maxEntriesPerColumn || 0)} onChange={(event) => updateSelectedConfig({ maxEntriesPerColumn: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>}
                     </div>
                   )}
 

@@ -158,6 +158,23 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       if (!Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false
       return !block.config?.rationaleRequired || typeof point.rationale === 'string' && point.rationale.trim().length > 0
     }
+    case 'continuum': {
+      if (!value || typeof value !== 'object') return false
+      const response = value as Record<string, unknown>
+      const position = Number(response.position)
+      if (!Number.isFinite(position) || position < 0 || position > 100) return false
+      return !block.config?.rationaleRequired || typeof response.rationale === 'string' && response.rationale.trim().length > 0
+    }
+    case 'decisionMatrix': {
+      if (!value || typeof value !== 'object') return false
+      const options = Array.isArray(block.config?.options) ? block.config.options : []
+      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
+      return options.length > 0 && criteria.length > 0 && options.every((option: { id?: unknown }) =>
+        criteria.every((criterion: { id?: unknown }) => Number.isFinite(Number((value as Record<string, any>)[String(option.id)]?.[String(criterion.id)]))))
+    }
+    case 'board':
+      return Boolean(value && typeof value === 'object' && Object.values(value as Record<string, unknown>).some((entries) => Array.isArray(entries)
+        && entries.some((entry) => hasMeaningfulResponseValue((entry as Record<string, unknown>)?.text))))
     case 'swot':
       return Boolean(value && typeof value === 'object' && Object.values(value as Record<string, unknown>).some((entries) => Array.isArray(entries)
         && entries.some((entry) => hasMeaningfulResponseValue((entry as Record<string, unknown>)?.text))))
@@ -272,6 +289,30 @@ export function getDefaultBlockConfig(type: string, timestamp: number): Record<s
     case 'radar': return { dimensions: [{ id: `radar-dimension-${timestamp}`, label: 'Dimension 1' }, { id: `radar-dimension-${timestamp + 1}`, label: 'Dimension 2' }] }
     case 'quadrant': return { xLeft: 'Left', xRight: 'Right', yBottom: 'Bottom', yTop: 'Top', rationaleRequired: true }
     case 'swot': return { categories: [{ id: 'strengths', label: 'Strengths' }, { id: 'weaknesses', label: 'Weaknesses' }, { id: 'opportunities', label: 'Opportunities' }, { id: 'threats', label: 'Threats' }] }
+    case 'continuum': return { leftLabel: 'Low', rightLabel: 'High', instructions: 'Place your response on the spectrum.', rationaleRequired: false, defaultValue: 50 }
+    case 'decisionMatrix': return {
+      options: [{ id: `option-${timestamp}`, label: 'Option 1' }, { id: `option-${timestamp + 1}`, label: 'Option 2' }],
+      criteria: [{ id: `criterion-${timestamp}`, label: 'Criterion 1' }, { id: `criterion-${timestamp + 1}`, label: 'Criterion 2' }],
+      min: 1,
+      max: 5,
+      showTotals: true,
+    }
+    case 'board': return { columns: getBoardPresetColumns('blank', timestamp), allowMultipleEntries: true, maxEntriesPerColumn: 0, placeholder: 'Add an idea' }
     default: return {}
   }
+}
+
+export type BoardPreset = 'blank' | 'pmi' | 'kwl' | 'start-stop-continue' | 'pros-cons' | 'rose-bud-thorn' | 'what-so-what-now-what'
+
+export function getBoardPresetColumns(preset: BoardPreset, timestamp = Date.now()) {
+  const labels: Record<BoardPreset, string[]> = {
+    blank: ['Column 1', 'Column 2', 'Column 3'],
+    pmi: ['Plus', 'Minus', 'Interesting'],
+    kwl: ['Know', 'Want to know', 'Learned'],
+    'start-stop-continue': ['Start', 'Stop', 'Continue'],
+    'pros-cons': ['Pros', 'Cons'],
+    'rose-bud-thorn': ['Rose', 'Bud', 'Thorn'],
+    'what-so-what-now-what': ['What?', 'So What?', 'Now What?'],
+  }
+  return labels[preset].map((label, index) => ({ id: `board-column-${timestamp}-${index + 1}`, label }))
 }
