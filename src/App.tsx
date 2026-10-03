@@ -1,6 +1,6 @@
-import { HashRouter, Link, Route, Routes, useNavigate } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import LinkExtension from '@tiptap/extension-link'
@@ -14,6 +14,8 @@ import {
   ChevronRight,
   CircleDot,
   Clock3,
+  CloudUpload,
+  Copy,
   Download,
   Eye,
   ExternalLink,
@@ -37,11 +39,12 @@ import {
   TextQuote,
   ToggleLeft,
   Upload,
+  UserPlus,
   Video,
   Wrench,
 } from 'lucide-react'
 import { GlobalBreadcrumb, HomeScreen } from './components/AppChrome'
-import { TeacherAccountPage, TeacherAuthProvider } from './components/TeacherAuth'
+import { TeacherAccountPage, TeacherAuthProvider, useTeacherAuth } from './components/TeacherAuth'
 import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings, WorksheetSynthesisSettings } from './lib/types'
 import {
   aggregateQuadrantMean,
@@ -52,6 +55,7 @@ import {
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
 import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import { loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineWorksheetRow } from './lib/onlineRepository'
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
@@ -355,6 +359,8 @@ function App() {
           <Route path="/report/ai-tool-lab" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/system-guide" element={<SystemGuidePage />} />
           <Route path="/account" element={<TeacherAccountPage />} />
+          <Route path="/join" element={<OnlineJoinPage />} />
+          <Route path="/join/:publicCode" element={<OnlineJoinPage />} />
           <Route
             path="/builder"
             element={(
@@ -370,6 +376,68 @@ function App() {
         </div>
       </TeacherAuthProvider>
     </HashRouter>
+  )
+}
+
+function OnlineJoinPage() {
+  const { publicCode = '' } = useParams()
+  const navigate = useNavigate()
+  const [code, setCode] = useState(publicCode.toUpperCase())
+  const [workbook, setWorkbook] = useState<OnlineWorksheetRow | null>(null)
+  const [loading, setLoading] = useState(Boolean(publicCode))
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!publicCode) return
+    let active = true
+    setLoading(true)
+    setError('')
+
+    void loadPublishedWorksheet(publicCode).then((loadedWorkbook) => {
+      if (!active) return
+      setWorkbook(loadedWorkbook)
+      setLoading(false)
+    }).catch(() => {
+      if (!active) return
+      setError('We could not find a published workbook with that code. Check the code and try again.')
+      setLoading(false)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [publicCode])
+
+  if (workbook) {
+    return <WorksheetPlayer definition={workbook.definition} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
+  }
+
+  const handleJoin = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const normalized = code.trim().toUpperCase()
+    if (!normalized) return
+    navigate(`/join/${normalized}`)
+  }
+
+  return (
+    <main className="mx-auto flex min-h-[calc(100vh-45px)] max-w-3xl items-center px-5 py-10">
+      <section className="w-full rounded-2xl border border-slate-200 bg-white p-7 shadow-sm sm:p-10">
+        <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><UserPlus className="h-6 w-6" /></span>
+        <p className="mt-6 text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">Learner access</p>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">Join a workbook</h1>
+        <p className="mt-3 text-slate-600">Enter the code your teacher shared. You do not need to create an account.</p>
+
+        <form onSubmit={handleJoin} className="mt-7 flex flex-col gap-3 sm:flex-row">
+          <label className="flex-1">
+            <span className="sr-only">Workbook code</span>
+            <input autoFocus value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} maxLength={8} placeholder="e.g. 4K7MPQ2R" className="w-full rounded-xl border border-slate-300 px-4 py-3 font-mono text-lg font-semibold uppercase tracking-[0.16em] outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
+          </label>
+          <button type="submit" disabled={loading || !code.trim()} className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-60">{loading ? 'Opening…' : 'Open workbook'}</button>
+        </form>
+        {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {loading && <p role="status" className="mt-4 text-sm text-slate-600">Loading the workbook securely…</p>}
+      </section>
+    </main>
   )
 }
 
@@ -885,6 +953,8 @@ function SystemGuidePage() {
             <li>Builds interactive worksheets from structured JSON.</li>
             <li>Supports sequential or free navigation through pages.</li>
             <li>Captures student responses and persists autosave sessions.</li>
+            <li>Lets teachers sign in, publish a workbook, and share an eight-character join code or direct link.</li>
+            <li>Lets learners join without an account, autosave online, and submit directly to the workbook owner.</li>
             <li>Exports worksheet definitions and response JSON.</li>
             <li>Can export the learner JSON automatically on Finish and show a teacher-authored completion popup.</li>
             <li>Generates synthesis views for class aggregation with configurable grouping and response labels.</li>
@@ -910,14 +980,14 @@ function SystemGuidePage() {
       </div>
 
       <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="text-xl font-bold text-slate-900">Completion popup</h2>
+        <h2 className="text-xl font-bold text-slate-900">Learner completion</h2>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <p className="text-sm font-semibold text-slate-900">Learner flow</p>
             <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li>Finish exports the current response JSON automatically.</li>
-              <li>After export, the learner sees a completion popup.</li>
-              <li>The popup can tell learners where to upload or hand in the JSON file.</li>
+              <li>Online workbooks autosave responses to Supabase and submit them directly on Finish.</li>
+              <li>Locally loaded workbooks continue to export response JSON as a portable fallback.</li>
+              <li>After submission or export, the learner sees a completion popup.</li>
             </ul>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -1073,7 +1143,7 @@ function formatTimerValue(seconds: number) {
   return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
 }
 
-function WorksheetPlayer({ definition, previewMode = false }: { definition: WorksheetDefinition; previewMode?: boolean }) {
+function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, publicCode }: { definition: WorksheetDefinition; previewMode?: boolean; onlineWorksheetId?: string; publicCode?: string }) {
   const navigate = useNavigate()
   const [pageIndex, setPageIndex] = useState(0)
   const [responseId, setResponseId] = useState(() => {
@@ -1087,6 +1157,7 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   const [showCompletionDialog, setShowCompletionDialog] = useState(false)
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [exportError, setExportError] = useState('')
+  const [responseCreatedAt] = useState(() => new Date().toISOString())
 
   useEffect(() => {
     setIsSessionHydrated(false)
@@ -1135,8 +1206,13 @@ function WorksheetPlayer({ definition, previewMode = false }: { definition: Work
   const quizSummary = useMemo(() => getQuizSummary(definition, responses), [definition, responses])
   const completionMessage = useMemo(() => {
     const configured = trimSynthesisValue(definition.settings.completionMessage)
+    if (onlineWorksheetId) {
+      return configured && !/download|export|upload/i.test(configured)
+        ? configured
+        : 'Your response has been sent to your teacher. You can now close this page.'
+    }
     return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
-  }, [definition.settings.completionMessage])
+  }, [definition.settings.completionMessage, onlineWorksheetId])
   const missingRequiredBlocks = useMemo(
     () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
     [currentPage, responses],
@@ -1233,18 +1309,31 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     focusTarget?.focus()
   }, [missingRequiredBlocks])
 
-  const buildDocument = (): WorksheetResponse => ({
+  const buildDocument = useCallback((): WorksheetResponse => ({
     responseSchema: 'interactive-worksheet-response',
     schemaVersion: 1,
     worksheetId: definition.id,
     worksheetVersion: definition.version,
     responseId,
-    createdAt: new Date().toISOString(),
+    createdAt: responseCreatedAt,
     updatedAt: new Date().toISOString(),
     group: String(responses['group-name'] || ''),
     subject: String(responses['tool-name'] || responses['subject-name'] || ''),
     responses,
-  })
+  }), [definition.id, definition.version, responseCreatedAt, responseId, responses])
+
+  useEffect(() => {
+    if (!onlineWorksheetId || !isSessionHydrated || status === 'Complete' || status === 'Submitting…') return
+    const timeoutId = window.setTimeout(() => {
+      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then(() => {
+        setStatus('Saved online')
+      }).catch(() => {
+        setStatus('Saved on this device')
+      })
+    }, 900)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [buildDocument, isSessionHydrated, onlineWorksheetId, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -1266,13 +1355,28 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     setPageIndex(index)
   }
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (!tryLeaveCurrentPage()) return
 
     if (pageIndex < totalPages - 1) {
       setPageIndex((value) => value + 1)
       return
     }
+    if (onlineWorksheetId) {
+      setStatus('Submitting…')
+      setExportError('')
+      try {
+        const saved = await saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || ''))
+        await submitOnlineResponse(saved.id)
+        setStatus('Complete')
+        setShowCompletionDialog(true)
+      } catch {
+        setExportError("We couldn't submit your response. Your work is still saved on this device; check your connection and try again.")
+        setStatus('Submission failed')
+      }
+      return
+    }
+
     try {
       exportResponseJson(buildDocument())
     } catch {
@@ -1538,13 +1642,14 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           {previewMode && (
             <button type="button" onClick={handleBackToBuilder} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><ArrowLeft className="h-4 w-4" />Back to builder</button>
           )}
-          {!previewMode && (
+          {!previewMode && !onlineWorksheetId && (
             <>
               <button onClick={handleStartNew} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><Play className="h-4 w-4" />Start New</button>
               <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>
               <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>
             </>
           )}
+          {onlineWorksheetId && <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800"><CloudUpload className="h-4 w-4" />Online workbook{publicCode ? ` · ${publicCode}` : ''}</span>}
           {previewMode && <span className="rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700">Preview mode</span>}
         </div>
       </header>
@@ -1601,8 +1706,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={pageIndex === 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
-            <button onClick={handleNext} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
-              {pageIndex === totalPages - 1 ? 'Finish' : 'Next'}
+            <button onClick={() => void handleNext()} disabled={status === 'Submitting…'} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
+              {status === 'Submitting…' ? 'Submitting…' : pageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
             </button>
           </div>
         </section>
@@ -1646,7 +1751,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
           <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Worksheet complete</p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">Your response has been exported</h2>
+            <h2 className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
             <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{completionMessage}</p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -4275,6 +4380,7 @@ function BuilderPage({
   setDefinition: WorksheetBuilderSetter
   importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
 }) {
+  const { user, loading: authLoading } = useTeacherAuth()
   const blockLibrary: Array<{ type: string; label?: string; description: string }> = [
     { type: 'content', label: 'Information panel', description: 'Static instructional text, prompts, or explanatory copy.' },
     { type: 'richTextInfo', label: 'Rich text information', description: 'Teacher-authored formatted information displayed to learners.' },
@@ -4329,6 +4435,10 @@ function BuilderPage({
   const [librarySearch, setLibrarySearch] = useState('')
   const [openBlockMenuId, setOpenBlockMenuId] = useState<string | null>(null)
   const [aiPromptCopied, setAiPromptCopied] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [publishError, setPublishError] = useState('')
+  const [publishedWorkbook, setPublishedWorkbook] = useState<OnlineWorksheetRow | null>(null)
+  const [shareCopied, setShareCopied] = useState(false)
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -4770,6 +4880,43 @@ function BuilderPage({
   }))
   const synthesisSettings = definition.synthesis || {}
 
+  const shareLink = publishedWorkbook
+    ? `${window.location.origin}${window.location.pathname}#/join/${publishedWorkbook.public_code}`
+    : ''
+
+  const handlePublish = async () => {
+    setPublishError('')
+    if (!user) {
+      setPublishError('Sign in with a teacher account before publishing.')
+      return
+    }
+    if (!definition.title.trim() || definition.pages.length === 0) {
+      setPublishError('Add a title and at least one page before publishing.')
+      return
+    }
+
+    setPublishing(true)
+    try {
+      const workbook = await publishWorksheet(definition)
+      setPublishedWorkbook(workbook)
+    } catch (error) {
+      setPublishError(error instanceof Error ? error.message : 'The workbook could not be published. Please try again.')
+    } finally {
+      setPublishing(false)
+    }
+  }
+
+  const copyShareLink = async () => {
+    if (!shareLink) return
+    try {
+      await navigator.clipboard.writeText(shareLink)
+      setShareCopied(true)
+      window.setTimeout(() => setShareCopied(false), 1800)
+    } catch {
+      setPublishError('Copying was blocked. Select and copy the link below instead.')
+    }
+  }
+
   const updateSynthesisSettings = (partial: Partial<WorksheetSynthesisSettings>) => {
     setDefinition((previous) => {
       const merged = { ...(previous.synthesis || {}), ...partial }
@@ -4853,6 +5000,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
             <input type="file" accept="application/json" className="hidden" onChange={importWorksheetDefinition} />
           </label>
           <Link to="/preview" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><Eye className="h-3.5 w-3.5" />Preview</Link>
+          <button type="button" onClick={() => void handlePublish()} disabled={publishing || authLoading} className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"><CloudUpload className="h-3.5 w-3.5" />{publishing ? 'Publishing…' : 'Publish & invite'}</button>
           <button
             onClick={() => {
               const blob = new Blob([JSON.stringify(definition, null, 2)], { type: 'application/json' })
@@ -4870,6 +5018,29 @@ Make the language concise and appropriate for the learners. Do not include Markd
           </button>
         </div>
       </div>
+
+      {(publishError || publishedWorkbook) && (
+        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishedWorkbook ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+          {publishedWorkbook ? (
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">Published and ready to share</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-900">Invite learners to {publishedWorkbook.title}</h2>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <span className="rounded-lg border border-emerald-300 bg-white px-4 py-2 font-mono text-lg font-bold tracking-[0.18em] text-emerald-900">{publishedWorkbook.public_code}</span>
+                  <span className="break-all text-sm text-slate-600">{shareLink}</span>
+                </div>
+              </div>
+              <button type="button" onClick={() => void copyShareLink()} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"><Copy className="h-4 w-4" />{shareCopied ? 'Link copied' : 'Copy invite link'}</button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-amber-900">
+              <p>{publishError}</p>
+              {!user && <Link to="/account" className="rounded-lg bg-slate-900 px-3 py-2 font-semibold text-white">Teacher sign in</Link>}
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
         <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

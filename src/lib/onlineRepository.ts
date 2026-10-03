@@ -4,7 +4,7 @@ import { requireSupabase } from './supabase'
 export type OnlineWorksheetStatus = 'draft' | 'published' | 'archived'
 export type OnlineResponseStatus = 'draft' | 'submitted'
 
-interface WorksheetRow {
+export interface OnlineWorksheetRow {
   id: string
   owner_id: string
   public_code: string
@@ -15,7 +15,7 @@ interface WorksheetRow {
   updated_at: string
 }
 
-interface ResponseRow {
+export interface OnlineResponseRow {
   id: string
   worksheet_id: string
   participant_id: string
@@ -62,7 +62,7 @@ export async function publishWorksheet(definition: WorksheetDefinition) {
       updated_at: now,
     })
     .select()
-    .single<WorksheetRow>()
+    .single<OnlineWorksheetRow>()
 
   if (error) throw error
   return data
@@ -76,7 +76,7 @@ export async function loadPublishedWorksheet(publicCode: string) {
     .select('*')
     .eq('public_code', publicCode.trim().toUpperCase())
     .eq('status', 'published')
-    .single<WorksheetRow>()
+    .single<OnlineWorksheetRow>()
 
   if (error) throw error
   return data
@@ -96,7 +96,7 @@ export async function saveOnlineResponse(worksheetId: string, response: Workshee
       updated_at: new Date().toISOString(),
     }, { onConflict: 'worksheet_id,participant_id' })
     .select()
-    .single<ResponseRow>()
+    .single<OnlineResponseRow>()
 
   if (error) throw error
   return data
@@ -110,7 +110,7 @@ export async function submitOnlineResponse(responseId: string) {
     .update({ status: 'submitted', submitted_at: submittedAt, updated_at: submittedAt })
     .eq('id', responseId)
     .select()
-    .single<ResponseRow>()
+    .single<OnlineResponseRow>()
 
   if (error) throw error
   return data
@@ -126,5 +126,5 @@ export async function listSubmittedResponses(worksheetId: string) {
     .order('submitted_at', { ascending: true })
 
   if (error) throw error
-  return (data as ResponseRow[]).map((row) => row.answers)
+  return (data as OnlineResponseRow[]).map((row) => row.answers)
 }
