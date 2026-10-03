@@ -4644,6 +4644,9 @@ function BuilderPage({
   const [publishError, setPublishError] = useState('')
   const [publishedWorkbook, setPublishedWorkbook] = useState<OnlineWorksheetRow | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
+  const [pastedJson, setPastedJson] = useState('')
+  const [pastedJsonError, setPastedJsonError] = useState('')
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -5122,6 +5125,25 @@ function BuilderPage({
     }
   }
 
+  const importPastedJson = () => {
+    setPastedJsonError('')
+    try {
+      const parsed = JSON.parse(pastedJson) as unknown
+      if (!isWorksheetDefinition(parsed)) {
+        setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
+        return
+      }
+      setDefinition(parsed)
+      setSelectedPageId(parsed.pages[0]?.id || '')
+      setSelectedBlockId(parsed.pages[0]?.blocks[0]?.id || '')
+      setBuilderMode(parsed.pages.length > 0 ? 'pages' : 'setup')
+      setPastedJson('')
+      setShowImportDialog(false)
+    } catch {
+      setPastedJsonError('The pasted text is not valid JSON. Check for missing commas, quotes, or brackets.')
+    }
+  }
+
   const updateSynthesisSettings = (partial: Partial<WorksheetSynthesisSettings>) => {
     setDefinition((previous) => {
       const merged = { ...(previous.synthesis || {}), ...partial }
@@ -5199,11 +5221,10 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <Link to="/" title="Back to start" aria-label="Back to start" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><ArrowLeft className="h-3.5 w-3.5" />Back</Link>
-          <label title="Load worksheet JSON" className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
+          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
             <Upload className="h-4 w-4" />
             Load JSON
-            <input type="file" accept="application/json" className="hidden" onChange={importWorksheetDefinition} />
-          </label>
+          </button>
           <Link to="/preview" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><Eye className="h-3.5 w-3.5" />Preview</Link>
           <button type="button" onClick={() => void handlePublish()} disabled={publishing || authLoading} className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-700 px-3 text-xs font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:opacity-60"><CloudUpload className="h-3.5 w-3.5" />{publishing ? 'Publishing…' : 'Publish & invite'}</button>
           <button
@@ -5245,6 +5266,45 @@ Make the language concise and appropriate for the learners. Do not include Markd
             </div>
           )}
         </section>
+      )}
+
+      {showImportDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8" role="dialog" aria-modal="true" aria-labelledby="import-json-title">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700">Import workbook</p>
+                <h2 id="import-json-title" className="mt-1 text-2xl font-bold text-slate-900">Load JSON</h2>
+                <p className="mt-2 text-sm text-slate-600">Upload a JSON file or paste the full workbook definition below.</p>
+              </div>
+              <button type="button" aria-label="Close JSON import" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
+            </div>
+
+            <label className="mt-6 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50">
+              <Upload className="h-4 w-4" />Choose a JSON file
+              <input type="file" accept="application/json" className="hidden" onChange={async (event) => { await importWorksheetDefinition(event); setShowImportDialog(false) }} />
+            </label>
+
+            <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-400"><span className="h-px flex-1 bg-slate-200" />or paste JSON<span className="h-px flex-1 bg-slate-200" /></div>
+
+            <label className="block text-sm font-medium text-slate-700">
+              Workbook JSON
+              <textarea
+                value={pastedJson}
+                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError('') }}
+                placeholder={'{\n  "id": "my-workbook",\n  "version": 1,\n  ...\n}'}
+                spellCheck={false}
+                className="mt-2 min-h-64 w-full resize-y rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
+            {pastedJsonError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{pastedJsonError}</p>}
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
+              <button type="button" onClick={importPastedJson} disabled={!pastedJson.trim()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">Import pasted JSON</button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
