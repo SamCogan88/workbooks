@@ -1,10 +1,12 @@
 import type { ChangeEvent } from 'react'
-import { BarChart3, FileText, GraduationCap, Home, Play, Trash2, Upload, User, Wrench } from 'lucide-react'
+import { BarChart3, FileText, GraduationCap, Home, LogIn, Play, Trash2, Upload, User, Wrench } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import type { WorksheetDefinition } from '../lib/types'
+import { useTeacherAuth } from './TeacherAuth'
 
 export function GlobalBreadcrumb() {
   const location = useLocation()
+  const { user, loading } = useTeacherAuth()
   const labels: Record<string, string> = {
     '/builder': 'Worksheet builder',
     '/system-guide': 'System guide',
@@ -15,17 +17,24 @@ export function GlobalBreadcrumb() {
     '/worksheet': 'Worksheet player',
     '/worksheet/ai-tool-lab': 'Worksheet player',
     '/preview': 'Worksheet preview',
+    '/account': 'Teacher account',
   }
 
   return (
     <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-2 text-sm text-slate-600">
-        <Link to="/" className="inline-flex items-center gap-1.5 font-medium text-slate-800 hover:text-blue-700">
-          <Home className="h-4 w-4" />
-          Home
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-2 text-sm text-slate-600">
+        <div className="flex min-w-0 items-center gap-2">
+          <Link to="/" className="inline-flex items-center gap-1.5 font-medium text-slate-800 hover:text-blue-700">
+            <Home className="h-4 w-4" />
+            Home
+          </Link>
+          <span aria-hidden="true">/</span>
+          <span className="truncate">{labels[location.pathname] ?? 'Start'}</span>
+        </div>
+        <Link to="/account" className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-medium text-slate-700 hover:bg-slate-100 hover:text-blue-700">
+          <LogIn className="h-4 w-4" />
+          {loading ? 'Account' : user ? (user.user_metadata?.display_name || user.email || 'Account') : 'Teacher sign in'}
         </Link>
-        <span aria-hidden="true">/</span>
-        <span>{labels[location.pathname] ?? 'Start'}</span>
       </div>
     </div>
   )
@@ -40,6 +49,7 @@ interface HomeScreenProps {
 
 export function HomeScreen({ definition, definitionStatus, importAndOpenWorksheet, clearWorksheetDefinition }: HomeScreenProps) {
   const hasLoadedWorksheet = definition.pages.length > 0
+  const { user } = useTeacherAuth()
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col justify-center gap-8 px-6 py-12">
@@ -81,6 +91,7 @@ export function HomeScreen({ definition, definitionStatus, importAndOpenWorkshee
             <h3 className="mt-1 text-lg font-bold text-slate-900">Create and analyze</h3>
             <p className="mt-1 text-sm text-slate-600">Build worksheets and combine class response files into one synthesis report.</p>
             <div className="mt-4 flex flex-wrap gap-3">
+              <Link to="/account" className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-600"><GraduationCap className="h-4 w-4" />{user ? 'Teacher account' : 'Teacher sign in'}</Link>
               <Link to="/builder" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><Wrench className="h-4 w-4" />Worksheet builder</Link>
               <Link to="/report" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><BarChart3 className="h-4 w-4" />Reports &amp; synthesis</Link>
             </div>

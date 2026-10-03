@@ -41,6 +41,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import { GlobalBreadcrumb, HomeScreen } from './components/AppChrome'
+import { TeacherAccountPage, TeacherAuthProvider } from './components/TeacherAuth'
 import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings, WorksheetSynthesisSettings } from './lib/types'
 import {
   aggregateQuadrantMean,
@@ -331,9 +332,10 @@ function App() {
 
   return (
     <HashRouter>
-      <div className="min-h-screen bg-slate-100 text-slate-900">
-        <GlobalBreadcrumb />
-        <Routes>
+      <TeacherAuthProvider>
+        <div className="min-h-screen bg-slate-100 text-slate-900">
+          <GlobalBreadcrumb />
+          <Routes>
           <Route
             path="/"
             element={(
@@ -352,6 +354,7 @@ function App() {
           <Route path="/report" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/report/ai-tool-lab" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/system-guide" element={<SystemGuidePage />} />
+          <Route path="/account" element={<TeacherAccountPage />} />
           <Route
             path="/builder"
             element={(
@@ -363,8 +366,9 @@ function App() {
             )}
           />
           <Route path="/preview" element={<WorksheetPlayer definition={activeDefinition} previewMode />} />
-        </Routes>
-      </div>
+          </Routes>
+        </div>
+      </TeacherAuthProvider>
     </HashRouter>
   )
 }
