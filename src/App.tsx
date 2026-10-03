@@ -10,6 +10,7 @@ import {
   AlignLeft,
   ArrowLeft,
   BadgeCheck,
+  BookOpen,
   CheckSquare,
   ChevronRight,
   CircleDot,
@@ -21,17 +22,21 @@ import {
   ExternalLink,
   FileUp,
   FileText,
+  GraduationCap,
   Grid2X2,
   Heading,
   Image,
   Link as LinkIcon,
   ListChecks,
   ListOrdered,
+  LogOut,
+  BarChart3,
   MoreVertical,
   Plus,
   Play,
   Scale,
   Search,
+  RefreshCw,
   Shuffle,
   SlidersHorizontal,
   Table2,
@@ -55,7 +60,7 @@ import {
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
 import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
-import { loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
@@ -359,6 +364,8 @@ function App() {
           <Route path="/report/ai-tool-lab" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/system-guide" element={<SystemGuidePage />} />
           <Route path="/account" element={<TeacherAccountPage />} />
+          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setActiveDefinition} />} />
+          <Route path="/teacher/workbooks/:workbookId/report" element={<OnlineTeacherReportPage />} />
           <Route path="/join" element={<OnlineJoinPage />} />
           <Route path="/join/:publicCode" element={<OnlineJoinPage />} />
           <Route
@@ -439,6 +446,198 @@ function OnlineJoinPage() {
       </section>
     </main>
   )
+}
+
+function TeacherDashboard({ onOpenWorkbook }: { onOpenWorkbook: (definition: WorksheetDefinition) => void }) {
+  const { user, loading: authLoading, signOut } = useTeacherAuth()
+  const navigate = useNavigate()
+  const [workbooks, setWorkbooks] = useState<OnlineWorksheetRow[]>([])
+  const [responsesByWorkbook, setResponsesByWorkbook] = useState<Record<string, OnlineResponseRow[]>>({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [copiedCode, setCopiedCode] = useState('')
+
+  useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      setLoading(false)
+      return
+    }
+
+    let active = true
+    setLoading(true)
+    setError('')
+    void listOwnedWorksheets().then(async (ownedWorkbooks) => {
+      const responseEntries = await Promise.all(ownedWorkbooks.map(async (workbook) => (
+        [workbook.id, await listSubmittedResponseRows(workbook.id)] as const
+      )))
+      if (!active) return
+      setWorkbooks(ownedWorkbooks)
+      setResponsesByWorkbook(Object.fromEntries(responseEntries))
+      setLoading(false)
+    }).catch((loadError) => {
+      if (!active) return
+      setError(loadError instanceof Error ? loadError.message : 'Your workbooks could not be loaded.')
+      setLoading(false)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [authLoading, refreshKey, user])
+
+  const copyInvite = async (workbook: OnlineWorksheetRow) => {
+    const link = `${window.location.origin}${window.location.pathname}#/join/${workbook.public_code}`
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopiedCode(workbook.public_code)
+      window.setTimeout(() => setCopiedCode(''), 1800)
+    } catch {
+      setError('Copying was blocked by the browser. Open the workbook and copy its address instead.')
+    }
+  }
+
+  const handleSignOut = async () => {
+    await signOut()
+    navigate('/')
+  }
+
+  if (authLoading || loading) {
+    return <main className="mx-auto flex min-h-[calc(100vh-45px)] max-w-6xl items-center justify-center px-5 py-10 text-sm text-slate-600"><RefreshCw className="mr-2 h-5 w-5 animate-spin" />Loading your workbooks…</main>
+  }
+
+  if (!user) {
+    return (
+      <main className="mx-auto flex min-h-[calc(100vh-45px)] max-w-3xl items-center px-5 py-10">
+        <section className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <GraduationCap className="mx-auto h-10 w-10 text-emerald-700" />
+          <h1 className="mt-4 text-2xl font-bold text-slate-900">Teacher sign-in required</h1>
+          <p className="mt-2 text-sm text-slate-600">Sign in to see your published workbooks and returned activities.</p>
+          <Link to="/account" className="mt-6 inline-flex rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white">Teacher sign in</Link>
+        </section>
+      </main>
+    )
+  }
+
+  return (
+    <main className="mx-auto max-w-6xl px-5 py-8">
+      <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Teacher workspace</p>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-900">My workbooks</h1>
+            <p className="mt-2 text-sm text-slate-600">Create activities, invite learners, and review returned work.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link to="/builder" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500"><Plus className="h-4 w-4" />Create workbook</Link>
+            <button type="button" onClick={() => setRefreshKey((value) => value + 1)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><RefreshCw className="h-4 w-4" />Refresh</button>
+            <button type="button" onClick={() => void handleSignOut()} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><LogOut className="h-4 w-4" />Sign out</button>
+          </div>
+        </div>
+        <p className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-500">Signed in as {user.email}</p>
+      </header>
+
+      {error && <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+
+      {workbooks.length === 0 ? (
+        <section className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+          <BookOpen className="mx-auto h-10 w-10 text-slate-400" />
+          <h2 className="mt-4 text-xl font-bold text-slate-900">No published workbooks yet</h2>
+          <p className="mt-2 text-sm text-slate-600">Build your first activity, then use Publish &amp; invite.</p>
+          <Link to="/builder" className="mt-6 inline-flex rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">Create workbook</Link>
+        </section>
+      ) : (
+        <section className="mt-6 grid gap-4 md:grid-cols-2">
+          {workbooks.map((workbook) => {
+            const responses = responsesByWorkbook[workbook.id] || []
+            return (
+              <article key={workbook.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.15em] text-blue-700">{workbook.status}</p>
+                    <h2 className="mt-1 text-xl font-bold text-slate-900">{workbook.title}</h2>
+                    <p className="mt-1 text-xs text-slate-500">Published {new Date(workbook.created_at).toLocaleDateString()}</p>
+                  </div>
+                  <span className="rounded-lg bg-slate-100 px-3 py-2 font-mono text-sm font-bold tracking-[0.14em] text-slate-800">{workbook.public_code}</span>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-emerald-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Submitted</p>
+                    <p className="mt-1 text-2xl font-bold text-emerald-900">{responses.length}</p>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pages</p>
+                    <p className="mt-1 text-2xl font-bold text-slate-900">{workbook.definition.pages.length}</p>
+                  </div>
+                </div>
+
+                {responses.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    {responses.slice(0, 3).map((response) => (
+                      <div key={response.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                        <span className="font-medium text-slate-700">{response.participant_label || response.answers.group || response.answers.subject || 'Anonymous learner'}</span>
+                        <span className="text-xs text-slate-500">{response.submitted_at ? new Date(response.submitted_at).toLocaleString() : 'Submitted'}</span>
+                      </div>
+                    ))}
+                    {responses.length > 3 && <p className="text-xs text-slate-500">And {responses.length - 3} more…</p>}
+                  </div>
+                )}
+
+                <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+                  <Link to={`/teacher/workbooks/${workbook.id}/report`} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white"><BarChart3 className="h-4 w-4" />View responses</Link>
+                  <button type="button" onClick={() => void copyInvite(workbook)} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700"><Copy className="h-4 w-4" />{copiedCode === workbook.public_code ? 'Link copied' : 'Copy invite'}</button>
+                  <button type="button" onClick={() => { onOpenWorkbook(workbook.definition); navigate('/builder') }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700">Open in builder</button>
+                </div>
+              </article>
+            )
+          })}
+        </section>
+      )}
+    </main>
+  )
+}
+
+function OnlineTeacherReportPage() {
+  const { workbookId = '' } = useParams()
+  const { user, loading: authLoading } = useTeacherAuth()
+  const [workbook, setWorkbook] = useState<OnlineWorksheetRow | null>(null)
+  const [responses, setResponses] = useState<WorksheetResponse[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (authLoading) return
+    if (!user || !workbookId) {
+      setLoading(false)
+      return
+    }
+
+    let active = true
+    setLoading(true)
+    setError('')
+    void Promise.all([loadOwnedWorksheet(workbookId), listSubmittedResponses(workbookId)]).then(([loadedWorkbook, loadedResponses]) => {
+      if (!active) return
+      setWorkbook(loadedWorkbook)
+      setResponses(loadedResponses)
+      setLoading(false)
+    }).catch((loadError) => {
+      if (!active) return
+      setError(loadError instanceof Error ? loadError.message : 'The workbook report could not be loaded.')
+      setLoading(false)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [authLoading, user, workbookId])
+
+  if (authLoading || loading) return <main className="mx-auto flex min-h-[calc(100vh-45px)] items-center justify-center text-sm text-slate-600"><RefreshCw className="mr-2 h-5 w-5 animate-spin" />Loading returned work…</main>
+  if (!user) return <main className="mx-auto max-w-3xl px-5 py-12 text-center"><h1 className="text-2xl font-bold">Teacher sign-in required</h1><Link to="/account" className="mt-5 inline-flex rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white">Teacher sign in</Link></main>
+  if (error || !workbook) return <main className="mx-auto max-w-3xl px-5 py-12"><p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || 'Workbook not found.'}</p><Link to="/teacher" className="mt-4 inline-flex text-sm font-semibold text-blue-700">Back to my workbooks</Link></main>
+
+  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} backTo="/teacher" />
 }
 
 function SystemGuidePage() {
@@ -1333,7 +1532,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }, 900)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildDocument, isSessionHydrated, onlineWorksheetId, status])
+  }, [buildDocument, isSessionHydrated, onlineWorksheetId, responses, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -3417,8 +3616,8 @@ function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x:
   pdf.circle(pointX, pointY, 4, 'FD')
 }
 
-function SynthesisViewer({ definition, initialMode = 'student' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher' }) {
-  const [responses, setResponses] = useState<WorksheetResponse[]>([])
+function SynthesisViewer({ definition, initialMode = 'student', initialResponses, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; backTo?: string }) {
+  const [responses, setResponses] = useState<WorksheetResponse[]>(initialResponses || [])
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
   const [mode, setMode] = useState<'student' | 'teacher'>(initialMode)
@@ -3924,6 +4123,12 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
     setMode(initialMode)
   }, [initialMode])
 
+  useEffect(() => {
+    if (!initialResponses) return
+    setResponses(initialResponses)
+    setImportInfo(`Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
+  }, [initialResponses])
+
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
     const parsed: WorksheetResponse[] = []
@@ -4190,7 +4395,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
         <div className="bg-slate-900 px-6 py-5 text-white">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Student synthesis</h1>
-            <Link to="/" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-400 px-3 py-2 text-sm font-medium text-slate-100 hover:border-slate-200"><ArrowLeft className="h-4 w-4" />Back to start</Link>
+            <Link to={backTo} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-400 px-3 py-2 text-sm font-medium text-slate-100 hover:border-slate-200"><ArrowLeft className="h-4 w-4" />{backTo === '/teacher' ? 'Back to my workbooks' : 'Back to start'}</Link>
           </div>
           <p className="mt-2 text-sm text-slate-300">A student-facing summary of what the class is noticing across the submitted responses.</p>
           <p className="mt-2 text-xs text-slate-400">Expected worksheet: {definition.id} v{definition.version}</p>
@@ -4295,7 +4500,7 @@ function SynthesisViewer({ definition, initialMode = 'student' }: { definition: 
         <div className="bg-slate-900 px-6 py-5 text-white">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Teacher report</h1>
-            <Link to="/" className="inline-flex items-center gap-1.5 rounded-lg border border-slate-400 px-3 py-2 text-sm font-medium text-slate-100 hover:border-slate-200"><ArrowLeft className="h-4 w-4" />Back to start</Link>
+            <Link to={backTo} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-400 px-3 py-2 text-sm font-medium text-slate-100 hover:border-slate-200"><ArrowLeft className="h-4 w-4" />{backTo === '/teacher' ? 'Back to my workbooks' : 'Back to start'}</Link>
           </div>
           <p className="mt-2 text-sm text-slate-300">A teacher-facing summary of class patterns, strengths, and reportable trends for the current worksheet.</p>
           <p className="mt-2 text-xs text-slate-400">Expected worksheet: {definition.id} v{definition.version}</p>

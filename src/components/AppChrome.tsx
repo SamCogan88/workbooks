@@ -18,6 +18,7 @@ export function GlobalBreadcrumb() {
     '/worksheet/ai-tool-lab': 'Worksheet player',
     '/preview': 'Worksheet preview',
     '/account': 'Teacher account',
+    '/teacher': 'My workbooks',
   }
 
   return (
@@ -29,11 +30,11 @@ export function GlobalBreadcrumb() {
             Home
           </Link>
           <span aria-hidden="true">/</span>
-          <span className="truncate">{location.pathname.startsWith('/join') ? 'Join workbook' : labels[location.pathname] ?? 'Start'}</span>
+          <span className="truncate">{location.pathname.startsWith('/join') ? 'Join workbook' : location.pathname.startsWith('/teacher/workbooks/') ? 'Workbook responses' : labels[location.pathname] ?? 'Start'}</span>
         </div>
-        <Link to="/account" className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-medium text-slate-700 hover:bg-slate-100 hover:text-blue-700">
+        <Link to={user ? '/teacher' : '/account'} className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-medium text-slate-700 hover:bg-slate-100 hover:text-blue-700">
           <LogIn className="h-4 w-4" />
-          {loading ? 'Account' : user ? (user.user_metadata?.display_name || user.email || 'Account') : 'Teacher sign in'}
+          {loading ? 'Teacher' : user ? 'My workbooks' : 'Teacher sign in'}
         </Link>
       </div>
     </div>
@@ -72,8 +73,8 @@ export function HomeScreen({ definition, definitionStatus, importAndOpenWorkshee
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
             <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.15em] text-blue-700"><User className="h-4 w-4" />Student</p>
-            <h3 className="mt-1 text-lg font-bold text-slate-900">Complete worksheet</h3>
-            <p className="mt-1 text-sm text-slate-600">Open the active worksheet and submit your response.</p>
+            <h3 className="mt-1 text-lg font-bold text-slate-900">Join an activity</h3>
+            <p className="mt-1 text-sm text-slate-600">Enter a code from your teacher. No student account is needed.</p>
             <div className="mt-4 flex flex-wrap gap-3">
               <Link to="/join" className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-500"><UserPlus className="h-4 w-4" />Join with a code</Link>
               {hasLoadedWorksheet ? (
@@ -89,12 +90,12 @@ export function HomeScreen({ definition, definitionStatus, importAndOpenWorkshee
 
           <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
             <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.15em] text-emerald-700"><GraduationCap className="h-4 w-4" />Teacher</p>
-            <h3 className="mt-1 text-lg font-bold text-slate-900">Create and analyze</h3>
-            <p className="mt-1 text-sm text-slate-600">Build worksheets and combine class response files into one synthesis report.</p>
+            <h3 className="mt-1 text-lg font-bold text-slate-900">Teacher workspace</h3>
+            <p className="mt-1 text-sm text-slate-600">Sign in to create workbooks, invite learners, and review returned work.</p>
             <div className="mt-4 flex flex-wrap gap-3">
-              <Link to="/account" className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-600"><GraduationCap className="h-4 w-4" />{user ? 'Teacher account' : 'Teacher sign in'}</Link>
-              <Link to="/builder" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><Wrench className="h-4 w-4" />Worksheet builder</Link>
-              <Link to="/report" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><BarChart3 className="h-4 w-4" />Reports &amp; synthesis</Link>
+              <Link to={user ? '/teacher' : '/account'} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-600"><GraduationCap className="h-4 w-4" />{user ? 'Open my workbooks' : 'Teacher sign in'}</Link>
+              {user && <Link to="/builder" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><Wrench className="h-4 w-4" />Worksheet builder</Link>}
+              {user && <Link to="/report" className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:border-slate-400"><BarChart3 className="h-4 w-4" />Reports &amp; synthesis</Link>}
             </div>
           </section>
         </div>

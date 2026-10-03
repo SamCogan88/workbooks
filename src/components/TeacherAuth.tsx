@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { CheckCircle2, GraduationCap, LoaderCircle, LockKeyhole, Mail, UserRound } from 'lucide-react'
 import type { User } from '@supabase/supabase-js'
+import { Navigate } from 'react-router-dom'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 
 interface TeacherAuthContextValue {
@@ -131,6 +132,8 @@ export function TeacherAccountPage() {
       setSubmitting(false)
     }
   }
+
+  if (!loading && user) return <Navigate to="/teacher" replace />
 
   return (
     <main className="mx-auto flex min-h-[calc(100vh-45px)] max-w-5xl items-center px-5 py-10">

@@ -68,6 +68,50 @@ export async function publishWorksheet(definition: WorksheetDefinition) {
   return data
 }
 
+export async function listOwnedWorksheets() {
+  const client = requireSupabase()
+  const { data: userData, error: userError } = await client.auth.getUser()
+  if (userError) throw userError
+  if (!userData.user || userData.user.is_anonymous) throw new Error('A permanent teacher account is required.')
+  const { data, error } = await client
+    .from('worksheets')
+    .select('*')
+    .eq('owner_id', userData.user.id)
+    .order('updated_at', { ascending: false })
+
+  if (error) throw error
+  return data as OnlineWorksheetRow[]
+}
+
+export async function loadOwnedWorksheet(worksheetId: string) {
+  const client = requireSupabase()
+  const { data: userData, error: userError } = await client.auth.getUser()
+  if (userError) throw userError
+  if (!userData.user || userData.user.is_anonymous) throw new Error('A permanent teacher account is required.')
+  const { data, error } = await client
+    .from('worksheets')
+    .select('*')
+    .eq('id', worksheetId)
+    .eq('owner_id', userData.user.id)
+    .single<OnlineWorksheetRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function listSubmittedResponseRows(worksheetId: string) {
+  const client = requireSupabase()
+  const { data, error } = await client
+    .from('responses')
+    .select('*')
+    .eq('worksheet_id', worksheetId)
+    .eq('status', 'submitted')
+    .order('submitted_at', { ascending: false })
+
+  if (error) throw error
+  return data as OnlineResponseRow[]
+}
+
 export async function loadPublishedWorksheet(publicCode: string) {
   const client = requireSupabase()
   await ensureAnonymousLearnerSession()
@@ -117,14 +161,6 @@ export async function submitOnlineResponse(responseId: string) {
 }
 
 export async function listSubmittedResponses(worksheetId: string) {
-  const client = requireSupabase()
-  const { data, error } = await client
-    .from('responses')
-    .select('*')
-    .eq('worksheet_id', worksheetId)
-    .eq('status', 'submitted')
-    .order('submitted_at', { ascending: true })
-
-  if (error) throw error
-  return (data as OnlineResponseRow[]).map((row) => row.answers)
+  const rows = await listSubmittedResponseRows(worksheetId)
+  return rows.slice().reverse().map((row) => row.answers)
 }
