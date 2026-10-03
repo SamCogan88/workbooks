@@ -3880,8 +3880,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     [filteredGroupings],
   )
   const studentSynthesis = useMemo(
-    () => buildStudentSynthesis(groupings, structure.radarBlockId, synthesisConfig.groupLabel),
-    [groupings, structure.radarBlockId, synthesisConfig.groupLabel],
+    () => buildStudentSynthesis(filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel, definition),
+    [definition, filteredGroupings, structure.radarBlockId, synthesisConfig.groupLabel],
   )
 
   const getVisiblePageSections = useCallback((groupingResponses: WorksheetResponse[]) => (
@@ -4646,8 +4646,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           <div className="mt-3 text-3xl font-bold text-slate-900">{filteredResponseCount}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-violet-50 to-white p-4 shadow-sm">
-          <div className="text-sm text-slate-500">Top result</div>
-          <div className="mt-3 text-2xl font-bold text-slate-900">{studentSynthesis.topGroup}</div>
+          <div className="text-sm text-slate-500">Response labels</div>
+          <div className="mt-3 text-3xl font-bold text-slate-900">{new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-sm">
           <div className="text-sm text-slate-500">{pluralizeLabel(synthesisConfig.groupLabel, filteredGroupings.length)}</div>
@@ -4662,30 +4662,27 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         <h2 className="mt-2 text-3xl font-bold text-slate-900">{studentSynthesis.headline}</h2>
         <p className="mt-4 max-w-3xl text-base text-slate-600">{studentSynthesis.summary}</p>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-3">
+        {studentSynthesis.highlights.length > 0 && <div className="mt-6 grid gap-4 md:grid-cols-3">
           {studentSynthesis.highlights.map((highlight, index) => (
             <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Insight {index + 1}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Measured pattern {index + 1}</p>
               <p className="mt-3 text-sm text-slate-700">{highlight}</p>
             </div>
           ))}
-        </div>
+        </div>}
 
-        <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+        {studentSynthesis.recommendations.length > 0 && <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
           <h3 className="text-lg font-semibold text-emerald-900">What the class could do next</h3>
           <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-emerald-800 marker:text-emerald-600">
             {studentSynthesis.recommendations.map((recommendation, index) => (
               <li key={index} className="pl-1">{recommendation}</li>
             ))}
           </ul>
-        </div>
+        </div>}
       </section>
 
       <section className="mt-8 space-y-5">
         {filteredGroupings.map((grouping) => {
-          const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-          const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
-          const topRanked = Object.entries(avgRadar).sort((left, right) => Number(right[1]) - Number(left[1]))[0]
           return (
             <article key={grouping.key} className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -4695,7 +4692,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
                 </div>
                 <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-700">{formatCountLabel(grouping.responses.length, 'evaluation')}</span>
               </div>
-              <p className="mt-3 text-sm text-slate-600">The strongest pattern in this {synthesisConfig.groupLabel.toLowerCase()} was {topRanked ? topRanked[0] : 'overall response quality'} with an average score of {topRanked ? Number(topRanked[1]).toFixed(1) : 'n/a'}.</p>
+              <p className="mt-3 text-sm text-slate-600">This {synthesisConfig.groupLabel.toLowerCase()} contains {formatCountLabel(grouping.responses.length, 'response')}. Expand its worksheet sections to inspect the recorded evidence.</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {grouping.responses.map((response) => (
                   <span key={response.responseId} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700">

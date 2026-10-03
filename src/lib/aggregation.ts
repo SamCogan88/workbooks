@@ -229,40 +229,67 @@ export function aggregateDecisionMatrix(
   })
 }
 
-export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBlockId = 'radar-eval', groupLabel = 'Response group') {
+export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBlockId = 'radar-eval', groupLabel = 'Response group', definition?: WorksheetDefinition) {
   if (!groupings.length) {
     return {
-      headline: 'The class is ready to begin synthesising their responses.',
-      summary: 'Upload a set of response files to generate a student-friendly summary of the class findings.',
-      highlights: ['No responses are available yet.', 'Once students submit results, this synthesis will show the strongest patterns.'],
-      recommendations: ['Review the prompts with students.', 'Discuss the most common strengths and areas for improvement.'],
-      topGroup: `No ${groupLabel.toLowerCase()} yet`,
+      headline: 'No responses are available yet',
+      summary: 'Import or collect submitted responses to create a class overview.',
+      highlights: [],
+      recommendations: [],
+      topGroup: '',
     }
   }
 
-  const rankedGroups = groupings.map((group) => {
-    const total = group.responses.reduce((sum, response) => {
-      const radar = response.responses?.[radarBlockId] || {}
-      const scores = Object.values(radar).filter((value) => typeof value === 'number') as number[]
-      return sum + (scores.length ? scores.reduce((innerSum, score) => innerSum + Number(score), 0) / scores.length : 0)
-    }, 0)
-    return { label: group.label, score: group.responses.length ? total / group.responses.length : 0 }
-  }).sort((left, right) => right.score - left.score)
+  const allResponses = groupings.flatMap((group) => group.responses)
+  const totalResponses = allResponses.length
+  const highlights: string[] = []
 
-  const topGroup = rankedGroups[0]
+  if (groupings.length > 1) {
+    const largest = [...groupings].sort((left, right) => right.responses.length - left.responses.length)[0]
+    highlights.push(`${largest.label} contains the most responses: ${largest.responses.length} of ${totalResponses}.`)
+  }
+
+  const radarValues = new Map<string, number[]>()
+  allResponses.forEach((response) => {
+    const radar = response.responses?.[radarBlockId]
+    if (!radar || typeof radar !== 'object') return
+    Object.entries(radar).forEach(([dimension, rawValue]) => {
+      const value = Number(rawValue)
+      if (!Number.isFinite(value)) return
+      radarValues.set(dimension, [...(radarValues.get(dimension) || []), value])
+    })
+  })
+  const strongestRadar = Array.from(radarValues.entries())
+    .map(([dimension, values]) => ({ dimension, count: values.length, average: averageArray(values) }))
+    .filter((entry) => entry.count > 0)
+    .sort((left, right) => right.average - left.average)[0]
+  if (strongestRadar) highlights.push(`${strongestRadar.dimension} has the highest recorded radar average: ${strongestRadar.average.toFixed(1)} across ${strongestRadar.count} response${strongestRadar.count === 1 ? '' : 's'}.`)
+
+  const choiceBlock = definition?.pages.flatMap((page) => page.blocks).find((block) => ['verdict', 'singleSelect', 'multipleChoice', 'trueFalse', 'confidence'].includes(block.type))
+  if (choiceBlock) {
+    const counts = new Map<string, number>()
+    allResponses.forEach((response) => {
+      const rawValue = response.responses?.[choiceBlock.id]
+      const values = Array.isArray(rawValue) ? rawValue : [rawValue]
+      values.filter((value) => value !== undefined && value !== null && String(value).trim()).forEach((value) => {
+        const label = String(value)
+        counts.set(label, (counts.get(label) || 0) + 1)
+      })
+    })
+    const mostCommon = Array.from(counts.entries()).sort((left, right) => right[1] - left[1])[0]
+    if (mostCommon && mostCommon[1] > 1) {
+      highlights.push(`For “${choiceBlock.label || choiceBlock.config?.question || 'the choice question'}”, the most common response is “${mostCommon[0]}” (${mostCommon[1]} selections).`)
+    }
+  }
+
+  const groupSummary = groupings.length === 1
+    ? `This view contains ${totalResponses} submitted response${totalResponses === 1 ? '' : 's'}.`
+    : `This view contains ${totalResponses} submitted responses across ${groupings.length} ${groupLabel.toLowerCase()}s.`
   return {
-    headline: `${topGroup?.label || 'This response set'} stands out as the strongest overall result for the class.`,
-    summary: `Across the current responses, students most often highlight the strongest patterns associated with ${topGroup?.label || 'the current grouping'}, while also identifying a few areas to improve.`,
-    highlights: [
-      `${topGroup?.label || 'The leading group'} has the strongest average response pattern in the class.`,
-      'The class is showing a clear set of shared strengths and practical opportunities.',
-      'Patterns suggest the most successful responses are the ones that are clear, evidence-based, and reflective.',
-    ],
-    recommendations: [
-      'Ask students to compare what worked well across the strongest examples.',
-      'Use the class patterns to identify one next step for improvement.',
-      'Turn the strongest responses into a shared class resource or exemplar.',
-    ],
-    topGroup: topGroup?.label || `No ${groupLabel.toLowerCase()} yet`,
+    headline: 'Class response overview',
+    summary: `${groupSummary} Expand the worksheet sections below to examine response distributions, written contributions, and aggregate scores.`,
+    highlights,
+    recommendations: [],
+    topGroup: '',
   }
 }

@@ -236,7 +236,7 @@ describe('worksheet page timer defaults', () => {
 })
 
 describe('student synthesis summary', () => {
-  it('creates a student-friendly synthesis from grouped responses', () => {
+  it('creates an evidence-based synthesis without claiming a lone group is strongest', () => {
     const synthesis = buildStudentSynthesis([
       { key: 'diffit', label: 'Diffit', responses: [
         { responses: { 'radar-eval': { 'Ease of use': 9, 'Pedagogical value': 8, 'Reliability': 7 } } },
@@ -244,10 +244,19 @@ describe('student synthesis summary', () => {
       ] as any },
     ])
 
-    expect(synthesis.headline).toContain('Diffit')
-    expect(synthesis.topGroup).toBe('Diffit')
+    expect(synthesis.headline).toBe('Class response overview')
+    expect(synthesis.summary).toContain('2 submitted responses')
+    expect(synthesis.topGroup).toBe('')
     expect(synthesis.highlights.length).toBeGreaterThan(0)
-    expect(synthesis.recommendations.length).toBeGreaterThan(0)
+    expect(synthesis.highlights[0]).toContain('highest recorded radar average')
+    expect(synthesis.recommendations).toEqual([])
+  })
+
+  it('omits unsupported insights when responses contain no measurable aggregate', () => {
+    const synthesis = buildStudentSynthesis([{ key: 'all-responses', label: 'All responses', responses: [{ responses: { notes: 'A reflection' } }] as any }])
+    expect(synthesis.headline).toBe('Class response overview')
+    expect(synthesis.highlights).toEqual([])
+    expect(synthesis.summary).not.toContain('strongest')
   })
 })
 
