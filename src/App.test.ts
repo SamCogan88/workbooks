@@ -341,6 +341,27 @@ describe('worksheet settings', () => {
   })
 })
 
+describe('video embeds', () => {
+  it('keeps non-YouTube video hosts on the native video player', () => {
+    const { container } = render(renderBlock({ id: 'video', type: 'video', config: { videoUrl: 'https://notyoutube.com/clip.mp4' } }, {}, vi.fn()))
+
+    expect(container.querySelector('iframe')).toBeNull()
+    expect(container.querySelector('video')?.getAttribute('src')).toBe('https://notyoutube.com/clip.mp4')
+  })
+
+  it.each([
+    ['youtube.com', 'https://youtube.com/watch?v=abc123'],
+    ['www.youtube.com', 'https://www.youtube.com/watch?v=abc123'],
+    ['m.youtube.com', 'https://m.youtube.com/watch?v=abc123'],
+    ['youtu.be', 'https://youtu.be/abc123'],
+  ])('embeds allowed YouTube host %s', (_host, videoUrl) => {
+    const { container } = render(renderBlock({ id: 'video', type: 'video', config: { videoUrl } }, {}, vi.fn()))
+
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://www.youtube.com/embed/abc123')
+    expect(container.querySelector('video')).toBeNull()
+  })
+})
+
 describe('conditional visibility', () => {
   const definition = {
     id: 'branching', version: 1, title: 'Branching', description: '',

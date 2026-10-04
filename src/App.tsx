@@ -2550,7 +2550,7 @@ function isYouTubeUrl(value: string) {
   if (!value) return false
   try {
     const parsed = new URL(value)
-    return parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')
+    return ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(parsed.hostname)
   } catch {
     return false
   }
@@ -2560,7 +2560,8 @@ function getYouTubeEmbedUrl(value: string) {
   if (!value) return ''
   try {
     const parsed = new URL(value)
-    if (parsed.hostname.includes('youtu.be')) {
+    if (!isYouTubeUrl(value)) return ''
+    if (parsed.hostname === 'youtu.be') {
       const id = parsed.pathname.replace('/', '')
       return `https://www.youtube.com/embed/${id}`
     }
