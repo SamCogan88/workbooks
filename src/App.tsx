@@ -2352,6 +2352,7 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
                 min={1}
                 max={10}
                 value={value}
+                aria-label={`${block.label || 'Radar score'}: ${dimension.label}`}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => {
                   const next = { ...(responses[block.id] || {}), [dimension.id]: Number(event.target.value) }
@@ -2675,11 +2676,13 @@ function RichTextSurface({
   onChange,
   placeholder,
   editable = true,
+  ariaLabel,
 }: {
   value: string
   onChange: (value: string) => void
   placeholder: string
   editable?: boolean
+  ariaLabel?: string
 }) {
   const editor = useEditor({
     extensions: [
@@ -2700,6 +2703,9 @@ function RichTextSurface({
     ],
     content: value || '',
     editable,
+    editorProps: {
+      attributes: ariaLabel ? { 'aria-label': ariaLabel } : {},
+    },
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
       onChange(normalizeRichTextResponse(editor.getHTML()))
@@ -2906,6 +2912,7 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
         value={currentValue}
         onChange={(value) => updateResponse(block.id, value)}
         placeholder={block.config?.placeholder || 'Write and format your response here.'}
+        ariaLabel={block.label || 'Rich text response'}
         editable
       />
       {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
@@ -3507,6 +3514,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                 <div className="text-sm font-medium text-slate-700">{pair.prompt || pair.left || `Item ${index + 1}`}</div>
                 <select
                   value={selected}
+                  aria-label={`${block.label || 'Matching'}: ${pair.prompt || pair.left || `Item ${index + 1}`}`}
                   onChange={(event) => {
                     const next = { ...(responses[block.id] || {}), [pairKey]: event.target.value }
                     updateResponse(block.id, next)
@@ -3719,6 +3727,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                 max={max}
                 step={1}
                 value={Number(values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min)}
+                aria-label={`${block.label || 'Matrix rating'}: ${row.label}`}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => updateResponse(block.id, { ...values, [row.id]: Number(event.target.value) })}
                 className="w-full"
@@ -3815,6 +3824,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             max={block.config?.max ?? 10}
             step={block.config?.step ?? 1}
             value={responses[block.id] ?? block.config?.defaultValue ?? 5}
+            aria-label={block.label || 'Rating'}
             aria-required={block.required ? true : undefined}
             onChange={(event) => updateResponse(block.id, Number(event.target.value))}
             className="w-full"

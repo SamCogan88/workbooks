@@ -528,6 +528,32 @@ describe('image prompt display configuration', () => {
 })
 
 describe('visual thinking blocks', () => {
+  it('names learner-facing sliders and matching controls from their prompts', () => {
+    const update = vi.fn()
+
+    render(createElement('div', null,
+      renderBlock({ id: 'matrix', type: 'matrix', label: 'Evaluate criteria', config: { rows: ['Clarity', 'Accuracy'], min: 1, max: 5 } }, {}, update),
+      renderBlock({ id: 'rating', type: 'rating', label: 'Overall confidence', config: { min: 0, max: 10, defaultValue: 5 } }, {}, update),
+      renderBlock({ id: 'radar', type: 'radar', label: 'Tool profile', config: { dimensions: ['Ease', 'Impact'] } }, {}, update),
+      renderBlock({ id: 'matching', type: 'matching', label: 'Match terms', config: { pairs: [{ id: 'term-a', prompt: 'Photosynthesis' }], options: ['Plants make food'] } }, {}, update),
+    ))
+
+    expect(screen.getByRole('slider', { name: 'Evaluate criteria: Clarity' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Evaluate criteria: Accuracy' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Overall confidence' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Tool profile: Ease' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Tool profile: Impact' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Match terms: Photosynthesis' })).toBeTruthy()
+  })
+
+  it('names rich text response editors from the block prompt', async () => {
+    const update = vi.fn()
+
+    render(renderBlock({ id: 'reflection', type: 'richText', label: 'Reflection', config: { mode: 'response' } }, {}, update))
+
+    expect(await screen.findByRole('textbox', { name: 'Reflection' })).toBeTruthy()
+  })
+
   it('creates continuum defaults and requires intentional completion plus configured rationale', () => {
     const config = getDefaultBlockConfig('continuum', 10)
     expect(config).toMatchObject({ leftLabel: 'Low', rightLabel: 'High', defaultValue: 50 })
