@@ -68,7 +68,9 @@ import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
   getBoardPresetColumns,
+  canNavigateToVisiblePage,
   getImageDisplayConfig,
+  getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
   getQuizSummary,
   getStructuredDefaultResponse,
@@ -1464,6 +1466,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const totalPages = visiblePages.length
   const currentPage = definition.pages[pageIndex]
   const currentVisiblePageIndex = visiblePageIndexes.indexOf(pageIndex)
+  const isRestrictedNavigation = definition.settings.navigation === 'sequential' || !definition.settings.allowPageJumping
   const visibleBlocks = currentPage
     ? getVisibleBlocks(currentPage, responses).filter((block) => previewMode || getBlockAudience(block) === 'student')
     : []
@@ -1483,16 +1486,35 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
     [currentPage, responses],
   )
+  const missingRequiredBlockLocations = useMemo(
+    () => getMissingRequiredBlockLocations(definition, responses),
+    [definition, responses],
+  )
   const canLeaveCurrentPage = missingRequiredBlocks.length === 0
   const missingRequiredBlockIds = useMemo(() => new Set(missingRequiredBlocks.map((block) => block.id)), [missingRequiredBlocks])
 
-  const buildNavigationWarning = useCallback(() => {
-    if (!currentPage || missingRequiredBlocks.length === 0) return ''
-    const labels = missingRequiredBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
-    const remainingCount = Math.max(0, missingRequiredBlocks.length - labels.length)
+  const buildRequiredBlocksWarning = useCallback((blocks: WorksheetBlock[]) => {
+    if (blocks.length === 0) return ''
+    const labels = blocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
+    const remainingCount = Math.max(0, blocks.length - labels.length)
     return `Please complete the required items before continuing:
 ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
-  }, [currentPage, missingRequiredBlocks])
+  }, [])
+
+  const buildNavigationWarning = useCallback(() => {
+    if (!currentPage || missingRequiredBlocks.length === 0) return ''
+    return buildRequiredBlocksWarning(missingRequiredBlocks)
+  }, [buildRequiredBlocksWarning, currentPage, missingRequiredBlocks])
+
+  const buildPageJumpingWarning = useCallback(() => {
+    if (definition.settings.navigation === 'sequential' && !definition.settings.allowPageJumping) {
+      return 'This worksheet is set to sequential navigation with page jumping turned off. Use Next to move through one page at a time.'
+    }
+    if (definition.settings.navigation === 'sequential') {
+      return 'This worksheet is set to sequential navigation. Use Next to move through one page at a time.'
+    }
+    return 'Page jumping is turned off for this worksheet. Use Next to move through one page at a time.'
+  }, [definition.settings.allowPageJumping, definition.settings.navigation])
 
   useEffect(() => {
     if (!isSessionHydrated || visiblePageIndexes.length === 0 || visiblePageIndexes.includes(pageIndex)) return
@@ -1569,7 +1591,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     if (hasSubmittedOnlineResponse) return
     setNavigationWarning('')
     setExportError('')
-    if (status === 'Required responses missing') {
+    if (status === 'Required responses missing' || status === 'Page jumping disabled') {
       setStatus('In progress')
     }
     setResponses((previous) => ({ ...previous, [blockId]: value }))
@@ -1583,6 +1605,15 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     const focusTarget = wrapper?.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')
     focusTarget?.focus()
   }, [missingRequiredBlocks])
+
+  const focusMissingBlock = useCallback((blockId: string) => {
+    window.setTimeout(() => {
+      const wrapper = document.getElementById(getBlockWrapperId(blockId))
+      wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const focusTarget = wrapper?.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')
+      focusTarget?.focus()
+    })
+  }, [])
 
   const buildDocument = useCallback((): WorksheetResponse => ({
     responseSchema: 'interactive-worksheet-response',
@@ -1631,9 +1662,33 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     return false
   }
 
+  const tryCompleteWorksheet = () => {
+    const firstMissingLocation = missingRequiredBlockLocations[0]
+    if (!firstMissingLocation) return true
+
+    const pageMissingBlocks = missingRequiredBlockLocations
+      .filter((location) => location.pageIndex === firstMissingLocation.pageIndex)
+      .map((location) => location.block)
+    setPageIndex(firstMissingLocation.pageIndex)
+    setValidationAttempted(true)
+    setNavigationWarning(buildRequiredBlocksWarning(pageMissingBlocks))
+    setStatus('Required responses missing')
+    focusMissingBlock(firstMissingLocation.block.id)
+    return false
+  }
+
   const goToPage = (index: number) => {
-    if (!visiblePageIndexes.includes(index)) return
-    if (index > pageIndex && !tryLeaveCurrentPage()) return
+    const targetVisiblePageIndex = visiblePageIndexes.indexOf(index)
+    if (targetVisiblePageIndex < 0) return
+    if (targetVisiblePageIndex > currentVisiblePageIndex && !tryLeaveCurrentPage()) return
+    if (!canNavigateToVisiblePage(definition.settings, currentVisiblePageIndex, targetVisiblePageIndex)) {
+      setNavigationWarning(buildPageJumpingWarning())
+      setStatus('Page jumping disabled')
+      return
+    }
+    if (status === 'Page jumping disabled') {
+      setStatus('In progress')
+    }
     setPageIndex(index)
   }
 
@@ -1644,6 +1699,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       setPageIndex(visiblePageIndexes[currentVisiblePageIndex + 1])
       return
     }
+    if (!tryCompleteWorksheet()) return
     if (onlineWorksheetId) {
       if (hasSubmittedOnlineResponse) {
         setExportError('This response has already been submitted. It is now read-only.')
@@ -2032,12 +2088,16 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
             <ul className="space-y-2 text-sm text-slate-700">
               {visiblePages.map((page, visibleIndex) => {
                 const index = definition.pages.indexOf(page)
+                const isFutureJumpDisabled = isRestrictedNavigation && visibleIndex > currentVisiblePageIndex + 1
                 return (
                 <li key={page.id}>
                   <button
                     type="button"
                     onClick={() => goToPage(index)}
-                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+                    disabled={isFutureJumpDisabled}
+                    aria-current={index === pageIndex ? 'page' : undefined}
+                    title={isFutureJumpDisabled ? buildPageJumpingWarning() : undefined}
+                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100 disabled:hover:bg-white'}`}
                   >
                     <span className="inline-flex items-center gap-2">
                       <FileText className="h-4 w-4" />
