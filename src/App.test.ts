@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createElement, Fragment, useState } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
+import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, SynthesisViewer, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { createBuilderId } from './lib/builderIds'
@@ -764,6 +764,33 @@ describe('worksheet page timer defaults', () => {
 })
 
 describe('student synthesis summary', () => {
+  it('exposes the active report mode on the segmented toggle', () => {
+    const definition = {
+      id: 'toggle-test',
+      version: 1,
+      title: 'Toggle test',
+      description: 'Checks report mode state',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [],
+    } as any
+
+    render(createElement(MemoryRouter, null, createElement(SynthesisViewer, { definition, initialMode: 'teacher' })))
+
+    expect(screen.getByRole('button', { name: 'Teacher report', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Student synthesis', pressed: false })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Student synthesis' }))
+
+    expect(screen.getByRole('button', { name: 'Student synthesis', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Teacher report', pressed: false })).toBeTruthy()
+  })
+
   it('creates an evidence-based synthesis without claiming a lone group is strongest', () => {
     const synthesis = buildStudentSynthesis([
       { key: 'diffit', label: 'Diffit', responses: [

@@ -174,8 +174,8 @@ export function TeacherAccountPage() {
           ) : (
             <>
               <div className="flex rounded-lg bg-slate-100 p-1" aria-label="Teacher account action">
-                <button type="button" onClick={() => changeMode('sign-in')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-in' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Sign in</button>
-                <button type="button" onClick={() => changeMode('sign-up')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-up' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Create account</button>
+                <button type="button" aria-pressed={mode === 'sign-in'} onClick={() => changeMode('sign-in')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-in' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Sign in</button>
+                <button type="button" aria-pressed={mode === 'sign-up'} onClick={() => changeMode('sign-up')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-up' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Create account</button>
               </div>
 
               <h2 className="mt-7 text-2xl font-bold text-slate-900">{mode === 'sign-in' ? 'Sign in to Workbooks' : 'Create your teacher account'}</h2>

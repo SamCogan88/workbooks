@@ -4193,7 +4193,7 @@ function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x:
   pdf.circle(pointX, pointY, 4, 'FD')
 }
 
-function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
+export function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
   const [responses, setResponses] = useState<WorksheetResponse[]>(initialResponses || [])
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
@@ -5051,8 +5051,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
-            <button type="button" onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
+            <button type="button" aria-pressed={mode === 'student'} onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
+            <button type="button" aria-pressed={mode === 'teacher'} onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
           </div>
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800">
             <Upload className="h-4 w-4" />
@@ -5152,8 +5152,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
-            <button type="button" onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
+            <button type="button" aria-pressed={mode === 'student'} onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
+            <button type="button" aria-pressed={mode === 'teacher'} onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
           </div>
           <div className="flex gap-3">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800">
