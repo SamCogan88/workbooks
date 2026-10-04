@@ -108,7 +108,7 @@ export function getResponseLabel(response: WorksheetResponse, definition: Worksh
   const configuredLabel = getConfiguredGroupingValue(response, config.responseLabelBlockId)
   if (configuredLabel) return configuredLabel
   if (typeof response.group === 'string' && response.group.trim()) return response.group.trim()
-  return response.responseId.slice(0, 8)
+  return typeof response.responseId === 'string' && response.responseId.trim() ? response.responseId.slice(0, 8) : 'Anonymous response'
 }
 
 export function groupResponsesByKey(definition: WorksheetDefinition, responses: WorksheetResponse[]) {

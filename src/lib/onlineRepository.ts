@@ -160,7 +160,7 @@ export async function submitOnlineResponse(responseId: string) {
   return data
 }
 
-export async function listSubmittedResponses(worksheetId: string) {
+export async function listSubmittedResponses(worksheetId: string): Promise<unknown[]> {
   const rows = await listSubmittedResponseRows(worksheetId)
   return rows.slice().reverse().map((row) => row.answers)
 }

@@ -77,6 +77,7 @@ import {
   isResponseProducingBlock,
   stripHtml,
 } from './lib/worksheetLogic'
+import { sanitiseWorksheetResponses } from './lib/responseValidation'
 
 const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
@@ -558,7 +559,7 @@ function TeacherDashboard({ onOpenWorkbook }: { onOpenWorkbook: (definition: Wor
                   <div className="mt-4 space-y-2">
                     {responses.slice(0, 3).map((response) => (
                       <div key={response.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                        <span className="font-medium text-slate-700">{response.participant_label || response.answers.group || response.answers.subject || 'Anonymous learner'}</span>
+                        <span className="font-medium text-slate-700">{response.participant_label || response.answers?.group || response.answers?.subject || 'Anonymous learner'}</span>
                         <span className="text-xs text-slate-500">{response.submitted_at ? new Date(response.submitted_at).toLocaleString() : 'Submitted'}</span>
                       </div>
                     ))}
@@ -587,6 +588,7 @@ function OnlineTeacherReportPage() {
   const [responses, setResponses] = useState<WorksheetResponse[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [reportNotice, setReportNotice] = useState('')
 
   useEffect(() => {
     if (authLoading) return
@@ -598,10 +600,15 @@ function OnlineTeacherReportPage() {
     let active = true
     setLoading(true)
     setError('')
+    setReportNotice('')
     void Promise.all([loadOwnedWorksheet(workbookId), listSubmittedResponses(workbookId)]).then(([loadedWorkbook, loadedResponses]) => {
       if (!active) return
+      const sanitised = sanitiseWorksheetResponses(loadedWorkbook.definition, loadedResponses)
       setWorkbook(loadedWorkbook)
-      setResponses(loadedResponses)
+      setResponses(sanitised.responses)
+      if (sanitised.rejectedResponses || sanitised.rejectedValues) {
+        setReportNotice(`Loaded ${sanitised.responses.length} response(s). Skipped ${sanitised.rejectedResponses} malformed response(s) and ${sanitised.rejectedValues} malformed answer value(s).`)
+      }
       setLoading(false)
     }).catch((loadError) => {
       if (!active) return
@@ -618,7 +625,7 @@ function OnlineTeacherReportPage() {
   if (!user) return <main className="mx-auto max-w-3xl px-5 py-12 text-center"><h1 className="text-2xl font-bold">Teacher sign-in required</h1><Link to="/account" className="mt-5 inline-flex rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white">Teacher sign in</Link></main>
   if (error || !workbook) return <main className="mx-auto max-w-3xl px-5 py-12"><p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || 'Workbook not found.'}</p><Link to="/teacher" className="mt-4 inline-flex text-sm font-semibold text-blue-700">Back to my workbooks</Link></main>
 
-  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} backTo="/teacher" />
+  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} initialNotice={reportNotice} backTo="/teacher" />
 }
 
 function SystemGuidePage() {
@@ -3781,7 +3788,7 @@ function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x:
   pdf.circle(pointX, pointY, 4, 'FD')
 }
 
-function SynthesisViewer({ definition, initialMode = 'student', initialResponses, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; backTo?: string }) {
+function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
   const [responses, setResponses] = useState<WorksheetResponse[]>(initialResponses || [])
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
@@ -4364,8 +4371,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   useEffect(() => {
     if (!initialResponses) return
     setResponses(initialResponses)
-    setImportInfo(`Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
-  }, [initialResponses])
+    setImportInfo(initialNotice || `Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
+  }, [initialNotice, initialResponses])
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
@@ -4395,15 +4402,17 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (parsed.length > 0) {
+      const sanitised = sanitiseWorksheetResponses(definition, parsed)
       setResponses((current) => {
-        const combined = [...current, ...parsed]
+        const combined = [...current, ...sanitised.responses]
         const uniqueByResponseId = new Map<string, WorksheetResponse>()
         combined.forEach((response) => {
           uniqueByResponseId.set(response.responseId, response)
         })
         return Array.from(uniqueByResponseId.values())
       })
-      setImportInfo(`Imported ${parsed.length} response file(s) for ${definition.title}.${rejected ? ` ${rejected} rejected.` : ''}`)
+      const totalRejected = rejected + sanitised.rejectedResponses
+      setImportInfo(`Imported ${sanitised.responses.length} response file(s) for ${definition.title}.${totalRejected ? ` ${totalRejected} rejected.` : ''}${sanitised.rejectedValues ? ` ${sanitised.rejectedValues} malformed answer value(s) ignored.` : ''}`)
     } else if (files.length > 0) {
       setImportInfo(`No files imported.${rejected ? ` ${rejected} rejected.` : ''}`)
     }
