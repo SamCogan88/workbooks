@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, Fragment, useState } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
@@ -78,6 +78,8 @@ describe('online workbook join routing', () => {
     await waitFor(() => expect(mockedLoadPublishedWorksheet).toHaveBeenLastCalledWith('CODE2'))
   })
 })
+
+afterEach(cleanup)
 
 describe('modal overlay accessibility', () => {
   it('traps focus, makes siblings inert, closes with Escape and restores focus', () => {
@@ -606,6 +608,27 @@ describe('visual thinking blocks', () => {
     fireEvent.keyDown(target, { key: 'Enter' })
 
     expect(update).toHaveBeenCalledWith('hotspot', [{ x: 51, y: 60 }])
+  })
+
+  it('associates required errors with quiz, confidence and image controls', () => {
+    const update = vi.fn()
+    const { container, unmount } = render(createElement('div', null,
+      renderBlock({ id: 'choice', type: 'multipleChoice', required: true, label: 'Pick one', config: { options: ['A', 'B'], correctAnswer: 'A' } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'tf', type: 'trueFalse', required: true, label: 'True statement', config: { correctAnswer: true } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'short', type: 'shortAnswer', required: true, label: 'Term', config: { correctAnswer: 'Answer' } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'confidence', type: 'confidence', required: true, label: 'Confidence', config: { options: ['Low', 'High'] } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'image', type: 'imagePrompt', required: true, label: 'Annotate image', config: { imageUrl: '/diagram.png' } }, {}, update, { showRequiredError: true }),
+    ))
+
+    expect(screen.getByRole('group', { name: 'Pick one' }).getAttribute('aria-describedby')).toBe('worksheet-block-error-choice')
+    expect(screen.getByText('Choose one answer to continue.').id).toBe('worksheet-block-error-choice')
+    expect(screen.getByRole('group', { name: 'True statement' }).getAttribute('aria-describedby')).toBe('worksheet-block-error-tf')
+    expect(screen.getByRole('textbox', { name: 'Term' }).closest('label')?.getAttribute('aria-describedby')).toBe('worksheet-block-error-short')
+    expect(screen.getByRole('button', { name: /Low/ }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('group', { name: /Confidence/ }).getAttribute('aria-describedby')).toBe('worksheet-block-error-confidence')
+    expect(screen.getByRole('textbox', { name: 'Annotate image' }).getAttribute('aria-required')).toBe('true')
+    expect(container.querySelector('[aria-describedby="worksheet-block-error-image"]')).toBeTruthy()
+    unmount()
   })
 
   it('requires every stable-ID decision matrix cell and aggregates valid ratings', () => {

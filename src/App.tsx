@@ -2169,7 +2169,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         <div className="mb-6">
           <div className="mb-2 flex justify-between text-sm text-slate-600">
             <span>Page {currentVisiblePageIndex + 1} of {totalPages}</span>
-            <span>{status}</span>
+            <span role="status">{status}</span>
           </div>
           {currentTimer?.enabled && (
             <div className="mb-3 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -2180,20 +2180,21 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
               <span>{formatTimerValue(pageRemainingSeconds ?? currentTimer.durationSeconds)}</span>
             </div>
           )}
-          {navigationWarning && (
-            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              <p className="font-medium">Required responses are still missing.</p>
-              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
-            </div>
-          )}
-          {exportError && (
-            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {exportError}
-            </div>
-          )}
           <div className="h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
           </div>
+        </div>
+      )}
+
+      {navigationWarning && (
+        <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="font-medium">Required responses are still missing.</p>
+          <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
+        </div>
+      )}
+      {exportError && (
+        <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {exportError}
         </div>
       )}
 
@@ -2212,13 +2213,6 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
               })}</div>
             ))}
           </fieldset>
-
-          {navigationWarning && (
-            <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              <p className="font-medium">Please complete the required items before continuing.</p>
-              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
-            </div>
-          )}
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={currentVisiblePageIndex <= 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
@@ -3465,7 +3459,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const correctIds = options.filter(isCorrectOption).map((option) => option.id)
 
       return (
-        <fieldset className="space-y-3">
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Quiz question'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {allowMultiple ? (
@@ -3478,6 +3472,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                 <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
                   <input
                     type="checkbox"
+                    aria-required={block.required ? true : undefined}
                     checked={checked}
                     onChange={() => {
                       const nextValues = Array.isArray(selectedValues) ? [...selectedValues] : []
@@ -3498,12 +3493,13 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
               const showState = selectedValues !== undefined && isSelected
               return (
                 <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                  <input type="radio" name={block.id} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
+                  <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
                   <span>{option.label}</span>
                 </label>
               )
             })
           )}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">{allowMultiple ? 'Select at least one answer to continue.' : 'Choose one answer to continue.'}</p>}
           {selectedValues !== undefined && showFeedback && (
             <div className={`rounded-xl border px-3 py-2 text-sm ${JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String(options.filter(isCorrectOption).map((option) => option.label).join(', ') || 'Not set')}.`}
@@ -3518,7 +3514,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const correctAnswer = block.config?.correctAnswer
       const showFeedback = block.config?.showFeedback !== false
       return (
-        <fieldset className="space-y-3">
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'True or false'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {['True', 'False'].map((option) => {
@@ -3528,11 +3524,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             const showState = selectedAnswer !== undefined && isSelected
             return (
               <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                <input type="radio" name={block.id} checked={selectedAnswer === boolValue} onChange={() => updateResponse(block.id, boolValue)} />
+                <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={selectedAnswer === boolValue} onChange={() => updateResponse(block.id, boolValue)} />
                 <span>{option}</span>
               </label>
             )
           })}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose true or false to continue.</p>}
           {selectedAnswer !== undefined && showFeedback && (
             <div className={`rounded-xl border px-3 py-2 text-sm ${selectedAnswer === correctAnswer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {selectedAnswer === correctAnswer ? 'Correct.' : `Incorrect. Correct answer: ${String(correctAnswer === true ? 'True' : 'False')}.`}
@@ -3549,15 +3546,18 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const normalizedSelected = selectedAnswer.trim().toLowerCase()
       const normalizedCorrect = correctAnswer.trim().toLowerCase()
       return (
-        <label className="block">
+        <label className="block" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <span className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Short answer'}</span>
           {block.config?.question && <p className="mb-2 text-xs text-slate-500">{block.config.question}</p>}
           <input
             value={selectedAnswer}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
+            aria-label={block.label || block.config?.question || 'Short answer'}
+            aria-required={block.required ? true : undefined}
+            className={`w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
             placeholder={block.config?.placeholder || 'Type your answer'}
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="mt-2 text-sm font-medium text-red-700">This response is required.</p>}
           {selectedAnswer && showFeedback && (
             <div className={`mt-3 rounded-xl border px-3 py-2 text-sm ${normalizedSelected === normalizedCorrect ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {normalizedSelected === normalizedCorrect ? 'Correct.' : `Incorrect. Correct answer: ${correctAnswer || 'Not set'}.`}
@@ -3676,7 +3676,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         updateResponse(block.id, next)
       }
       return (
-        <div className="space-y-2">
+        <div className="space-y-2" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
           {currentOrder.map((option, index: number) => (
             <div key={`${block.id}-${option.id}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -3750,10 +3750,10 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     case 'confidence': {
       const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
-        <fieldset className="space-y-3">
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
-          {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
+          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} aria-pressed={matchesOptionValue(responses[block.id], option)} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
         </fieldset>
       )
     }
@@ -3794,7 +3794,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const containSizeClass = imageSize === 'small' ? 'max-h-48' : imageSize === 'medium' ? 'max-h-72' : imageSize === 'full' ? 'max-h-none' : 'max-h-[32rem]'
       const coverSizeClass = imageSize === 'small' ? 'h-48' : imageSize === 'medium' ? 'h-72' : imageSize === 'full' ? 'aspect-video' : 'h-[32rem]'
       return (
-        <div className="space-y-3">
+        <div className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           {block.config?.imageUrl && (
             <div className={`flex w-full justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 ${imageFit === 'cover' ? coverSizeClass : ''}`}>
               <img
@@ -3809,9 +3809,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
           <textarea
             value={responses[block.id] || ''}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            className="min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
+            aria-label={block.label || 'Image response'}
+            aria-required={block.required ? true : undefined}
+            className={`min-h-24 w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
             placeholder={block.config?.placeholder || 'Add your notes here'}
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
         </div>
       )
       }
@@ -6024,7 +6027,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
       </div>
 
       {publishCardState !== 'hidden' && (
-        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+        <section role={publishCardState === 'error' ? 'alert' : 'status'} className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
           {publishCardState === 'published' && publishedWorkbook ? (
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
