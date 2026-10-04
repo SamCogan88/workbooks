@@ -200,7 +200,7 @@ export function TeacherAccountPage() {
 
                 <button type="submit" disabled={submitting} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-60">
                   {submitting && <LoaderCircle className="h-4 w-4 animate-spin" />}
-                  {submitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in' : 'Create free account'}
+                  {submitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in to Workbooks' : 'Create free account'}
                 </button>
               </form>
             </>
