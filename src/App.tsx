@@ -517,6 +517,7 @@ function App() {
             )}
           />
           <Route path="/preview" element={<WorksheetPlayer definition={activeDefinition} previewMode />} />
+          <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </TeacherAuthProvider>
@@ -527,6 +528,23 @@ function App() {
 export function OnlineJoinPageRoute() {
   const { publicCode = '' } = useParams()
   return <OnlineJoinPage key={publicCode} />
+}
+
+function NotFoundPage() {
+  return (
+    <main className="mx-auto flex min-h-[calc(100vh-49px)] max-w-3xl items-center px-5 py-12">
+      <section className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">404</p>
+        <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">Page not found</h1>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600">
+          This link may be mistyped, expired, or from an older version of Workbooks.
+        </p>
+        <Link to="/teacher" className="mt-6 inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+          My workbooks
+        </Link>
+      </section>
+    </main>
+  )
 }
 
 function OnlineJoinPage() {

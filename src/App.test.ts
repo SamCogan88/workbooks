@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createElement, Fragment, useState } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, SynthesisViewer, renderBlock } from './App'
+import App, { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, SynthesisViewer, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { createBuilderId } from './lib/builderIds'
@@ -369,6 +369,18 @@ describe('replacement character regressions', () => {
 
     expect(screen.getByRole('button', { name: 'Move Option 1 up' }).textContent).toBe('↑')
     expect(screen.getByRole('button', { name: 'Move Option 2 down' }).textContent).toBe('↓')
+  })
+})
+
+describe('application routes', () => {
+  it('shows a not found page with a link to my workbooks for unknown routes', () => {
+    window.location.hash = '#/missing-workbook'
+
+    render(createElement(App))
+
+    expect(screen.getByRole('heading', { name: 'Page not found' })).toBeTruthy()
+    const myWorkbooksLink = screen.getByRole('link', { name: 'My workbooks' })
+    expect(myWorkbooksLink.getAttribute('href')).toBe('#/teacher')
   })
 })
 
