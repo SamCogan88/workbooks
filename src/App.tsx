@@ -63,6 +63,7 @@ import {
 } from './lib/aggregation'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
   getDefaultBlockConfig,
@@ -2819,7 +2820,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const displayStyle: 'word-flicker' | 'wheel' | 'card-shuffle' = configuredDisplayStyle === 'wheel' || configuredDisplayStyle === 'card-shuffle' || configuredDisplayStyle === 'word-flicker'
     ? configuredDisplayStyle
     : 'word-flicker'
-  const animationDurationMs = Math.max(300, Number(block.config?.animationDurationMs ?? 1800))
+  const animationDurationMs = normalizeRandomizerAnimationDuration(block.config?.animationDurationMs)
   const hasCurrentValue = typeof currentValue === 'string' && items.includes(String(currentValue))
   const isLocked = requireFirstGeneration && hasCurrentValue
   const [displayValue, setDisplayValue] = useState<string>(currentValue ?? '')
@@ -2830,11 +2831,27 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const [cardDeckItems, setCardDeckItems] = useState<string[]>(items)
   const [cardPhase, setCardPhase] = useState<'preview' | 'flipping' | 'choosing' | 'revealed'>('preview')
   const [revealedCardIndex, setRevealedCardIndex] = useState<number | null>(null)
+  const animatedIntervalRef = useRef<number | null>(null)
+  const animatedTimeoutRef = useRef<number | null>(null)
+  const cardTimeoutRef = useRef<number | null>(null)
 
-  const getShuffledItems = () => {
-    if (block.config?.shuffle === false) return [...items]
-    return [...items].sort(() => Math.random() - 0.5)
-  }
+  const clearAnimatedTimers = useCallback(() => {
+    if (animatedIntervalRef.current !== null) {
+      window.clearInterval(animatedIntervalRef.current)
+      animatedIntervalRef.current = null
+    }
+    if (animatedTimeoutRef.current !== null) {
+      window.clearTimeout(animatedTimeoutRef.current)
+      animatedTimeoutRef.current = null
+    }
+  }, [])
+
+  const clearCardTimer = useCallback(() => {
+    if (cardTimeoutRef.current !== null) {
+      window.clearTimeout(cardTimeoutRef.current)
+      cardTimeoutRef.current = null
+    }
+  }, [])
 
   const cardCanPick = cardPhase === 'choosing'
   const cardHasGenerated = cardPhase !== 'preview'
@@ -2842,27 +2859,31 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const generateAnimatedValue = useCallback(() => {
     if (!items.length) return
 
-    const nextValue = getShuffledItems()[0]
+    clearAnimatedTimers()
+    const nextValue = block.config?.shuffle === false ? items[0] : selectRandomItem(items)
+    if (!nextValue) return
     const rollingIntervalMs = Math.max(80, Math.min(140, Math.round(animationDurationMs / 14)))
 
     setIsAnimating(true)
     const timer = window.setInterval(() => {
-      const rollingItem = getShuffledItems()[Math.floor(Math.random() * getShuffledItems().length)] || nextValue
+      const rollingItem = selectRandomItem(items) || nextValue
       setDisplayValue(rollingItem)
     }, rollingIntervalMs)
+    animatedIntervalRef.current = timer
 
-    window.setTimeout(() => {
-      window.clearInterval(timer)
+    animatedTimeoutRef.current = window.setTimeout(() => {
+      clearAnimatedTimers()
       setDisplayValue(nextValue)
       setIsAnimating(false)
       updateResponse(block.id, nextValue)
     }, animationDurationMs)
-  }, [animationDurationMs, block.config?.shuffle, block.id, items, updateResponse])
+  }, [animationDurationMs, block.config?.shuffle, block.id, clearAnimatedTimers, items, updateResponse])
 
   const generateWheelValue = useCallback(() => {
     if (!items.length) return
 
-    const nextValue = getShuffledItems()[0]
+    const nextValue = block.config?.shuffle === false ? items[0] : selectRandomItem(items)
+    if (!nextValue) return
     const nextIndex = items.indexOf(nextValue)
     if (nextIndex < 0) return
 
@@ -2876,17 +2897,27 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const beginCardShuffle = useCallback(() => {
     if (!items.length) return
 
+    clearCardTimer()
+    const deckItems = block.config?.shuffle === false ? [...items] : shuffleRandomizerItems(items)
     setCardPhase('flipping')
     setRevealedCardIndex(null)
     setDisplayValue('')
-    setCardDeckItems(getShuffledItems())
+    setCardDeckItems(deckItems)
     setIsAnimating(true)
 
-    window.setTimeout(() => {
+    cardTimeoutRef.current = window.setTimeout(() => {
+      cardTimeoutRef.current = null
       setIsAnimating(false)
       setCardPhase('choosing')
     }, animationDurationMs)
-  }, [animationDurationMs, block.config?.shuffle, items])
+  }, [animationDurationMs, block.config?.shuffle, clearCardTimer, items])
+
+  useEffect(() => {
+    return () => {
+      clearAnimatedTimers()
+      clearCardTimer()
+    }
+  }, [clearAnimatedTimers, clearCardTimer])
 
   const handleGenerateClick = useCallback(() => {
     if (!items.length || isAnimating || isLocked) return
@@ -2939,6 +2970,8 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
 
   useEffect(() => {
     if (!items.length) {
+      clearAnimatedTimers()
+      clearCardTimer()
       setDisplayValue('')
       setIsAnimating(false)
       setWheelTargetIndex(null)
@@ -2976,7 +3009,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
     }
 
     setCardDeckItems(items)
-  }, [currentValue, displayStyle, isAnimating, items, pendingWheelValue])
+  }, [clearAnimatedTimers, clearCardTimer, currentValue, displayStyle, isAnimating, items, pendingWheelValue])
 
   const displayClasses = isAnimating
     ? {
