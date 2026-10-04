@@ -61,6 +61,7 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
+import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
@@ -193,6 +194,15 @@ function clearRemovedBlockReferences(
   }
 
   return isSynthesisSettingsEmpty(next) ? undefined : next
+}
+
+function getConditionReferenceCount(definition: WorksheetDefinition, blockIds: string[]) {
+  const targets = new Set(blockIds)
+  return definition.pages.reduce((count, page) => {
+    const pageConditionCount = page.condition && targets.has(page.condition.blockId) ? 1 : 0
+    const blockConditionCount = page.blocks.filter((block) => block.condition && targets.has(block.condition.blockId)).length
+    return count + pageConditionCount + blockConditionCount
+  }, 0)
 }
 
 function buildResponseSearchText(response: WorksheetResponse) {
@@ -5295,7 +5305,12 @@ function BuilderPage({
       const nextPages = [...previous.pages]
       const [moved] = nextPages.splice(currentIndex, 1)
       nextPages.splice(targetIndex, 0, moved)
-      return { ...previous, pages: nextPages }
+      const nextDefinition = { ...previous, pages: nextPages }
+      if (getFirstConditionOrderViolation(nextDefinition)) {
+        window.alert('This move would put conditional content before the question it depends on. Remove or update the condition first.')
+        return previous
+      }
+      return nextDefinition
     })
   }
 
@@ -5305,16 +5320,21 @@ function BuilderPage({
     if (pageIndex < 0) return
 
     const baseTime = Date.now()
-    const duplicatedBlocks = selectedPage.blocks.map((block, blockIndex) => ({
-      ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
-      id: `block-${baseTime}-${blockIndex + 1}`,
-    }))
+    const blockIdMap: Record<string, string> = {}
+    const duplicatedBlocks = selectedPage.blocks.map((block, blockIndex) => {
+      const id = `block-${baseTime}-${blockIndex + 1}`
+      blockIdMap[block.id] = id
+      return {
+        ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
+        id,
+      }
+    })
 
     const duplicatePage: WorksheetPage = {
       ...JSON.parse(JSON.stringify(selectedPage)) as WorksheetPage,
       id: `page-${baseTime}`,
       title: `${selectedPage.title} (Copy)`,
-      blocks: duplicatedBlocks,
+      blocks: remapBlockConditions(duplicatedBlocks, blockIdMap),
     }
 
     setDefinition((previous) => {
@@ -5337,25 +5357,36 @@ function BuilderPage({
         timer: getDefaultPageTimer(),
         blocks: [],
       }
-      setDefinition((previous) => ({
-        ...previous,
-        synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
-        pages: [replacementPage],
-      }))
+      setDefinition((previous) => {
+        const removedBlockIds = selectedPage.blocks.map((block) => block.id)
+        return {
+          ...clearConditionsReferencingBlocks(previous, removedBlockIds),
+          synthesis: clearRemovedBlockReferences(previous.synthesis, removedBlockIds),
+          pages: [replacementPage],
+        }
+      })
       setSelectedPageId(replacementPage.id)
       setSelectedBlockId('')
       return
     }
 
-    if (!window.confirm('Delete this page and all of its blocks?')) return
+    const dependentConditions = getConditionReferenceCount(definition, selectedPage.blocks.map((block) => block.id))
+    const deleteMessage = dependentConditions > 0
+      ? `Delete this page and all of its blocks? This will also remove ${formatCountLabel(dependentConditions, 'condition')} that depends on its blocks.`
+      : 'Delete this page and all of its blocks?'
+    if (!window.confirm(deleteMessage)) return
     const currentIndex = definition.pages.findIndex((page) => page.id === selectedPage.id)
     const fallbackPage = definition.pages[Math.max(0, currentIndex - 1)]
 
-    setDefinition((previous) => ({
-      ...previous,
-      synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
-      pages: previous.pages.filter((page) => page.id !== selectedPage.id),
-    }))
+    setDefinition((previous) => {
+      const removedBlockIds = selectedPage.blocks.map((block) => block.id)
+      const nextDefinition = clearConditionsReferencingBlocks(previous, removedBlockIds)
+      return {
+        ...nextDefinition,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, removedBlockIds),
+        pages: nextDefinition.pages.filter((page) => page.id !== selectedPage.id),
+      }
+    })
     if (fallbackPage) {
       setSelectedPageId(fallbackPage.id)
       setSelectedBlockId(fallbackPage.blocks[0]?.id || '')
@@ -5418,19 +5449,26 @@ function BuilderPage({
     const fromIndex = selectedPage.blocks.findIndex((block) => block.id === blockId)
     if (fromIndex < 0) return
 
-    setDefinition((previous) => ({
-      ...previous,
-      pages: previous.pages.map((page) => {
-        if (page.id !== selectedPage.id) return page
-        const nextBlocks = [...page.blocks]
-        const [moved] = nextBlocks.splice(fromIndex, 1)
-        if (!moved) return page
-        const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
-        const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
-        nextBlocks.splice(boundedIndex, 0, moved)
-        return { ...page, blocks: nextBlocks }
-      }),
-    }))
+    setDefinition((previous) => {
+      const nextDefinition = {
+        ...previous,
+        pages: previous.pages.map((page) => {
+          if (page.id !== selectedPage.id) return page
+          const nextBlocks = [...page.blocks]
+          const [moved] = nextBlocks.splice(fromIndex, 1)
+          if (!moved) return page
+          const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
+          const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
+          nextBlocks.splice(boundedIndex, 0, moved)
+          return { ...page, blocks: nextBlocks }
+        }),
+      }
+      if (getFirstConditionOrderViolation(nextDefinition)) {
+        window.alert('This move would put conditional content before the question it depends on. Remove or update the condition first.')
+        return previous
+      }
+      return nextDefinition
+    })
     setSelectedBlockId(blockId)
   }
 
@@ -5525,20 +5563,28 @@ function BuilderPage({
       definition.synthesis?.responseLabelBlockId === selectedBlock.id ? 'label individual responses in synthesis' : '',
     ].filter(Boolean)
 
-    if (synthesisEffects.length > 0) {
-      const warningText = `This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`
+    const dependentConditions = getConditionReferenceCount(definition, [selectedBlock.id])
+    if (synthesisEffects.length > 0 || dependentConditions > 0) {
+      const effects = [
+        synthesisEffects.length > 0 ? `remove the ${synthesisEffects.join(' and ')} synthesis setting` : '',
+        dependentConditions > 0 ? `remove ${formatCountLabel(dependentConditions, 'condition')} that depends on it` : '',
+      ].filter(Boolean)
+      const warningText = `This block is currently used elsewhere. Deleting it will ${effects.join(' and ')}.`
       if (!window.confirm(warningText)) return
     }
 
-    setDefinition((previous) => ({
-      ...previous,
-      synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
-      pages: previous.pages.map((page) => (
-        page.id === selectedPage.id
-          ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
-          : page
-      )),
-    }))
+    setDefinition((previous) => {
+      const nextDefinition = clearConditionsReferencingBlocks(previous, [selectedBlock.id])
+      return {
+        ...nextDefinition,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
+        pages: nextDefinition.pages.map((page) => (
+          page.id === selectedPage.id
+            ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
+            : page
+        )),
+      }
+    })
   }
 
   const duplicateBlockAtIndex = (pageId: string, blockId: string, index: number) => {
@@ -5579,15 +5625,25 @@ function BuilderPage({
       definition.synthesis?.groupByBlockId === blockId ? 'group synthesis results' : '',
       definition.synthesis?.responseLabelBlockId === blockId ? 'label individual responses in synthesis' : '',
     ].filter(Boolean)
-    if (synthesisEffects.length > 0 && !window.confirm(`This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`)) return
+    const dependentConditions = getConditionReferenceCount(definition, [blockId])
+    if (synthesisEffects.length > 0 || dependentConditions > 0) {
+      const effects = [
+        synthesisEffects.length > 0 ? `remove the ${synthesisEffects.join(' and ')} synthesis setting` : '',
+        dependentConditions > 0 ? `remove ${formatCountLabel(dependentConditions, 'condition')} that depends on it` : '',
+      ].filter(Boolean)
+      if (!window.confirm(`This block is currently used elsewhere. Deleting it will ${effects.join(' and ')}.`)) return
+    }
 
-    setDefinition((previous) => ({
-      ...previous,
-      synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
-      pages: previous.pages.map((page) => page.id === pageId
-        ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
-        : page),
-    }))
+    setDefinition((previous) => {
+      const nextDefinition = clearConditionsReferencingBlocks(previous, [blockId])
+      return {
+        ...nextDefinition,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
+        pages: nextDefinition.pages.map((page) => page.id === pageId
+          ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
+          : page),
+      }
+    })
     if (selectedBlockId === blockId) setSelectedBlockId('')
     setOpenBlockMenuId(null)
   }

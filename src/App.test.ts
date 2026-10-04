@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
+import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
@@ -263,6 +264,36 @@ describe('conditional visibility', () => {
     const restored = JSON.parse(JSON.stringify(definition))
     expect(restored.pages[1].condition).toEqual({ blockId: 'lms', operator: 'equals', value: 'Teams' })
     expect(restored.pages[1].blocks[0].condition).toEqual({ blockId: 'lms', operator: 'equals', value: 'Teams' })
+  })
+
+  it('clears page and block conditions that reference deleted blocks', () => {
+    const cleaned = clearConditionsReferencingBlocks(definition, ['lms'])
+
+    expect(cleaned.pages[1].condition).toBeUndefined()
+    expect(cleaned.pages[1].blocks[0].condition).toBeUndefined()
+    expect(cleaned.pages[1].blocks[1].condition).toBeUndefined()
+  })
+
+  it('remaps duplicated page block conditions to duplicated source blocks', () => {
+    const blocks = remapBlockConditions([
+      { id: 'copy-source', type: 'singleSelect' },
+      { id: 'copy-dependent', type: 'content', condition: { blockId: 'source', operator: 'equals', value: 'Yes' } },
+    ], { source: 'copy-source', dependent: 'copy-dependent' })
+
+    expect(blocks[1].condition).toEqual({ blockId: 'copy-source', operator: 'equals', value: 'Yes' })
+  })
+
+  it('detects conditions moved before their source question', () => {
+    const reordered = {
+      ...definition,
+      pages: [definition.pages[1], definition.pages[0], definition.pages[2]],
+    }
+
+    expect(getFirstConditionOrderViolation(reordered)).toMatchObject({
+      kind: 'page',
+      ownerId: 'teams',
+      sourceBlockId: 'lms',
+    })
   })
 })
 
