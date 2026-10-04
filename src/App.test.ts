@@ -10,7 +10,7 @@ import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, rema
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
+import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -797,6 +797,47 @@ describe('worksheet quiz summary numeric sanitization', () => {
 })
 
 describe('builder numeric config sanitization', () => {
+  it('rejects imported pages and blocks that would crash the builder', () => {
+    expect(isWorksheetDefinition({
+      id: 'missing-blocks',
+      version: 1,
+      title: 'Missing blocks',
+      pages: [{ id: 'page-1', title: 'Page 1' }],
+    })).toBe(false)
+
+    expect(isWorksheetDefinition({
+      id: 'bad-block',
+      version: 1,
+      title: 'Bad block',
+      pages: [{ id: 'page-1', title: 'Page 1', blocks: [{ id: 'block-1', config: {} }] }],
+    })).toBe(false)
+  })
+
+  it('normalizes imported option and true false config shapes', () => {
+    const definition = {
+      id: 'bad-config',
+      version: 1,
+      title: 'Bad config',
+      description: '',
+      settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+      pages: [{
+        id: 'page',
+        title: 'Page',
+        blocks: [
+          { id: 'choice', type: 'multipleChoice', config: { options: { a: 'A' }, correctAnswer: ['A'] } },
+          { id: 'tf', type: 'trueFalse', config: { correctAnswer: 'true' } },
+          { id: 'match', type: 'matching', config: { options: ['A'], pairs: [{ answer: 'A' }] } },
+        ],
+      }],
+    } as any
+
+    const blocks = sanitizeWorksheetDefinition(definition).pages[0].blocks
+
+    expect(blocks[0].config).toMatchObject({ options: [], correctAnswer: '' })
+    expect(blocks[1].config?.correctAnswer).toBe(true)
+    expect(blocks[2].config?.pairs).toEqual([{ id: 'pair-1', prompt: '', answer: 'A' }])
+  })
+
   it('clamps bounded numeric block settings imported from JSON', () => {
     const definition = {
       id: 'bad-numbers',

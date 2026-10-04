@@ -95,6 +95,7 @@ import {
   getVisiblePagesWithBlocks,
   hasMeaningfulResponseValue,
   isConditionSourceBlock,
+  isWorksheetDefinition,
   isResponseProducingBlock,
   normalizeRichTextResponse,
   normalizeWorksheetDefinitionStableIds,
@@ -240,15 +241,6 @@ const EMPTY_WORKSHEET_DEFINITION: WorksheetDefinition = {
 
 type WorksheetBuilderSetter = (value: WorksheetDefinition | ((previous: WorksheetDefinition) => WorksheetDefinition)) => void
 
-function isWorksheetDefinition(value: unknown): value is WorksheetDefinition {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<WorksheetDefinition>
-  return typeof candidate.id === 'string'
-    && typeof candidate.version === 'number'
-    && typeof candidate.title === 'string'
-    && Array.isArray(candidate.pages)
-}
-
 function getWorksheetStructure(definition: WorksheetDefinition) {
   const blocks = definition.pages.flatMap((page) => page.blocks)
   const radarBlock = blocks.find((block) => block.type === 'radar')
@@ -354,20 +346,24 @@ function App() {
 
   const importWorksheetDefinition = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
-    if (!file) return
+    if (!file) return null
 
     try {
       const text = await file.text()
       const parsed = JSON.parse(text) as unknown
       if (!isWorksheetDefinition(parsed)) {
-        setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
-        return
+        const error = 'Import failed: every page needs id, title, and blocks; every block needs id and type.'
+        setDefinitionStatus(error)
+        return error
       }
       const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
       setActiveDefinition(sanitized)
       setDefinitionStatus(`Loaded ${sanitized.title} (${sanitized.id} v${sanitized.version}) from ${file.name}.`)
+      return null
     } catch {
-      setDefinitionStatus('Import failed: malformed JSON file.')
+      const error = 'Import failed: malformed JSON file.'
+      setDefinitionStatus(error)
+      return error
     } finally {
       event.target.value = ''
     }
@@ -5126,7 +5122,7 @@ function BuilderPage({
 }: {
   definition: WorksheetDefinition
   setDefinition: WorksheetBuilderSetter
-  importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
+  importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<string | null>
 }) {
   const { user, loading: authLoading } = useTeacherAuth()
   const blockLibrary: Array<{ type: string; label?: string; description: string }> = [
@@ -5194,6 +5190,7 @@ function BuilderPage({
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [pastedJson, setPastedJson] = useState('')
   const [pastedJsonError, setPastedJsonError] = useState('')
+  const [importFileError, setImportFileError] = useState('')
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -5746,10 +5743,11 @@ function BuilderPage({
 
   const importPastedJson = () => {
     setPastedJsonError('')
+    setImportFileError('')
     try {
       const parsed = JSON.parse(pastedJson) as unknown
       if (!isWorksheetDefinition(parsed)) {
-        setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
+        setPastedJsonError('This is valid JSON, but every page needs id, title, and blocks, and every block needs id and type.')
         return
       }
       const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
@@ -5841,7 +5839,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <Link to="/" title="Back to start" aria-label="Back to start" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><ArrowLeft className="h-3.5 w-3.5" />Back</Link>
-          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
+          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setImportFileError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
             <Upload className="h-4 w-4" />
             Load JSON
           </button>
@@ -5911,8 +5909,23 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
             <label className="mt-6 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50">
               <Upload className="h-4 w-4" />Choose a JSON file
-              <input type="file" accept="application/json" className="hidden" onChange={async (event) => { await importWorksheetDefinition(event); setShowImportDialog(false) }} />
+              <input
+                type="file"
+                accept="application/json"
+                className="hidden"
+                onChange={async (event) => {
+                  setImportFileError('')
+                  setPastedJsonError('')
+                  const error = await importWorksheetDefinition(event)
+                  if (error) {
+                    setImportFileError(error)
+                    return
+                  }
+                  setShowImportDialog(false)
+                }}
+              />
             </label>
+            {importFileError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{importFileError}</p>}
 
             <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-400"><span className="h-px flex-1 bg-slate-200" />or paste JSON<span className="h-px flex-1 bg-slate-200" /></div>
 
@@ -5920,7 +5933,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
               Workbook JSON
               <textarea
                 value={pastedJson}
-                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError('') }}
+                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError(''); setImportFileError('') }}
                 placeholder={'{\n  "id": "my-workbook",\n  "version": 1,\n  ...\n}'}
                 spellCheck={false}
                 className="mt-2 min-h-64 w-full resize-y rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"

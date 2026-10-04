@@ -273,14 +273,89 @@ function sanitizeIntegerRange(config: Record<string, any>, fallbackMin: number, 
   return { min, max }
 }
 
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value
+    .filter((item) => item !== undefined && item !== null)
+    .map((item) => String(item).trim())
+    .filter(Boolean) : []
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isWorksheetBlock(value: unknown): value is WorksheetBlock {
+  if (!isRecord(value)) return false
+  if (typeof value.id !== 'string' || typeof value.type !== 'string') return false
+  return value.config === undefined || isRecord(value.config)
+}
+
+function isWorksheetPage(value: unknown): value is WorksheetPage {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.title === 'string'
+    && Array.isArray(value.blocks)
+    && value.blocks.every(isWorksheetBlock)
+}
+
+export function isWorksheetDefinition(value: unknown): value is WorksheetDefinition {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.version === 'number'
+    && typeof value.title === 'string'
+    && Array.isArray(value.pages)
+    && value.pages.every(isWorksheetPage)
+}
+
+const STRING_OPTION_BLOCK_TYPES = new Set(['singleSelect', 'multipleChoice', 'quiz', 'checklist', 'ranking', 'matching', 'verdict', 'confidence'])
+
 export function sanitizeBlockConfig(block: WorksheetBlock): WorksheetBlock {
-  const config = { ...(block.config || {}) }
+  const config = isRecord(block.config) ? { ...block.config } : {}
+
+  if (STRING_OPTION_BLOCK_TYPES.has(block.type)) {
+    config.options = Array.isArray(config.options) ? getLabeledConfigItems(config.options, 'option') : []
+  }
 
   if ('points' in config) {
     config.points = boundedNumber(config.points, 1, 0)
   }
 
   switch (block.type) {
+    case 'trueFalse':
+      if (typeof config.correctAnswer === 'string') {
+        const normalized = config.correctAnswer.trim().toLowerCase()
+        if (normalized === 'true' || normalized === 'false') {
+          config.correctAnswer = normalized === 'true'
+        }
+      }
+      break
+    case 'multipleChoice':
+    case 'quiz': {
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
+      if (config.multipleAnswers) {
+        config.correctAnswer = stringList(config.correctAnswer).filter((answer) => optionValues.has(answer))
+      } else if (Array.isArray(config.correctAnswer)) {
+        const answer = stringList(config.correctAnswer)[0] || ''
+        config.correctAnswer = optionValues.has(answer) ? answer : ''
+      } else if (typeof config.correctAnswer === 'string' && !optionValues.has(config.correctAnswer)) {
+        config.correctAnswer = ''
+      }
+      break
+    }
+    case 'matching': {
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
+      config.pairs = Array.isArray(config.pairs)
+        ? config.pairs.filter(isRecord).map((pair, index) => ({
+          ...pair,
+          id: String(pair.id || `pair-${index + 1}`),
+          prompt: String(pair.prompt || ''),
+          answer: optionValues.has(String(pair.answer || '')) ? String(pair.answer || '') : '',
+        }))
+        : []
+      break
+    }
     case 'numeric': {
       const correctAnswer = unsettableNumber(config.correctAnswer)
       if (correctAnswer === undefined) {
@@ -324,9 +399,15 @@ export function sanitizeBlockConfig(block: WorksheetBlock): WorksheetBlock {
 export function sanitizeWorksheetDefinition(definition: WorksheetDefinition): WorksheetDefinition {
   return {
     ...definition,
-    pages: definition.pages.map((page) => ({
+    pages: definition.pages.map((page, pageIndex) => ({
       ...page,
-      blocks: page.blocks.map(sanitizeBlockConfig),
+      id: page.id || `page-${pageIndex + 1}`,
+      title: page.title || `Page ${pageIndex + 1}`,
+      blocks: page.blocks.map((block, blockIndex) => sanitizeBlockConfig({
+        ...block,
+        id: block.id || `block-${pageIndex + 1}-${blockIndex + 1}`,
+        type: block.type || 'content',
+      })),
     })),
   }
 }
@@ -498,13 +579,6 @@ export function getFillBlankCorrectAnswerPatch(correctAnswer: string) {
   return { correctAnswer, answers: undefined }
 }
 
-function stringList(value: unknown) {
-  return Array.isArray(value) ? value
-    .filter((item) => item !== undefined && item !== null)
-    .map((item) => String(item).trim())
-    .filter(Boolean) : []
-}
-
 function matchingPairs(value: unknown) {
   return Array.isArray(value)
     ? value.filter((pair): pair is { answer?: unknown } => Boolean(pair && typeof pair === 'object'))
@@ -521,19 +595,21 @@ export function isRequiredBlockAnswerable(block: WorksheetBlock) {
     case 'ranking':
     case 'confidence':
     case 'verdict':
-      return stringList(config.options).length > 0
+      return getLabeledConfigItems(config.options, 'option').length > 0
     case 'multipleChoice':
     case 'quiz': {
-      const options = stringList(config.options)
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
       const answers = Array.isArray(config.correctAnswer) ? stringList(config.correctAnswer) : stringList([config.correctAnswer])
-      return options.length > 0 && answers.length > 0 && answers.every((answer) => options.includes(answer))
+      return options.length > 0 && answers.length > 0 && answers.every((answer) => optionValues.has(answer))
     }
     case 'matching': {
-      const options = stringList(config.options)
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
       const pairs = matchingPairs(config.pairs)
       return options.length > 0 && pairs.length > 0 && pairs.every((pair) => {
         const answer = String(pair.answer || '').trim()
-        return answer.length > 0 && options.includes(answer)
+        return answer.length > 0 && optionValues.has(answer)
       })
     }
     case 'radar':
@@ -553,12 +629,17 @@ export function getUnanswerableRequiredBlocks(definition: WorksheetDefinition) {
 
 export function addMatchingPairConfig(config: Record<string, any>, timestamp = Date.now()) {
   const pairs = Array.isArray(config.pairs) ? config.pairs : []
-  const options = stringList(config.options)
-  const answer = `Match ${pairs.length + 1}`
+  const rawOptions = Array.isArray(config.options) ? config.options : []
+  const stableOptions = getLabeledConfigItems(rawOptions, 'option')
+  const answerLabel = `Match ${pairs.length + 1}`
+  const answerId = `option-${timestamp}`
+  const usesStableOptions = rawOptions.some((option) => isRecord(option))
   return {
     ...config,
-    pairs: [...pairs, { id: `pair-${timestamp}`, prompt: 'New prompt', answer }],
-    options: options.includes(answer) ? options : [...options, answer],
+    pairs: [...pairs, { id: `pair-${timestamp}`, prompt: 'New prompt', answer: usesStableOptions ? answerId : answerLabel }],
+    options: stableOptions.some((option) => option.label === answerLabel)
+      ? rawOptions
+      : [...rawOptions, usesStableOptions ? { id: answerId, label: answerLabel } : answerLabel],
   }
 }
 
