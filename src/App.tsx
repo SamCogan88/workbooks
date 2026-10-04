@@ -65,6 +65,7 @@ import { createBuilderId } from './lib/builderIds'
 import { getPublishCardState } from './lib/builderPublishState'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
+import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
@@ -1531,8 +1532,11 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
         ? configured
         : 'Your response has been sent to your teacher. You can now close this page.'
     }
-    return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
-  }, [definition.settings.completionMessage, onlineWorksheetId])
+    if (configured) return configured
+    return isResponseJsonExportEnabled(definition)
+      ? 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
+      : 'Your response is complete. You can now close this page.'
+  }, [definition, onlineWorksheetId])
   const missingRequiredBlocks = useMemo(
     () => (currentPage ? getMissingRequiredBlocks(currentPage, responses, definition) : []),
     [currentPage, definition, responses],
@@ -1661,7 +1665,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }), [definition, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
-    if (!onlineWorksheetId || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
+    if (!onlineWorksheetId || !shouldAutosaveOnlineResponse(definition) || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
     const timeoutId = window.setTimeout(() => {
       void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then((savedResponse) => {
         if (savedResponse.status === 'submitted') {
@@ -1678,7 +1682,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }, 900)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildDocument, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
+  }, [buildDocument, definition, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -1760,12 +1764,14 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       return
     }
 
-    try {
-      exportResponseJson(buildDocument())
-    } catch {
-      setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
-      setStatus('Download failed')
-      return
+    if (isResponseJsonExportEnabled(definition)) {
+      try {
+        exportResponseJson(buildDocument())
+      } catch {
+        setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
+        setStatus('Download failed')
+        return
+      }
     }
     setStatus('Complete')
     setShowCompletionDialog(true)
@@ -1794,10 +1800,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }
 
   const handleExportJson = () => {
+    if (!isResponseJsonExportEnabled(definition)) return
     exportResponseJson(buildDocument())
   }
 
   const handleExportPdf = () => {
+    if (!isResponsePdfExportEnabled(definition)) return
     const document = buildDocument()
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
@@ -2049,8 +2057,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           {!previewMode && !onlineWorksheetId && (
             <>
               <button onClick={handleStartNew} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><Play className="h-4 w-4" />Start New</button>
-              <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>
-              <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>
+              {isResponseJsonExportEnabled(definition) && <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>}
+              {isResponsePdfExportEnabled(definition) && <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>}
             </>
           )}
           {onlineWorksheetId && <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800"><CloudUpload className="h-4 w-4" />Online workbook{publicCode ? ` · ${publicCode}` : ''}</span>}

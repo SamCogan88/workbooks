@@ -9,6 +9,7 @@ import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } fr
 import { createBuilderId } from './lib/builderIds'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
+import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
@@ -231,7 +232,52 @@ describe('builder publish card state', () => {
   it('shows current publish errors once the previous result is cleared', () => {
     const currentDefinition = JSON.stringify({ title: '', pages: [{ id: 'page-1' }] })
     expect(getPublishCardState('Add a title and at least one page before publishing.', null, null, currentDefinition)).toBe('error')
-    expect(getPublishCardState('Add a title and at least one page before publishing.', null, null, currentDefinition)).toBe('error')
+  })
+})
+
+describe('worksheet settings', () => {
+  const baseDefinition = {
+    id: 'settings-test',
+    version: 1,
+    title: 'Settings test',
+    description: '',
+    settings: {
+      navigation: 'sequential',
+      allowPageJumping: false,
+      autosave: true,
+      showProgress: true,
+      exports: { json: true, pdf: true },
+    },
+    pages: [],
+  } as any
+
+  it('honours disabled response export formats', () => {
+    const definition = {
+      ...baseDefinition,
+      settings: { ...baseDefinition.settings, exports: { json: false, pdf: false } },
+    }
+
+    expect(isResponseJsonExportEnabled(definition)).toBe(false)
+    expect(isResponsePdfExportEnabled(definition)).toBe(false)
+  })
+
+  it('keeps legacy response exports enabled when omitted', () => {
+    const definition = {
+      ...baseDefinition,
+      settings: { ...baseDefinition.settings, exports: undefined },
+    }
+
+    expect(isResponseJsonExportEnabled(definition)).toBe(true)
+    expect(isResponsePdfExportEnabled(definition)).toBe(true)
+  })
+
+  it('uses the worksheet autosave setting for online responses', () => {
+    const definition = {
+      ...baseDefinition,
+      settings: { ...baseDefinition.settings, autosave: false },
+    }
+
+    expect(shouldAutosaveOnlineResponse(definition)).toBe(false)
   })
 })
 
