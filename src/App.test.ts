@@ -10,7 +10,7 @@ import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, rema
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -771,6 +771,56 @@ describe('stored worksheet sessions', () => {
   it('uses an older draft update timestamp when no creation timestamp was stored', () => {
     expect(getStoredSessionCreatedAt({ updatedAt: '2026-01-02T10:05:00.000Z' }, 'fallback')).toBe('2026-01-02T10:05:00.000Z')
     expect(getStoredSessionCreatedAt(null, 'fallback')).toBe('fallback')
+  })
+})
+
+describe('worksheet quiz summary numeric sanitization', () => {
+  it('ignores invalid numeric answers and clamps quiz point values', () => {
+    const definition = {
+      pages: [{
+        blocks: [
+          { id: 'numeric', type: 'numeric', label: 'Estimate', config: { correctAnswer: '', points: -4 } },
+          { id: 'quiz', type: 'quiz', label: 'Choice', config: { options: ['A'], correctAnswer: 'A', points: 'bad' } },
+        ],
+      }],
+    } as any
+
+    const sanitized = sanitizeWorksheetDefinition(definition)
+    const summary = getQuizSummary(sanitized, { numeric: 0, quiz: 'A' })
+    const numericConfig = sanitized.pages[0]?.blocks[0]?.config || {}
+
+    expect(numericConfig.correctAnswer).toBeUndefined()
+    expect(summary.items[0]).toMatchObject({ isCorrect: false, points: 0, achievedPoints: 0 })
+    expect(summary.items[1]).toMatchObject({ isCorrect: true, points: 1, achievedPoints: 1 })
+    expect(summary.totalMax).toBe(1)
+  })
+})
+
+describe('builder numeric config sanitization', () => {
+  it('clamps bounded numeric block settings imported from JSON', () => {
+    const definition = {
+      id: 'bad-numbers',
+      version: 1,
+      title: 'Bad numbers',
+      description: '',
+      settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+      pages: [{
+        id: 'page',
+        title: 'Page',
+        blocks: [
+          { id: 'cloud', type: 'wordCloud', config: { maxEntries: 1_000_000_000 } },
+          { id: 'rating', type: 'rating', config: { min: 1, max: 5, defaultValue: 99 } },
+          { id: 'matrix', type: 'matrix', config: { min: 5, max: 1, defaultValue: -10 } },
+          { id: 'decision', type: 'decisionMatrix', config: { min: '', max: 0 } },
+        ],
+      }],
+    } as any
+
+    const blocks = sanitizeWorksheetDefinition(definition).pages[0].blocks
+    expect(blocks[0].config).toMatchObject({ maxEntries: 10 })
+    expect(blocks[1].config).toMatchObject({ min: 1, max: 5, defaultValue: 5 })
+    expect(blocks[2].config).toMatchObject({ min: 5, max: 5, defaultValue: 5 })
+    expect(blocks[3].config).toMatchObject({ min: 1, max: 1 })
   })
 })
 

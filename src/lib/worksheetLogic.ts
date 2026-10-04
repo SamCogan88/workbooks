@@ -252,6 +252,85 @@ export function getMatrixRows(block: WorksheetBlock) {
   return getLabeledConfigItems(block.config?.rows, 'row')
 }
 
+const WORD_CLOUD_MAX_ENTRIES = 10
+
+function boundedNumber(value: unknown, fallback: number, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) {
+  if (value === '') return fallback
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, number))
+}
+
+function unsettableNumber(value: unknown) {
+  if (value === '') return undefined
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
+}
+
+function sanitizeIntegerRange(config: Record<string, any>, fallbackMin: number, fallbackMax: number) {
+  const min = Math.round(boundedNumber(config.min, fallbackMin))
+  const max = Math.max(min, Math.round(boundedNumber(config.max, fallbackMax)))
+  return { min, max }
+}
+
+export function sanitizeBlockConfig(block: WorksheetBlock): WorksheetBlock {
+  const config = { ...(block.config || {}) }
+
+  if ('points' in config) {
+    config.points = boundedNumber(config.points, 1, 0)
+  }
+
+  switch (block.type) {
+    case 'numeric': {
+      const correctAnswer = unsettableNumber(config.correctAnswer)
+      if (correctAnswer === undefined) {
+        delete config.correctAnswer
+      } else {
+        config.correctAnswer = correctAnswer
+      }
+      config.tolerance = boundedNumber(config.tolerance, 0, 0)
+      break
+    }
+    case 'wordCloud':
+      config.maxEntries = Math.round(boundedNumber(config.maxEntries, 3, 1, WORD_CLOUD_MAX_ENTRIES))
+      break
+    case 'rating': {
+      const { min, max } = sanitizeIntegerRange(config, 0, 10)
+      config.min = min
+      config.max = max
+      config.defaultValue = Math.round(boundedNumber(config.defaultValue, Math.round((min + max) / 2), min, max))
+      break
+    }
+    case 'matrix': {
+      const { min, max } = sanitizeIntegerRange(config, 1, 5)
+      config.min = min
+      config.max = max
+      config.defaultValue = Math.round(boundedNumber(config.defaultValue, min, min, max))
+      break
+    }
+    case 'decisionMatrix': {
+      const { min, max } = sanitizeIntegerRange(config, 1, 5)
+      config.min = min
+      config.max = max
+      break
+    }
+    default:
+      break
+  }
+
+  return { ...block, config }
+}
+
+export function sanitizeWorksheetDefinition(definition: WorksheetDefinition): WorksheetDefinition {
+  return {
+    ...definition,
+    pages: definition.pages.map((page) => ({
+      ...page,
+      blocks: page.blocks.map(sanitizeBlockConfig),
+    })),
+  }
+}
+
 export function getRadarDimensions(block: WorksheetBlock) {
   return getLabeledConfigItems(block.config?.dimensions, 'dimension')
 }
@@ -489,7 +568,7 @@ export function getQuizSummary(definition: WorksheetDefinition, responses: Recor
     .filter((block) => quizTypes.has(block.type))
     .map((block) => {
       const answer = responses[block.id]
-      const points = Number(block.config?.points ?? 1)
+      const points = boundedNumber(block.config?.points, 1, 0)
       let isCorrect = false
 
       if (block.type === 'numeric') {

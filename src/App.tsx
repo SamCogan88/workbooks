@@ -89,7 +89,6 @@ import {
   reconcileCategorizeResponse,
   reconcileRankingResponse,
   reconcileWorksheetResponses,
-  getStructuredDefaultResponse,
   getUnanswerableRequiredBlocks,
   getVisibleBlocks,
   getVisiblePages,
@@ -99,6 +98,7 @@ import {
   isResponseProducingBlock,
   normalizeRichTextResponse,
   normalizeWorksheetDefinitionStableIds,
+  sanitizeWorksheetDefinition,
   stripHtml,
 } from './lib/worksheetLogic'
 import { sanitiseWorksheetResponses } from './lib/responseValidation'
@@ -334,11 +334,18 @@ function App() {
 
     try {
       const parsed = JSON.parse(raw) as unknown
-      return isWorksheetDefinition(parsed) ? normalizeWorksheetDefinitionStableIds(parsed) : EMPTY_WORKSHEET_DEFINITION
+      return isWorksheetDefinition(parsed)
+        ? sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
+        : EMPTY_WORKSHEET_DEFINITION
     } catch {
       return EMPTY_WORKSHEET_DEFINITION
     }
   })
+  const setSanitizedActiveDefinition: WorksheetBuilderSetter = useCallback((value) => {
+    setActiveDefinition((previous) => sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(
+      typeof value === 'function' ? value(previous) : value,
+    )))
+  }, [])
   const [, setDefinitionStatus] = useState('Import a worksheet JSON to replace the current active definition.')
 
   useEffect(() => {
@@ -356,8 +363,9 @@ function App() {
         setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
         return
       }
-      setActiveDefinition(normalizeWorksheetDefinitionStableIds(parsed))
-      setDefinitionStatus(`Loaded ${parsed.title} (${parsed.id} v${parsed.version}) from ${file.name}.`)
+      const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
+      setActiveDefinition(sanitized)
+      setDefinitionStatus(`Loaded ${sanitized.title} (${sanitized.id} v${sanitized.version}) from ${file.name}.`)
     } catch {
       setDefinitionStatus('Import failed: malformed JSON file.')
     } finally {
@@ -387,7 +395,7 @@ function App() {
           <Route path="/report/ai-tool-lab" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/system-guide" element={<SystemGuidePage />} />
           <Route path="/account" element={<TeacherAccountPage />} />
-          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setActiveDefinition} />} />
+          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setSanitizedActiveDefinition} />} />
           <Route path="/teacher/workbooks/:workbookId/report" element={<OnlineTeacherReportPage />} />
           <Route path="/join" element={<OnlineJoinPageRoute />} />
           <Route path="/join/:publicCode" element={<OnlineJoinPageRoute />} />
@@ -396,7 +404,7 @@ function App() {
             element={(
               <BuilderPage
                 definition={activeDefinition}
-                setDefinition={setActiveDefinition}
+                setDefinition={setSanitizedActiveDefinition}
                 importWorksheetDefinition={importWorksheetDefinition}
               />
             )}
@@ -444,7 +452,7 @@ function OnlineJoinPage() {
   }, [publicCode])
 
   if (workbook) {
-    return <WorksheetPlayer definition={workbook.definition} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
+    return <WorksheetPlayer definition={sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(workbook.definition))} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
   }
 
   const handleJoin = (event: FormEvent<HTMLFormElement>) => {
@@ -1569,25 +1577,6 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     setNavigationWarning('')
     setValidationAttempted(false)
   }, [isSessionHydrated, pageIndex, visiblePageIndexes])
-
-  useEffect(() => {
-    const nextDefaults = currentPage?.blocks.reduce<Record<string, any>>((accumulator, block) => {
-      if (responses[block.id] !== undefined) return accumulator
-      const defaultValue = getStructuredDefaultResponse(block)
-      if (defaultValue !== undefined) {
-        accumulator[block.id] = defaultValue
-      }
-      return accumulator
-    }, {}) || {}
-
-    if (Object.keys(nextDefaults).length === 0) return
-    setResponses((previous) => {
-      const missingDefaults = Object.fromEntries(
-        Object.entries(nextDefaults).filter(([blockId]) => previous[blockId] === undefined),
-      )
-      return Object.keys(missingDefaults).length > 0 ? { ...previous, ...missingDefaults } : previous
-    })
-  }, [currentPage, responses])
 
   useEffect(() => {
     if (!currentTimer?.enabled) {
@@ -3586,7 +3575,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'wordCloud': {
-      const maxEntries = Math.max(1, Number(block.config?.maxEntries || 3))
+      const maxEntries = Math.min(10, Math.max(1, Number(block.config?.maxEntries || 3)))
       const values = Array.isArray(responses[block.id]) ? responses[block.id] : []
       return (
         <fieldset className="space-y-2">
@@ -5680,7 +5669,7 @@ function BuilderPage({
 
   const updateSelectedConfig = (partial: Record<string, any>) => {
     if (!selectedBlock) return
-    setDefinition((previous) => updateBlockConfigWithOptionReferences(previous, selectedBlock.id, partial))
+    setDefinition((previous) => sanitizeWorksheetDefinition(updateBlockConfigWithOptionReferences(previous, selectedBlock.id, partial)))
   }
 
   const updateWorksheetDefinition = (partial: Partial<WorksheetDefinition>) => {
@@ -5763,11 +5752,11 @@ function BuilderPage({
         setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
         return
       }
-      const normalized = normalizeWorksheetDefinitionStableIds(parsed)
-      setDefinition(normalized)
-      setSelectedPageId(normalized.pages[0]?.id || '')
-      setSelectedBlockId(normalized.pages[0]?.blocks[0]?.id || '')
-      setBuilderMode(normalized.pages.length > 0 ? 'pages' : 'setup')
+      const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
+      setDefinition(sanitized)
+      setSelectedPageId(sanitized.pages[0]?.id || '')
+      setSelectedBlockId(sanitized.pages[0]?.blocks[0]?.id || '')
+      setBuilderMode(sanitized.pages.length > 0 ? 'pages' : 'setup')
       setPastedJson('')
       setShowImportDialog(false)
     } catch {
@@ -6767,7 +6756,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
                   {selectedBlock.type === 'numeric' && (
                     <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={Number(selectedConfig.correctAnswer ?? 0)} onChange={(event) => updateSelectedConfig({ correctAnswer: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={selectedConfig.correctAnswer ?? ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value === '' ? undefined : Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Tolerance<input type="number" min={0} step="any" value={Number(selectedConfig.tolerance || 0)} onChange={(event) => updateSelectedConfig({ tolerance: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Unit<input value={selectedConfig.unit || ''} onChange={(event) => updateSelectedConfig({ unit: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Points<input type="number" min={0} value={Number(selectedConfig.points ?? 1)} onChange={(event) => updateSelectedConfig({ points: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
