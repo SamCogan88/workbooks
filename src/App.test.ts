@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -421,6 +421,53 @@ describe('worksheet quiz summary', () => {
     expect(summary.totalScore).toBe(4)
     expect(summary.percent).toBe(100)
     expect(summary.items[0].isCorrect).toBe(true)
+  })
+
+  it('uses the edited fill-in-the-blank answer after clearing imported alternatives', () => {
+    const importedConfig = { correctAnswer: 'Paris', answers: ['Paris', 'PARIS'] as string[] | undefined }
+    const editedConfig = {
+      ...importedConfig,
+      ...getFillBlankCorrectAnswerPatch('Lyon'),
+    }
+    const definition = {
+      id: 'fill-blank-test',
+      version: 1,
+      title: 'Fill blank test',
+      description: 'A fill-in-the-blank quiz',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [
+        {
+          id: 'page-1',
+          title: 'Quiz page',
+          blocks: [
+            {
+              id: 'capital',
+              type: 'fillBlank',
+              label: 'Capital',
+              config: {
+                question: 'The capital of France is ______.',
+                ...editedConfig,
+                points: 1,
+              },
+            },
+          ],
+        },
+      ],
+    } as any
+
+    const summary = getQuizSummary(definition, { capital: 'Lyon' })
+    const oldAnswerSummary = getQuizSummary(definition, { capital: 'Paris' })
+
+    expect(editedConfig.answers).toBeUndefined()
+    expect(summary.totalScore).toBe(1)
+    expect(summary.items[0].isCorrect).toBe(true)
+    expect(oldAnswerSummary.items[0].isCorrect).toBe(false)
   })
 })
 

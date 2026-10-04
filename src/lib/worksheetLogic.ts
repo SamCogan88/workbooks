@@ -319,6 +319,10 @@ export function getMissingRequiredBlockLocations(definition: WorksheetDefinition
   })
 }
 
+export function getFillBlankCorrectAnswerPatch(correctAnswer: string) {
+  return { correctAnswer, answers: undefined }
+}
+
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, unknown>) {
   const quizTypes = new Set(['quiz', 'multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'])
   const items = definition.pages.flatMap((page) => page.blocks)

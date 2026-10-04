@@ -67,6 +67,7 @@ import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
+  getFillBlankCorrectAnswerPatch,
   getBoardPresetColumns,
   canNavigateToVisiblePage,
   getImageDisplayConfig,
@@ -6696,7 +6697,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ) : (
                         <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
                           Correct answer
-                          <input value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
+                          <input value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig(selectedBlock.type === 'fillBlank' ? getFillBlankCorrectAnswerPatch(event.target.value) : { correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
                         </label>
                       )}
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
