@@ -3303,6 +3303,74 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   )
 }
 
+function clampHotspotPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value * 10) / 10))
+}
+
+function HotspotBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
+  const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
+  const lastPoint = points[points.length - 1]
+  const [keyboardPoint, setKeyboardPoint] = useState(() => ({
+    x: clampHotspotPercent(Number(lastPoint?.x ?? 50)),
+    y: clampHotspotPercent(Number(lastPoint?.y ?? 50)),
+  }))
+  const [showKeyboardPoint, setShowKeyboardPoint] = useState(false)
+  const statusId = `${block.id}-hotspot-status`
+  const instructionId = `${block.id}-hotspot-instructions`
+
+  const placePoint = (point: { x: number; y: number }) => {
+    updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
+      {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-describedby={`${instructionId} ${statusId}`}
+        aria-label={`${getBlockDisplayLabel(block)} hotspot image`}
+        className={`relative overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
+        onFocus={() => setShowKeyboardPoint(true)}
+        onBlur={() => setShowKeyboardPoint(false)}
+        onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect()
+          const point = { x: clampHotspotPercent(((event.clientX - rect.left) / rect.width) * 100), y: clampHotspotPercent(((event.clientY - rect.top) / rect.height) * 100) }
+          setKeyboardPoint(point)
+          placePoint(point)
+        }}
+        onKeyDown={(event) => {
+          const step = event.shiftKey ? 10 : 1
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            placePoint(keyboardPoint)
+            return
+          }
+          const deltas: Record<string, { x: number; y: number }> = {
+            ArrowUp: { x: 0, y: -step },
+            ArrowDown: { x: 0, y: step },
+            ArrowLeft: { x: -step, y: 0 },
+            ArrowRight: { x: step, y: 0 },
+          }
+          const delta = deltas[event.key]
+          if (!delta) return
+          event.preventDefault()
+          setShowKeyboardPoint(true)
+          setKeyboardPoint((current) => ({ x: clampHotspotPercent(current.x + delta.x), y: clampHotspotPercent(current.y + delta.y) }))
+        }}
+      >
+        <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
+        {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
+        {showKeyboardPoint && <span className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-blue-700 bg-white/70 shadow" style={{ left: `${keyboardPoint.x}%`, top: `${keyboardPoint.y}%` }} />}
+      </div>
+      <p id={instructionId} className="text-xs text-slate-500">Click the image, or focus it and use arrow keys to move the target then Enter or Space to place a hotspot.</p>
+      <div id={statusId} className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'No hotspots placed.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
+      {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
+    </div>
+  )
+}
+
 export function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void, options?: { showRequiredError?: boolean }) {
   const showRequiredError = options?.showRequiredError ?? false
 
@@ -3648,26 +3716,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'hotspot': {
-      const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
-      return (
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
-          {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
-          <div
-            className={`relative overflow-hidden rounded-xl border bg-slate-100 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect()
-              const point = { x: Math.round(((event.clientX - rect.left) / rect.width) * 1000) / 10, y: Math.round(((event.clientY - rect.top) / rect.height) * 1000) / 10 }
-              updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
-            }}
-          >
-            <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
-            {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
-          </div>
-          <div className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'Click the image to place a hotspot.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
-          {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
-        </div>
-      )
+      return <HotspotBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     }
     case 'numeric': {
       const value = responses[block.id] ?? ''

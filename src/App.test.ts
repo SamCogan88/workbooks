@@ -574,6 +574,19 @@ describe('visual thinking blocks', () => {
     expect(update).toHaveBeenCalledWith('continuum', { position: 72 })
   })
 
+  it('places hotspot answers with the keyboard', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'hotspot', type: 'hotspot', label: 'Find the valve', config: { imageUrl: '/diagram.png' } }, {}, update))
+
+    const target = screen.getByRole('button', { name: 'Find the valve hotspot image' })
+    target.focus()
+    fireEvent.keyDown(target, { key: 'ArrowRight' })
+    fireEvent.keyDown(target, { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(target, { key: 'Enter' })
+
+    expect(update).toHaveBeenCalledWith('hotspot', [{ x: 51, y: 60 }])
+  })
+
   it('requires every stable-ID decision matrix cell and aggregates valid ratings', () => {
     const config = getDefaultBlockConfig('decisionMatrix', 20) as any
     const block = { id: 'decision', type: 'decisionMatrix', required: true, config } as any
