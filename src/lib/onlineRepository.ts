@@ -134,7 +134,6 @@ export async function saveOnlineResponse(worksheetId: string, response: Workshee
       participant_label: participantLabel?.trim() || null,
       answers: response,
       status: 'draft',
-      updated_at: new Date().toISOString(),
     }, { onConflict: 'worksheet_id,participant_id' })
     .select()
     .single<OnlineResponseRow>()
@@ -145,10 +144,9 @@ export async function saveOnlineResponse(worksheetId: string, response: Workshee
 
 export async function submitOnlineResponse(responseId: string) {
   const client = requireSupabase()
-  const submittedAt = new Date().toISOString()
   const { data, error } = await client
     .from('responses')
-    .update({ status: 'submitted', submitted_at: submittedAt, updated_at: submittedAt })
+    .update({ status: 'submitted' })
     .eq('id', responseId)
     .select()
     .single<OnlineResponseRow>()
