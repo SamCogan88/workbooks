@@ -70,6 +70,7 @@ import {
   getBoardPresetColumns,
   canNavigateToVisiblePage,
   getImageDisplayConfig,
+  getLabeledConfigItems,
   getMatchingPairKey,
   getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
@@ -79,6 +80,7 @@ import {
   getVisiblePages,
   hasMeaningfulResponseValue,
   isResponseProducingBlock,
+  normalizeWorksheetDefinitionStableIds,
   stripHtml,
 } from './lib/worksheetLogic'
 import { sanitiseWorksheetResponses } from './lib/responseValidation'
@@ -290,6 +292,14 @@ function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
   )
 }
 
+function getSelectedOptionValues(value: unknown) {
+  return Array.isArray(value) ? value : [value].filter((entry) => entry !== undefined && entry !== null && entry !== '')
+}
+
+function matchesOptionValue(value: unknown, option: { id: string; label: string }) {
+  return value === option.id || value === option.label
+}
+
 function App() {
   const [activeDefinition, setActiveDefinition] = useState<WorksheetDefinition>(() => {
     const raw = localStorage.getItem(ACTIVE_DEFINITION_KEY)
@@ -297,7 +307,7 @@ function App() {
 
     try {
       const parsed = JSON.parse(raw) as unknown
-      return isWorksheetDefinition(parsed) ? parsed : EMPTY_WORKSHEET_DEFINITION
+      return isWorksheetDefinition(parsed) ? normalizeWorksheetDefinitionStableIds(parsed) : EMPTY_WORKSHEET_DEFINITION
     } catch {
       return EMPTY_WORKSHEET_DEFINITION
     }
@@ -319,7 +329,7 @@ function App() {
         setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
         return
       }
-      setActiveDefinition(parsed)
+      setActiveDefinition(normalizeWorksheetDefinitionStableIds(parsed))
       setDefinitionStatus(`Loaded ${parsed.title} (${parsed.id} v${parsed.version}) from ${file.name}.`)
     } catch {
       setDefinitionStatus('Import failed: malformed JSON file.')
@@ -2151,15 +2161,13 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 }
 
 function RadarBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const dimensions = block.config?.dimensions || []
+  const dimensions = getLabeledConfigItems(block.config?.dimensions, 'dimension')
   const valueMap: Record<string, number> = responses[block.id] || {}
   const radius = 100
   const center = 150
-  const scores = dimensions.map((dimension: any) => {
-    const index = dimensions.indexOf(dimension)
+  const scores = dimensions.map((dimension, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const label = typeof dimension === 'string' ? dimension : dimension.label
-    const value = Number(valueMap[label] ?? 5)
+    const value = Number(valueMap[dimension.id] ?? valueMap[dimension.label] ?? 5)
     const distance = (value / 10) * radius
     return `${center + Math.cos(angle) * distance},${center + Math.sin(angle) * distance}`
   })
@@ -2179,16 +2187,14 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
           return <polygon key={ring} points={points} fill="none" stroke="#cbd5e1" strokeWidth="1" />
         })}
 
-        {dimensions.map((dimension: any, index: number) => {
-          const label = typeof dimension === 'string' ? dimension : dimension.label
-          const key = typeof dimension === 'string' ? `${label}-${index}` : dimension.id
+        {dimensions.map((dimension, index: number) => {
           const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
           const x = center + Math.cos(angle) * 120
           const y = center + Math.sin(angle) * 120
           return (
-            <g key={key}>
+            <g key={dimension.id}>
               <line x1={center} y1={center} x2={x} y2={y} stroke="#cbd5e1" strokeWidth="1" />
-              <text x={center + Math.cos(angle) * 138} y={center + Math.sin(angle) * 138} textAnchor="middle" fontSize="9" fill="#334155">{label}</text>
+              <text x={center + Math.cos(angle) * 138} y={center + Math.sin(angle) * 138} textAnchor="middle" fontSize="9" fill="#334155">{dimension.label}</text>
             </g>
           )
         })}
@@ -2196,23 +2202,22 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
       </svg>
 
       <div className="space-y-3">
-        {dimensions.map((dimension: any, index: number) => {
-          const label = typeof dimension === 'string' ? dimension : dimension.label
-          const key = typeof dimension === 'string' ? `${label}-${index}` : dimension.id
+        {dimensions.map((dimension) => {
+          const value = valueMap[dimension.id] ?? valueMap[dimension.label] ?? 5
           return (
-            <div key={key} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div key={dimension.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="font-medium text-slate-700">{label}</span>
-                <span className="font-bold text-slate-900">{valueMap[label] ?? 5}/10</span>
+                <span className="font-medium text-slate-700">{dimension.label}</span>
+                <span className="font-bold text-slate-900">{value}/10</span>
               </div>
               <input
                 type="range"
                 min={1}
                 max={10}
-                value={valueMap[label] ?? 5}
+                value={value}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => {
-                  const next = { ...(responses[block.id] || {}), [label]: Number(event.target.value) }
+                  const next = { ...(responses[block.id] || {}), [dimension.id]: Number(event.target.value) }
                   updateResponse(block.id, next)
                 }}
                 className="w-full"
@@ -3184,71 +3189,79 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         </label>
       )
     case 'singleSelect':
+      {
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {(block.config?.options || []).map((option: string) => (
-            <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
-              <span>{option}</span>
+          {options.map((option) => (
+            <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={matchesOptionValue(responses[block.id], option)} onChange={() => updateResponse(block.id, option.id)} />
+              <span>{option.label}</span>
             </label>
           ))}
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
+      }
     case 'randomizer': {
       return <RandomizerBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     }
     case 'multipleChoice':
     case 'quiz': {
       const allowMultiple = Boolean(block.config?.multipleAnswers)
-      const selectedValues = allowMultiple ? (Array.isArray(responses[block.id]) ? responses[block.id] : []) : responses[block.id]
+      const selectedValues = allowMultiple ? getSelectedOptionValues(responses[block.id]) : responses[block.id]
       const correctAnswer = block.config?.correctAnswer
       const showFeedback = block.config?.showFeedback !== false
+      const options = getLabeledConfigItems(block.config?.options, 'option')
+      const correctValues = getSelectedOptionValues(correctAnswer)
+      const isCorrectOption = (option: { id: string; label: string }) => correctValues.some((value) => matchesOptionValue(value, option))
+      const selectedIds = allowMultiple ? getSelectedOptionValues(selectedValues) : getSelectedOptionValues(selectedValues)
+      const correctIds = options.filter(isCorrectOption).map((option) => option.id)
 
       return (
         <fieldset className="space-y-3">
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Quiz question'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {allowMultiple ? (
-            (block.config?.options || []).map((option: string) => {
-              const checked = Array.isArray(selectedValues) && selectedValues.includes(option)
-              const isCorrect = Array.isArray(correctAnswer) && correctAnswer.includes(option)
+            options.map((option) => {
+              const checked = selectedValues.some((value: unknown) => matchesOptionValue(value, option))
+              const isCorrect = isCorrectOption(option)
               const isSelected = checked
               const showState = selectedValues !== undefined && isSelected
               return (
-                <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+                <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={() => {
                       const nextValues = Array.isArray(selectedValues) ? [...selectedValues] : []
-                      const index = nextValues.indexOf(option)
+                      const index = nextValues.findIndex((value) => matchesOptionValue(value, option))
                       if (index >= 0) nextValues.splice(index, 1)
-                      else nextValues.push(option)
+                      else nextValues.push(option.id)
                       updateResponse(block.id, nextValues)
                     }}
                   />
-                  <span>{option}</span>
+                  <span>{option.label}</span>
                 </label>
               )
             })
           ) : (
-            (block.config?.options || []).map((option: string) => {
-              const isCorrect = option === correctAnswer
-              const isSelected = selectedValues === option
+            options.map((option) => {
+              const isCorrect = isCorrectOption(option)
+              const isSelected = matchesOptionValue(selectedValues, option)
               const showState = selectedValues !== undefined && isSelected
               return (
-                <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                  <input type="radio" name={block.id} checked={selectedValues === option} onChange={() => updateResponse(block.id, option)} />
-                  <span>{option}</span>
+                <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <input type="radio" name={block.id} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
+                  <span>{option.label}</span>
                 </label>
               )
             })
           )}
           {selectedValues !== undefined && showFeedback && (
-            <div className={`rounded-xl border px-3 py-2 text-sm ${allowMultiple ? (JSON.stringify((Array.isArray(selectedValues) ? selectedValues : []).sort()) === JSON.stringify((Array.isArray(correctAnswer) ? correctAnswer : []).sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700') : (selectedValues === correctAnswer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700')}`}>
-              {allowMultiple ? (JSON.stringify((Array.isArray(selectedValues) ? selectedValues : []).sort()) === JSON.stringify((Array.isArray(correctAnswer) ? correctAnswer : []).sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String((Array.isArray(correctAnswer) ? correctAnswer : []).join(', ') || 'Not set')}.`) : (selectedValues === correctAnswer ? 'Correct.' : `Incorrect. Correct answer: ${String(correctAnswer || 'Not set')}.`)}
+            <div className={`rounded-xl border px-3 py-2 text-sm ${JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
+              {JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String(options.filter(isCorrectOption).map((option) => option.label).join(', ') || 'Not set')}.`}
               {block.config?.explanation && <p className="mt-2 text-sm text-slate-700">{block.config.explanation}</p>}
             </div>
           )}
@@ -3377,24 +3390,25 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     }
     case 'checklist': {
       const selectedValues = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {(block.config?.options || []).map((option: string) => {
-            const checked = selectedValues.includes(option)
+          {options.map((option) => {
+            const checked = selectedValues.some((value: unknown) => matchesOptionValue(value, option))
             return (
-              <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => {
                     const next = checked
-                      ? selectedValues.filter((entry: string) => entry !== option)
-                      : [...selectedValues, option]
+                      ? selectedValues.filter((entry: unknown) => !matchesOptionValue(entry, option))
+                      : [...selectedValues, option.id]
                     updateResponse(block.id, next)
                   }}
                 />
-                <span>{option}</span>
+                <span>{option.label}</span>
               </label>
             )
           })}
@@ -3429,18 +3443,18 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'categorize': {
-      const items = Array.isArray(block.config?.items) ? block.config.items : []
-      const categories = Array.isArray(block.config?.categories) ? block.config.categories : []
+      const items = getLabeledConfigItems(block.config?.items, 'item')
+      const categories = Array.isArray(block.config?.categories) ? block.config.categories.map((category: any) => typeof category === 'object' ? String(category.label || '') : String(category)) : []
       const assignments = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError}>
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <div className="grid gap-2">
-            {items.map((item: string) => (
-              <label key={item} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
-                <span className="text-sm font-medium text-slate-700">{item}</span>
-                <select value={assignments[item] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            {items.map((item) => (
+              <label key={item.id} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
+                <span className="text-sm font-medium text-slate-700">{item.label}</span>
+                <select value={assignments[item.id] || assignments[item.label] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item.id]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
                   <option value="">Choose a category</option>
                   {categories.map((category: string) => <option key={category} value={category}>{category}</option>)}
                 </select>
@@ -3502,37 +3516,37 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'confidence': {
-      const options = Array.isArray(block.config?.options) ? block.config.options : []
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3">
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          <div className="grid gap-2 sm:grid-cols-3">{options.map((option: string, index: number) => <button type="button" key={option} onClick={() => updateResponse(block.id, option)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${responses[block.id] === option ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option}</button>)}</div>
+          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
           {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
         </fieldset>
       )
     }
     case 'matrix': {
-      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+      const rows = getLabeledConfigItems(block.config?.rows, 'row')
       const values = responses[block.id] || {}
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       return (
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
-          {rows.map((row: string) => (
-            <div key={`${block.id}-${row}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          {rows.map((row) => (
+            <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-slate-700">{row}</span>
-                <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{values[row] ?? block.config?.defaultValue ?? min}</span>
+                <span className="text-sm font-medium text-slate-700">{row.label}</span>
+                <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min}</span>
               </div>
               <input
                 type="range"
                 min={min}
                 max={max}
                 step={1}
-                value={Number(values[row] ?? block.config?.defaultValue ?? min)}
+                value={Number(values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min)}
                 aria-required={block.required ? true : undefined}
-                onChange={(event) => updateResponse(block.id, { ...values, [row]: Number(event.target.value) })}
+                onChange={(event) => updateResponse(block.id, { ...values, [row.id]: Number(event.target.value) })}
                 className="w-full"
               />
             </div>
@@ -3668,8 +3682,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'decisionMatrix': {
-      const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
-      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
+      const matrixOptions = getLabeledConfigItems(block.config?.options, 'option')
+      const criteria = getLabeledConfigItems(block.config?.criteria, 'criterion')
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       const values = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
@@ -3678,8 +3692,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
           <div><p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>{block.description && <p className="mt-1 text-xs text-slate-500">{block.description}</p>}</div>
           <div className="space-y-4">
             {matrixOptions.map((option: any) => {
-              const optionValues = values[option.id] || {}
-              const completed = criteria.map((criterion: any) => Number(optionValues[criterion.id])).filter(Number.isFinite)
+              const optionValues = values[option.id] || values[option.label] || {}
+              const completed = criteria.map((criterion) => Number(optionValues[criterion.id] ?? optionValues[criterion.label])).filter(Number.isFinite)
               const total = completed.reduce((sum: number, value: number) => sum + value, 0)
               return (
                 <section key={option.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -3688,7 +3702,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                     {criteria.map((criterion: any) => <div key={criterion.id} className="grid gap-2 sm:grid-cols-[minmax(140px,1fr)_auto] sm:items-center">
                       <span className="text-sm text-slate-700">{criterion.label}</span>
                       <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={`${option.label}: ${criterion.label}`}>
-                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={optionValues[criterion.id] === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${optionValues[criterion.id] === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
+                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={(optionValues[criterion.id] ?? optionValues[criterion.label]) === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${(optionValues[criterion.id] ?? optionValues[criterion.label]) === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
                       </div>
                     </div>)}
                   </div>
@@ -3739,18 +3753,21 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     case 'quadrant':
       return <QuadrantBoard block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'verdict':
+      {
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {(block.config?.options || []).map((option: string) => (
-            <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
-              <span>{option}</span>
+          {options.map((option) => (
+            <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={matchesOptionValue(responses[block.id], option)} onChange={() => updateResponse(block.id, option.id)} />
+              <span>{option.label}</span>
             </label>
           ))}
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
+      }
     default:
       return null
   }
@@ -3759,17 +3776,36 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
 function formatBlockValue(block: WorksheetBlock, value: any) {
   if (value === undefined || value === null || value === '') return ''
   if (block.type === 'richText') return stripHtml(sanitizeRichTextHtml(String(value)))
+  if (['singleSelect', 'confidence', 'verdict'].includes(block.type)) {
+    const option = getLabeledConfigItems(block.config?.options, 'option').find((item) => matchesOptionValue(value, item))
+    return option?.label || String(value)
+  }
+  if (block.type === 'checklist' || block.type === 'multipleChoice' || block.type === 'quiz') {
+    const options = getLabeledConfigItems(block.config?.options, 'option')
+    const values = getSelectedOptionValues(value)
+    return values.map((entry) => options.find((option) => matchesOptionValue(entry, option))?.label || String(entry)).join(', ')
+  }
   if (typeof value === 'string') return value
   if (typeof value === 'number') return String(value)
   if (block.type === 'wordCloud') return value.filter(Boolean).join(', ')
   if (block.type === 'hotspot') return value.map((point: any) => `(${point.x}%, ${point.y}%)`).join(', ')
-  if (block.type === 'categorize') return Object.entries(value).map(([item, category]) => `${item}: ${category}`).join('; ')
-  if (block.type === 'radar') return `Radar: ${Object.entries(value as Record<string, number>).map(([label, score]) => `${label}: ${score}`).join(', ')}`
+  if (block.type === 'categorize') {
+    const itemLabels = Object.fromEntries(getLabeledConfigItems(block.config?.items, 'item').map((item) => [item.id, item.label]))
+    return Object.entries(value).map(([item, category]) => `${itemLabels[item] || item}: ${category}`).join('; ')
+  }
+  if (block.type === 'matrix') {
+    const rowLabels = Object.fromEntries(getLabeledConfigItems(block.config?.rows, 'row').map((row) => [row.id, row.label]))
+    return Object.entries(value as Record<string, number>).map(([row, score]) => `${rowLabels[row] || row}: ${score}`).join(', ')
+  }
+  if (block.type === 'radar') {
+    const dimensionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.dimensions, 'dimension').map((dimension) => [dimension.id, dimension.label]))
+    return `Radar: ${Object.entries(value as Record<string, number>).map(([dimension, score]) => `${dimensionLabels[dimension] || dimension}: ${score}`).join(', ')}`
+  }
   if (block.type === 'quadrant') return `Quadrant: x=${value.x}, y=${value.y}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'continuum') return `Position: ${value.position}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'decisionMatrix') {
-    const optionLabels = Object.fromEntries((block.config?.options || []).map((option: any) => [option.id, option.label]))
-    const criterionLabels = Object.fromEntries((block.config?.criteria || []).map((criterion: any) => [criterion.id, criterion.label]))
+    const optionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.options, 'option').map((option) => [option.id, option.label]))
+    const criterionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.criteria, 'criterion').map((criterion) => [criterion.id, criterion.label]))
     return Object.entries(value as Record<string, any>).map(([option, ratings]) => `${optionLabels[option] || option}: ${Object.entries(ratings).map(([criterion, score]) => `${criterionLabels[criterion] || criterion}: ${score}`).join(', ')}`).join(' | ')
   }
   if (block.type === 'board') {
@@ -4092,12 +4128,12 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     const title = getBlockDisplayLabel(block)
 
     if (block.type === 'radar') {
-      const configuredDimensions = Array.isArray(block.config?.dimensions)
-        ? block.config.dimensions.map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || ''))).filter(Boolean)
-        : []
+      const configuredDimensionItems = getLabeledConfigItems(block.config?.dimensions, 'dimension')
+      const configuredDimensions = configuredDimensionItems.map((dimension) => dimension.id)
+      const dimensionLabels = Object.fromEntries(configuredDimensionItems.map((dimension) => [dimension.id, dimension.label]))
       const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
       const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
-      const averages = aggregateRadarValues(groupingResponses, dimensions, block.id)
+      const averages = Object.fromEntries(Object.entries(aggregateRadarValues(groupingResponses, dimensions, block.id)).map(([dimension, score]) => [dimensionLabels[dimension] || dimension, score]))
 
       return (
         <>
@@ -5491,12 +5527,12 @@ function BuilderPage({
   }
 
   const selectedConfig = (selectedBlock?.config || {}) as Record<string, any>
-  const optionList = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
+  const optionList = getLabeledConfigItems(selectedConfig.options, 'option')
   const randomizerItems = Array.isArray(selectedConfig.items) ? (selectedConfig.items as string[]) : []
-  const rankingOptions = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
-  const matrixRows = Array.isArray(selectedConfig.rows) ? (selectedConfig.rows as string[]) : []
-  const decisionOptions = Array.isArray(selectedConfig.options) ? selectedConfig.options as Array<{ id: string; label: string }> : []
-  const decisionCriteria = Array.isArray(selectedConfig.criteria) ? selectedConfig.criteria as Array<{ id: string; label: string }> : []
+  const rankingOptions = getLabeledConfigItems(selectedConfig.options, 'option')
+  const matrixRows = getLabeledConfigItems(selectedConfig.rows, 'row')
+  const decisionOptions = getLabeledConfigItems(selectedConfig.options, 'option')
+  const decisionCriteria = getLabeledConfigItems(selectedConfig.criteria, 'criterion')
   const boardColumns = Array.isArray(selectedConfig.columns) ? selectedConfig.columns as Array<{ id: string; label: string; description?: string }> : []
   const radarDimensions = Array.isArray(selectedConfig.dimensions)
     ? (selectedConfig.dimensions as any[]).map((dimension, index) => {
@@ -5585,10 +5621,11 @@ function BuilderPage({
         setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
         return
       }
-      setDefinition(parsed)
-      setSelectedPageId(parsed.pages[0]?.id || '')
-      setSelectedBlockId(parsed.pages[0]?.blocks[0]?.id || '')
-      setBuilderMode(parsed.pages.length > 0 ? 'pages' : 'setup')
+      const normalized = normalizeWorksheetDefinitionStableIds(parsed)
+      setDefinition(normalized)
+      setSelectedPageId(normalized.pages[0]?.id || '')
+      setSelectedBlockId(normalized.pages[0]?.blocks[0]?.id || '')
+      setBuilderMode(normalized.pages.length > 0 ? 'pages' : 'setup')
       setPastedJson('')
       setShowImportDialog(false)
     } catch {
@@ -6516,14 +6553,18 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   {(selectedBlock.type === 'multipleChoice' || selectedBlock.type === 'singleSelect' || selectedBlock.type === 'verdict' || selectedBlock.type === 'checklist' || selectedBlock.type === 'ranking' || selectedBlock.type === 'quiz' || selectedBlock.type === 'trueFalse' || selectedBlock.type === 'matching' || selectedBlock.type === 'confidence') && (
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">{selectedBlock.type === 'ranking' ? 'Ranking options' : selectedBlock.type === 'trueFalse' ? 'True/false choices' : selectedBlock.type === 'matching' ? 'Matching choices' : selectedBlock.type === 'quiz' ? 'Quiz options' : 'Options'}</p>
-                      {(selectedBlock.type === 'trueFalse' ? ['True', 'False'] : selectedBlock.type === 'matching' ? (selectedConfig.options || ['Option 1', 'Option 2']) : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option: string, index: number) => (
-                        <div key={`${selectedBlock.id}-option-${index}`} className="flex items-center gap-2">
+                      {(selectedBlock.type === 'trueFalse'
+                        ? ['True', 'False'].map((label, index) => ({ id: `option-${index + 1}`, label }))
+                        : selectedBlock.type === 'matching'
+                          ? getLabeledConfigItems(selectedConfig.options || ['Option 1', 'Option 2'], 'option')
+                          : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option, index: number) => (
+                        <div key={`${selectedBlock.id}-${option.id}`} className="flex items-center gap-2">
                           <input
-                            value={option}
+                            value={option.label}
                             onChange={(event) => {
                               const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
                               const next = [...current]
-                              next[index] = event.target.value
+                              next[index] = { ...option, label: event.target.value }
                               updateSelectedConfig({ options: next })
                             }}
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -6543,7 +6584,10 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ))}
                       <button
                         type="button"
-                        onClick={() => updateSelectedConfig({ options: [...(selectedBlock.type === 'ranking' ? rankingOptions : optionList), `Option ${(selectedBlock.type === 'ranking' ? rankingOptions : optionList).length + 1}`] })}
+                        onClick={() => {
+                          const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
+                          updateSelectedConfig({ options: [...current, { id: `option-${Date.now()}`, label: `Option ${current.length + 1}` }] })
+                        }}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
                       >
                         Add option
@@ -6553,7 +6597,10 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
                   {selectedBlock.type === 'categorize' && (
                     <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={(selectedConfig.items || []).join('\n')} onChange={(event) => updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={getLabeledConfigItems(selectedConfig.items, 'item').map((item) => item.label).join('\n')} onChange={(event) => {
+                        const current = getLabeledConfigItems(selectedConfig.items, 'item')
+                        updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean).map((label, index) => ({ id: current[index]?.id || `item-${Date.now()}-${index}`, label })) })
+                      }} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Categories, one per line<textarea value={(selectedConfig.categories || []).join('\n')} onChange={(event) => updateSelectedConfig({ categories: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                     </div>
                   )}
@@ -6591,15 +6638,15 @@ Make the language concise and appropriate for the learners. Do not include Markd
                             Correct answer
                             {selectedConfig.multipleAnswers ? (
                               <select multiple value={Array.isArray(selectedConfig.correctAnswer) ? selectedConfig.correctAnswer : (selectedConfig.correctAnswer ? [selectedConfig.correctAnswer] : [])} onChange={(event) => updateSelectedConfig({ correctAnswer: Array.from(event.target.selectedOptions, (option) => option.value) })} className="mt-1 min-h-28 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
-                                {(selectedConfig.options || []).map((option: string) => (
-                                  <option key={option} value={option}>{option}</option>
+                                {optionList.map((option) => (
+                                  <option key={option.id} value={option.id}>{option.label}</option>
                                 ))}
                               </select>
                             ) : (
                               <select value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
                                 <option value="">Select an answer</option>
-                                {(selectedConfig.options || []).map((option: string) => (
-                                  <option key={option} value={option}>{option}</option>
+                                {optionList.map((option) => (
+                                  <option key={option.id} value={option.id}>{option.label}</option>
                                 ))}
                               </select>
                             )}
@@ -6694,12 +6741,12 @@ Make the language concise and appropriate for the learners. Do not include Markd
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">Matrix rows</p>
                       {matrixRows.map((row, index) => (
-                        <div key={`${selectedBlock.id}-row-${index}`} className="flex items-center gap-2">
+                        <div key={row.id} className="flex items-center gap-2">
                           <input
-                            value={row}
+                            value={row.label}
                             onChange={(event) => {
                               const next = [...matrixRows]
-                              next[index] = event.target.value
+                              next[index] = { ...row, label: event.target.value }
                               updateSelectedConfig({ rows: next })
                             }}
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -6718,7 +6765,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ))}
                       <button
                         type="button"
-                        onClick={() => updateSelectedConfig({ rows: [...matrixRows, `Criteria ${matrixRows.length + 1}`] })}
+                        onClick={() => updateSelectedConfig({ rows: [...matrixRows, { id: `row-${Date.now()}`, label: `Criteria ${matrixRows.length + 1}` }] })}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
                       >
                         Add row
