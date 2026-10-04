@@ -3898,7 +3898,7 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
   )
 }
 
-function QuadrantMiniChart({ x, y }: { x: number; y: number }) {
+export function QuadrantMiniChart({ x, y, xLeft = 'Time', xRight = 'Learning', yBottom = 'Low risk', yTop = 'High risk' }: { x: number; y: number; xLeft?: string; xRight?: string; yBottom?: string; yTop?: string }) {
   const safeX = numberInRange(x, 0, 100) ?? 0
   const safeY = numberInRange(y, 0, 100) ?? 0
   return (
@@ -3907,10 +3907,10 @@ function QuadrantMiniChart({ x, y }: { x: number; y: number }) {
       <line x1="110" y1="0" x2="110" y2="220" stroke="#cbd5e1" strokeWidth="2" />
       <line x1="0" y1="110" x2="220" y2="110" stroke="#cbd5e1" strokeWidth="2" />
       <circle cx={(safeX / 100) * 220} cy={220 - (safeY / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
-      <text x="18" y="112" fontSize="11" fill="#475569">Time</text>
-      <text x="160" y="112" fontSize="11" fill="#475569">Learning</text>
-      <text x="92" y="210" fontSize="11" fill="#475569">Low risk</text>
-      <text x="92" y="18" fontSize="11" fill="#475569">High risk</text>
+      <text x="18" y="112" fontSize="11" fill="#475569">{xLeft}</text>
+      <text x="160" y="112" fontSize="11" fill="#475569">{xRight}</text>
+      <text x="92" y="210" fontSize="11" fill="#475569">{yBottom}</text>
+      <text x="92" y="18" fontSize="11" fill="#475569">{yTop}</text>
     </svg>
   )
 }
@@ -4205,7 +4205,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} />
+              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} xLeft={block.config?.xLeft} xRight={block.config?.xRight} yBottom={block.config?.yBottom} yTop={block.config?.yTop} />
               <div className="mt-3 flex justify-between text-sm text-slate-700">
                 <span>x: {averagePoint.x.toFixed(1)}</span>
                 <span>y: {averagePoint.y.toFixed(1)}</span>

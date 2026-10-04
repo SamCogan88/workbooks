@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { createElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { renderBlock } from './App'
+import { QuadrantMiniChart, renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getWorksheetResponseImportError, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
@@ -99,6 +100,24 @@ describe('worksheet block defaults', () => {
       buttonText: 'Open link',
       audience: 'student',
     })
+  })
+})
+
+describe('quadrant summary chart', () => {
+  it('renders configured axis labels', () => {
+    render(createElement(QuadrantMiniChart, {
+      x: 52,
+      y: 74,
+      xLeft: 'Cost',
+      xRight: 'Impact',
+      yBottom: 'Lower confidence',
+      yTop: 'Higher confidence',
+    }))
+
+    expect(screen.getByText('Cost')).toBeTruthy()
+    expect(screen.getByText('Impact')).toBeTruthy()
+    expect(screen.getByText('Lower confidence')).toBeTruthy()
+    expect(screen.getByText('Higher confidence')).toBeTruthy()
   })
 })
 
