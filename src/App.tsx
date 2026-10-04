@@ -297,7 +297,7 @@ function App() {
       return EMPTY_WORKSHEET_DEFINITION
     }
   })
-  const [definitionStatus, setDefinitionStatus] = useState('Import a worksheet JSON to replace the current active definition.')
+  const [, setDefinitionStatus] = useState('Import a worksheet JSON to replace the current active definition.')
 
   useEffect(() => {
     localStorage.setItem(ACTIVE_DEFINITION_KEY, JSON.stringify(activeDefinition))
@@ -323,32 +323,6 @@ function App() {
     }
   }
 
-  const importAndOpenWorksheet = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      const text = await file.text()
-      const parsed = JSON.parse(text) as unknown
-      if (!isWorksheetDefinition(parsed)) {
-        setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
-        return
-      }
-      setActiveDefinition(parsed)
-      setDefinitionStatus(`Loaded ${parsed.title} (${parsed.id} v${parsed.version}) from ${file.name}.`)
-      window.location.hash = '#/worksheet'
-    } catch {
-      setDefinitionStatus('Import failed: malformed JSON file.')
-    } finally {
-      event.target.value = ''
-    }
-  }
-
-  const clearWorksheetDefinition = () => {
-    setActiveDefinition(EMPTY_WORKSHEET_DEFINITION)
-    setDefinitionStatus('Cleared active worksheet. Load a worksheet JSON to continue.')
-  }
-
   return (
     <HashRouter>
       <TeacherAuthProvider>
@@ -360,9 +334,6 @@ function App() {
             element={(
               <HomeScreen
                 definition={activeDefinition}
-                definitionStatus={definitionStatus}
-                importAndOpenWorksheet={importAndOpenWorksheet}
-                clearWorksheetDefinition={clearWorksheetDefinition}
               />
             )}
           />
