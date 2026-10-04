@@ -69,6 +69,7 @@ import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses,
 import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
+  addMatchingPairConfig,
   getDefaultBlockConfig,
   getDefaultPageTimer,
   getFillBlankCorrectAnswerPatch,
@@ -89,6 +90,7 @@ import {
   reconcileRankingResponse,
   reconcileWorksheetResponses,
   getStructuredDefaultResponse,
+  getUnanswerableRequiredBlocks,
   getVisibleBlocks,
   getVisiblePages,
   getVisiblePagesWithBlocks,
@@ -5722,6 +5724,13 @@ function BuilderPage({
       setPublishError('Add a title and at least one page before publishing.')
       return
     }
+    const unanswerableBlocks = getUnanswerableRequiredBlocks(definitionToPublish)
+    if (unanswerableBlocks.length > 0) {
+      const labels = unanswerableBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
+      const remainingCount = unanswerableBlocks.length - labels.length
+      setPublishError(`Required blocks need answerable choices before publishing: ${labels.join(', ')}${remainingCount > 0 ? ` and ${remainingCount} more` : ''}.`)
+      return
+    }
 
     setPublishing(true)
     try {
@@ -6715,9 +6724,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
                             type="button"
                             onClick={() => {
                               const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
+                              if (selectedBlock.type === 'trueFalse' || current.length <= 1) return
                               const next = current.filter((_, optionIndex) => optionIndex !== index)
                               updateSelectedConfig({ options: next })
                             }}
+                            disabled={selectedBlock.type === 'trueFalse' || (selectedBlock.type === 'ranking' ? rankingOptions : optionList).length <= 1}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
@@ -6818,11 +6829,14 @@ Make the language concise and appropriate for the learners. Do not include Markd
                                   nextPairs[index] = { ...nextPairs[index], answer: event.target.value }
                                   updateSelectedConfig({ pairs: nextPairs })
                                 }} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Match" />
-                                <button type="button" onClick={() => updateSelectedConfig({ pairs: (selectedConfig.pairs || []).filter((_: any, itemIndex: number) => itemIndex !== index) })} className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Remove</button>
+                                <button type="button" disabled={(selectedConfig.pairs || []).length <= 1} onClick={() => {
+                                  if ((selectedConfig.pairs || []).length <= 1) return
+                                  updateSelectedConfig({ pairs: (selectedConfig.pairs || []).filter((_: any, itemIndex: number) => itemIndex !== index) })
+                                }} className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Remove</button>
                               </div>
                             </div>
                           ))}
-                          <button type="button" onClick={() => updateSelectedConfig({ pairs: [...(selectedConfig.pairs || []), { id: `pair-${Date.now()}`, prompt: 'New prompt', answer: 'New match' }] })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add pair</button>
+                          <button type="button" onClick={() => updateSelectedConfig(addMatchingPairConfig(selectedConfig))} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add pair</button>
                         </div>
                       ) : (
                         <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -6872,7 +6886,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   {selectedBlock.type === 'board' && (
                     <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Start from a preset<select defaultValue="" onChange={(event) => { const preset = event.target.value as Parameters<typeof getBoardPresetColumns>[0]; if (!preset) return; const isBlank = boardColumns.map((column) => column.label).join('|') === 'Column 1|Column 2|Column 3'; if (!isBlank && !window.confirm('Replace the current board columns with this preset?')) { event.target.value = ''; return } updateSelectedConfig({ columns: getBoardPresetColumns(preset) }); event.target.value = '' }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case"><option value="">Choose preset…</option><option value="blank">Blank board</option><option value="pmi">PMI</option><option value="kwl">KWL</option><option value="start-stop-continue">Start / Stop / Continue</option><option value="pros-cons">Pros / Cons</option><option value="rose-bud-thorn">Rose / Bud / Thorn</option><option value="what-so-what-now-what">What? / So What? / Now What?</option></select></label>
-                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" onClick={() => updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) })} className="rounded border border-red-200 px-2 text-xs text-red-700">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
+                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" disabled={boardColumns.length <= 1} onClick={() => { if (boardColumns.length <= 1) return; updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) }) }} className="rounded border border-red-200 px-2 text-xs text-red-700 disabled:opacity-40">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Entry placeholder<input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={selectedConfig.allowMultipleEntries !== false} onChange={(event) => updateSelectedConfig({ allowMultipleEntries: event.target.checked })} />Allow multiple entries</label>
                       {selectedConfig.allowMultipleEntries !== false && <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Maximum per column (0 = unlimited)<input type="number" min={0} value={Number(selectedConfig.maxEntriesPerColumn || 0)} onChange={(event) => updateSelectedConfig({ maxEntriesPerColumn: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>}
@@ -7008,9 +7022,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           <button
                             type="button"
                             onClick={() => {
+                              if (radarDimensions.length <= 3) return
                               const next = radarDimensions.filter((_, dimensionIndex) => dimensionIndex !== index)
                               updateSelectedConfig({ dimensions: next })
                             }}
+                            disabled={radarDimensions.length <= 3}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
@@ -7075,9 +7091,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           <button
                             type="button"
                             onClick={() => {
+                              if (swotCategories.length <= 1) return
                               const next = swotCategories.filter((_, categoryIndex) => categoryIndex !== index)
                               updateSelectedConfig({ categories: next })
                             }}
+                            disabled={swotCategories.length <= 1}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove

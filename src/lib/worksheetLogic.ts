@@ -419,6 +419,70 @@ export function getFillBlankCorrectAnswerPatch(correctAnswer: string) {
   return { correctAnswer, answers: undefined }
 }
 
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value
+    .filter((item) => item !== undefined && item !== null)
+    .map((item) => String(item).trim())
+    .filter(Boolean) : []
+}
+
+function matchingPairs(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((pair): pair is { answer?: unknown } => Boolean(pair && typeof pair === 'object'))
+    : []
+}
+
+export function isRequiredBlockAnswerable(block: WorksheetBlock) {
+  if (!block.required || !isResponseProducingBlock(block)) return true
+
+  const config = block.config || {}
+  switch (block.type) {
+    case 'singleSelect':
+    case 'checklist':
+    case 'ranking':
+    case 'confidence':
+    case 'verdict':
+      return stringList(config.options).length > 0
+    case 'multipleChoice':
+    case 'quiz': {
+      const options = stringList(config.options)
+      const answers = Array.isArray(config.correctAnswer) ? stringList(config.correctAnswer) : stringList([config.correctAnswer])
+      return options.length > 0 && answers.length > 0 && answers.every((answer) => options.includes(answer))
+    }
+    case 'matching': {
+      const options = stringList(config.options)
+      const pairs = matchingPairs(config.pairs)
+      return options.length > 0 && pairs.length > 0 && pairs.every((pair) => {
+        const answer = String(pair.answer || '').trim()
+        return answer.length > 0 && options.includes(answer)
+      })
+    }
+    case 'radar':
+      return getRadarDimensions(block).length >= 3
+    case 'board':
+      return Array.isArray(config.columns) && config.columns.length > 0
+    case 'swot':
+      return Array.isArray(config.categories) && config.categories.length > 0
+    default:
+      return true
+  }
+}
+
+export function getUnanswerableRequiredBlocks(definition: WorksheetDefinition) {
+  return definition.pages.flatMap((page) => page.blocks.filter((block) => !isRequiredBlockAnswerable(block)))
+}
+
+export function addMatchingPairConfig(config: Record<string, any>, timestamp = Date.now()) {
+  const pairs = Array.isArray(config.pairs) ? config.pairs : []
+  const options = stringList(config.options)
+  const answer = `Match ${pairs.length + 1}`
+  return {
+    ...config,
+    pairs: [...pairs, { id: `pair-${timestamp}`, prompt: 'New prompt', answer }],
+    options: options.includes(answer) ? options : [...options, answer],
+  }
+}
+
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, unknown>) {
   const quizTypes = new Set(['quiz', 'multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'])
   const items = definition.pages.flatMap((page) => page.blocks)
@@ -506,13 +570,14 @@ export function getDefaultBlockConfig(type: string, timestamp: number): Record<s
     case 'numeric': return { correctAnswer: 10, tolerance: 0, unit: '', placeholder: 'Enter a number', showFeedback: true, points: 1 }
     case 'wordCloud': return { maxEntries: 3, placeholder: 'Add a word or short phrase' }
     case 'confidence': return { options: ['Not sure yet', 'Somewhat confident', 'Very confident'] }
+    case 'verdict': return { options: ['Recommend', 'Use with caution', 'Do not recommend'] }
     case 'matrix': return { rows: ['Criteria 1', 'Criteria 2', 'Criteria 3'], min: 1, max: 5, defaultValue: 3 }
     case 'imagePrompt': return { imageUrl: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80', altText: 'Worksheet image prompt', imageFit: 'contain', imageSize: 'large' }
     case 'video':
     case 'youtube': return { videoUrl: type === 'youtube' ? 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' : 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4', altText: type === 'youtube' ? 'YouTube video prompt' : 'Video prompt' }
     case 'quiz': return { question: 'Which answer is correct?', options: ['Option A', 'Option B', 'Option C'], correctAnswer: 'Option A', showFeedback: true, points: 1, explanation: 'Explain why the correct answer is right.' }
     case 'section': return { title: 'Section heading' }
-    case 'radar': return { dimensions: [{ id: `radar-dimension-${timestamp}`, label: 'Dimension 1' }, { id: `radar-dimension-${timestamp + 1}`, label: 'Dimension 2' }] }
+    case 'radar': return { dimensions: [{ id: `radar-dimension-${timestamp}`, label: 'Dimension 1' }, { id: `radar-dimension-${timestamp + 1}`, label: 'Dimension 2' }, { id: `radar-dimension-${timestamp + 2}`, label: 'Dimension 3' }] }
     case 'quadrant': return { xLeft: 'Left', xRight: 'Right', yBottom: 'Bottom', yTop: 'Top', rationaleRequired: true }
     case 'swot': return { categories: [{ id: 'strengths', label: 'Strengths' }, { id: 'weaknesses', label: 'Weaknesses' }, { id: 'opportunities', label: 'Opportunities' }, { id: 'threats', label: 'Threats' }] }
     case 'continuum': return { leftLabel: 'Low', rightLabel: 'High', instructions: 'Place your response on the spectrum.', rationaleRequired: false, defaultValue: 50 }

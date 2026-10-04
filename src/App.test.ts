@@ -10,7 +10,7 @@ import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, rema
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -143,6 +143,9 @@ describe('worksheet block defaults', () => {
       showFeedback: true,
       points: 1,
     })
+    expect(getDefaultBlockConfig('verdict', 1)).toMatchObject({
+      options: ['Recommend', 'Use with caution', 'Do not recommend'],
+    })
     expect(getDefaultBlockConfig('fillBlank', 1)).toMatchObject({
       question: 'The capital of France is ______.',
       correctAnswer: 'Paris',
@@ -169,6 +172,14 @@ describe('worksheet block defaults', () => {
       url: 'https://example.com',
       buttonText: 'Open link',
       audience: 'student',
+    })
+    expect((getDefaultBlockConfig('radar', 1).dimensions as unknown[])).toHaveLength(3)
+  })
+
+  it('keeps new matching pairs answerable from the choices list', () => {
+    expect(addMatchingPairConfig({ pairs: [], options: ['Existing'] }, 42)).toMatchObject({
+      pairs: [{ id: 'pair-42', prompt: 'New prompt', answer: 'Match 1' }],
+      options: ['Existing', 'Match 1'],
     })
   })
 })
@@ -836,6 +847,22 @@ describe('required page completion', () => {
     expect(isRequiredBlockSatisfied(richText, { rich: '<p>&nbsp;</p>' })).toBe(false)
     expect(isRequiredBlockSatisfied(richText, { rich: '<p><strong>Done</strong></p>' })).toBe(true)
     expect(normalizeRichTextResponse('<p></p>')).toBe('')
+  })
+
+  it('flags required blocks that learners cannot answer before publishing', () => {
+    const definition = {
+      pages: [{
+        blocks: [
+          { id: 'empty-verdict', type: 'verdict', label: 'Verdict', required: true, config: { options: [] } },
+          { id: 'bad-match', type: 'matching', label: 'Match', required: true, config: { options: ['Choice'], pairs: [{ id: 'pair-1', answer: 'Missing choice' }] } },
+          { id: 'flat-radar', type: 'radar', label: 'Radar', required: true, config: { dimensions: ['Ease', 'Impact'] } },
+          { id: 'optional-empty', type: 'singleSelect', required: false, config: { options: [] } },
+          { id: 'usable-board', type: 'board', required: true, config: { columns: [{ id: 'column-1', label: 'Column' }] } },
+        ],
+      }],
+    } as any
+    expect(getUnanswerableRequiredBlocks(definition).map((block) => block.id)).toEqual(['empty-verdict', 'bad-match', 'flat-radar'])
+    expect(getUnanswerableRequiredBlocks(definition).map((block) => block.id)).toEqual(['empty-verdict', 'bad-match', 'flat-radar'])
   })
 
   it('treats required response blocks as incomplete until they have meaningful values', () => {
