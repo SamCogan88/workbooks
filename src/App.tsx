@@ -3341,6 +3341,7 @@ function clampHotspotPercent(value: number) {
 function HotspotBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
   const lastPoint = points[points.length - 1]
+  const imageRef = useRef<HTMLImageElement>(null)
   const [keyboardPoint, setKeyboardPoint] = useState(() => ({
     x: clampHotspotPercent(Number(lastPoint?.x ?? 50)),
     y: clampHotspotPercent(Number(lastPoint?.y ?? 50)),
@@ -3362,11 +3363,11 @@ function HotspotBlock({ block, responses, updateResponse, showRequiredError = fa
         tabIndex={0}
         aria-describedby={`${instructionId} ${statusId}`}
         aria-label={`${getBlockDisplayLabel(block)} hotspot image`}
-        className={`relative overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
+        className={`relative w-fit max-w-full overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
         onFocus={() => setShowKeyboardPoint(true)}
         onBlur={() => setShowKeyboardPoint(false)}
         onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect()
+          const rect = imageRef.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect()
           const point = { x: clampHotspotPercent(((event.clientX - rect.left) / rect.width) * 100), y: clampHotspotPercent(((event.clientY - rect.top) / rect.height) * 100) }
           setKeyboardPoint(point)
           placePoint(point)
@@ -3391,7 +3392,7 @@ function HotspotBlock({ block, responses, updateResponse, showRequiredError = fa
           setKeyboardPoint((current) => ({ x: clampHotspotPercent(current.x + delta.x), y: clampHotspotPercent(current.y + delta.y) }))
         }}
       >
-        <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
+        <img ref={imageRef} src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto max-h-[70vh] min-h-48 max-w-full cursor-crosshair object-contain" />
         {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
         {showKeyboardPoint && <span className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-blue-700 bg-white/70 shadow" style={{ left: `${keyboardPoint.x}%`, top: `${keyboardPoint.y}%` }} />}
       </div>

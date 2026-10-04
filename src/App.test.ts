@@ -625,6 +625,38 @@ describe('image prompt display configuration', () => {
   })
 })
 
+describe('hotspot image display', () => {
+  it('caps the rendered image height and keeps the full image visible', () => {
+    const { container } = render(renderBlock({ id: 'hotspot', type: 'hotspot', config: { imageUrl: '/large.jpg', altText: 'Large diagram' } }, {}, vi.fn()))
+
+    const image = container.querySelector('img[alt="Large diagram"]') as HTMLImageElement
+    expect(image.className).toContain('max-h-[70vh]')
+    expect(image.className).toContain('object-contain')
+  })
+
+  it('maps clicks against the rendered image bounds', () => {
+    const update = vi.fn()
+    const { container } = render(renderBlock({ id: 'hotspot', type: 'hotspot', config: { imageUrl: '/large.jpg', altText: 'Large diagram' } }, {}, update))
+
+    const image = container.querySelector('img[alt="Large diagram"]') as HTMLImageElement
+    vi.spyOn(image, 'getBoundingClientRect').mockReturnValue({
+      x: 110,
+      y: 220,
+      left: 110,
+      top: 220,
+      right: 510,
+      bottom: 420,
+      width: 400,
+      height: 200,
+      toJSON: () => ({}),
+    })
+
+    fireEvent.click(image, { clientX: 310, clientY: 270 })
+
+    expect(update).toHaveBeenCalledWith('hotspot', [{ x: 50, y: 25 }])
+  })
+})
+
 describe('visual thinking blocks', () => {
   it('names learner-facing sliders and matching controls from their prompts', () => {
     const update = vi.fn()
