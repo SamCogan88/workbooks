@@ -7,6 +7,7 @@ import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
@@ -313,6 +314,93 @@ describe('conditional visibility', () => {
       ownerId: 'teams',
       sourceBlockId: 'lms',
     })
+  })
+})
+
+describe('builder option reference integrity', () => {
+  const definition = {
+    id: 'options-test',
+    version: 1,
+    title: 'Options test',
+    description: '',
+    settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+    pages: [
+      {
+        id: 'quiz',
+        title: 'Quiz',
+        blocks: [
+          {
+            id: 'question',
+            type: 'multipleChoice',
+            config: {
+              options: ['Option A', 'Option B', 'Option C'],
+              correctAnswer: 'Option A',
+              multipleAnswers: false,
+            },
+          },
+        ],
+      },
+      {
+        id: 'branch',
+        title: 'Branch',
+        condition: { blockId: 'question', operator: 'equals', value: 'Option A' },
+        blocks: [
+          { id: 'follow-up', type: 'content', condition: { blockId: 'question', operator: 'equals', value: 'Option B' } },
+        ],
+      },
+    ],
+  } as any
+
+  it('renames option references in answers and dependent conditions', () => {
+    const updated = updateBlockConfigWithOptionReferences(definition, 'question', {
+      options: ['Renamed A', 'Renamed B', 'Option C'],
+    })
+
+    expect(updated.pages[0]?.blocks[0]?.config?.correctAnswer).toBe('Renamed A')
+    expect(updated.pages[1].condition?.value).toBe('Renamed A')
+    expect(updated.pages[1]?.blocks[0]?.condition?.value).toBe('Renamed B')
+  })
+
+  it('clears references to removed options', () => {
+    const updated = updateBlockConfigWithOptionReferences(definition, 'question', {
+      options: ['Option B', 'Option C'],
+    })
+
+    expect(updated.pages[0]?.blocks[0]?.config?.correctAnswer).toBe('')
+    expect(updated.pages[1].condition).toBeUndefined()
+    expect(updated.pages[1]?.blocks[0]?.condition?.value).toBe('Option B')
+  })
+
+  it('keeps correct answer shape aligned with multiple answer mode', () => {
+    const multiple = updateBlockConfigWithOptionReferences(definition, 'question', { multipleAnswers: true })
+    expect(multiple.pages[0]?.blocks[0]?.config?.correctAnswer).toEqual(['Option A'])
+
+    const single = updateBlockConfigWithOptionReferences(multiple, 'question', { multipleAnswers: false })
+    expect(single.pages[0]?.blocks[0]?.config?.correctAnswer).toBe('Option A')
+  })
+
+  it('renames matching pair answers when choices change', () => {
+    const matchingDefinition = {
+      ...definition,
+      pages: [{
+        id: 'matching',
+        title: 'Matching',
+        blocks: [{
+          id: 'match',
+          type: 'matching',
+          config: {
+            options: ['Light energy', 'Cellular respiration'],
+            pairs: [{ id: 'pair-1', prompt: 'Photosynthesis', answer: 'Light energy' }],
+          },
+        }],
+      }],
+    } as any
+
+    const updated = updateBlockConfigWithOptionReferences(matchingDefinition, 'match', {
+      options: ['Sunlight', 'Cellular respiration'],
+    })
+
+    expect(updated.pages[0]?.blocks[0]?.config?.pairs[0]?.answer).toBe('Sunlight')
   })
 })
 

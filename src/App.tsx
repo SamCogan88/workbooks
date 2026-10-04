@@ -63,6 +63,7 @@ import {
 } from './lib/aggregation'
 import { getPublishCardState } from './lib/builderPublishState'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
@@ -5677,7 +5678,7 @@ function BuilderPage({
 
   const updateSelectedConfig = (partial: Record<string, any>) => {
     if (!selectedBlock) return
-    updateSelectedBlock({ config: { ...selectedConfig, ...partial } })
+    setDefinition((previous) => updateBlockConfigWithOptionReferences(previous, selectedBlock.id, partial))
   }
 
   const updateWorksheetDefinition = (partial: Partial<WorksheetDefinition>) => {
