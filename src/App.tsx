@@ -61,6 +61,7 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
+import { createBuilderId } from './lib/builderIds'
 import { getPublishCardState } from './lib/builderPublishState'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
@@ -5224,12 +5225,11 @@ function BuilderPage({
     : priorPageResponseBlocks
 
   const addPage = () => {
-    const timestamp = Date.now()
     const nextPage: WorksheetPage = {
-      id: `page-${timestamp}`,
+      id: createBuilderId('page'),
       title: `Page ${definition.pages.length + 1}`,
       timer: getDefaultPageTimer(),
-      blocks: [{ id: `block-${timestamp}`, type: 'content', title: 'New content block' }],
+      blocks: [{ id: createBuilderId('block'), type: 'content', title: 'New content block' }],
     }
     setDefinition((previous) => ({ ...previous, pages: [...previous.pages, nextPage] }))
     setSelectedPageId(nextPage.id)
@@ -5242,13 +5242,13 @@ function BuilderPage({
     const templateBlocks: WorksheetBlock[] = template === 'quiz'
       ? [
           {
-            id: `block-${timestamp}-1`,
+            id: createBuilderId('block'),
             type: 'content',
             title: 'Quiz introduction',
             description: 'Add instructions for learners before they begin.',
           },
           {
-            id: `block-${timestamp}-2`,
+            id: createBuilderId('block'),
             type: 'multipleChoice',
             label: 'Question 1',
             required: true,
@@ -5258,13 +5258,13 @@ function BuilderPage({
       : template === 'reflection'
         ? [
             {
-              id: `block-${timestamp}-1`,
+              id: createBuilderId('block'),
               type: 'content',
               title: 'Reflection',
               description: 'Introduce the activity and explain what learners should reflect on.',
             },
             {
-              id: `block-${timestamp}-2`,
+              id: createBuilderId('block'),
               type: 'longText',
               label: 'What did you learn?',
               required: true,
@@ -5274,7 +5274,7 @@ function BuilderPage({
         : []
 
     const page: WorksheetPage = {
-      id: `page-${timestamp}`,
+      id: createBuilderId('page'),
       title: template === 'quiz' ? 'Quiz' : template === 'reflection' ? 'Reflection' : 'Page 1',
       timer: getDefaultPageTimer(),
       blocks: templateBlocks,
@@ -5310,10 +5310,9 @@ function BuilderPage({
     const pageIndex = definition.pages.findIndex((page) => page.id === selectedPage.id)
     if (pageIndex < 0) return
 
-    const baseTime = Date.now()
     const blockIdMap: Record<string, string> = {}
-    const duplicatedBlocks = selectedPage.blocks.map((block, blockIndex) => {
-      const id = `block-${baseTime}-${blockIndex + 1}`
+    const duplicatedBlocks = selectedPage.blocks.map((block) => {
+      const id = createBuilderId('block')
       blockIdMap[block.id] = id
       return {
         ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
@@ -5323,7 +5322,7 @@ function BuilderPage({
 
     const duplicatePage: WorksheetPage = {
       ...JSON.parse(JSON.stringify(selectedPage)) as WorksheetPage,
-      id: `page-${baseTime}`,
+      id: createBuilderId('page'),
       title: `${selectedPage.title} (Copy)`,
       blocks: remapBlockConditions(duplicatedBlocks, blockIdMap),
     }
@@ -5343,7 +5342,7 @@ function BuilderPage({
     if (definition.pages.length === 1) {
       if (!window.confirm('Delete the only page? This will create a new blank page.')) return
       const replacementPage: WorksheetPage = {
-        id: `page-${Date.now()}`,
+        id: createBuilderId('page'),
         title: 'Page 1',
         timer: getDefaultPageTimer(),
         blocks: [],
@@ -5401,7 +5400,7 @@ function BuilderPage({
         : `New ${type} block`
 
     return {
-      id: `block-${timestamp}`,
+      id: createBuilderId('block'),
       type,
       label,
       title: type === 'content' ? 'New content block' : type === 'section' ? 'Section heading' : undefined,
@@ -5586,7 +5585,7 @@ function BuilderPage({
 
     const duplicateBlock: WorksheetBlock = {
       ...JSON.parse(JSON.stringify(blockToDuplicate)) as WorksheetBlock,
-      id: `block-${Date.now()}`,
+      id: createBuilderId('block'),
     }
 
     setDefinition((previous) => ({

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
+import { createBuilderId } from './lib/builderIds'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
@@ -199,6 +200,20 @@ describe('quadrant summary chart', () => {
     expect(screen.getByText('Impact')).toBeTruthy()
     expect(screen.getByText('Lower confidence')).toBeTruthy()
     expect(screen.getByText('Higher confidence')).toBeTruthy()
+  })
+})
+
+describe('builder ids', () => {
+  it('uses crypto UUIDs for new page and block identifiers', () => {
+    const randomUUID = vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValueOnce('22222222-2222-4222-8222-222222222222')
+
+    expect(createBuilderId('page')).toBe('page-11111111-1111-4111-8111-111111111111')
+    expect(createBuilderId('block')).toBe('block-22222222-2222-4222-8222-222222222222')
+    expect(randomUUID).toHaveBeenCalledTimes(2)
+
+    randomUUID.mockRestore()
   })
 })
 
