@@ -101,6 +101,7 @@ import {
   isResponseProducingBlock,
   normalizeRichTextResponse,
   normalizeWorksheetDefinitionStableIds,
+  reorderBlocks,
   sanitizeWorksheetDefinition,
   stripHtml,
 } from './lib/worksheetLogic'
@@ -5602,22 +5603,15 @@ function BuilderPage({
   }
 
   const moveBlockWithinPage = (blockId: string, insertIndex: number) => {
-    if (!selectedPage) return
-    const fromIndex = selectedPage.blocks.findIndex((block) => block.id === blockId)
-    if (fromIndex < 0) return
+    if (!selectedPage || !selectedPage.blocks.some((block) => block.id === blockId)) return
 
     setDefinition((previous) => {
       const nextDefinition = {
         ...previous,
         pages: previous.pages.map((page) => {
           if (page.id !== selectedPage.id) return page
-          const nextBlocks = [...page.blocks]
-          const [moved] = nextBlocks.splice(fromIndex, 1)
-          if (!moved) return page
-          const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
-          const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
-          nextBlocks.splice(boundedIndex, 0, moved)
-          return { ...page, blocks: nextBlocks }
+          const nextBlocks = reorderBlocks(page.blocks, blockId, insertIndex)
+          return nextBlocks === page.blocks ? page : { ...page, blocks: nextBlocks }
         }),
       }
       if (getFirstConditionOrderViolation(nextDefinition)) {
@@ -6588,6 +6582,32 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
                         Drag block to reorder
                       </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            moveBlockWithinPage(block.id, index - 1)
+                          }}
+                          disabled={index === 0}
+                          aria-label={`Move ${block.label || block.title || block.type} up`}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Move up
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            moveBlockWithinPage(block.id, index + 2)
+                          }}
+                          disabled={index === selectedPage.blocks.length - 1}
+                          aria-label={`Move ${block.label || block.title || block.type} down`}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Move down
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}

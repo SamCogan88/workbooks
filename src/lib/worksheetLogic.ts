@@ -227,6 +227,22 @@ export function getVisiblePagesWithBlocks(definition: WorksheetDefinition, respo
   }))
 }
 
+export function reorderBlocks(blocks: WorksheetBlock[], blockId: string, insertIndex: number) {
+  const fromIndex = blocks.findIndex((block) => block.id === blockId)
+  if (fromIndex < 0) return blocks
+
+  const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
+  const boundedIndex = Math.max(0, Math.min(adjustedIndex, blocks.length - 1))
+  if (boundedIndex === fromIndex) return blocks
+
+  const nextBlocks = [...blocks]
+  const [moved] = nextBlocks.splice(fromIndex, 1)
+  if (!moved) return blocks
+
+  nextBlocks.splice(boundedIndex, 0, moved)
+  return nextBlocks
+}
+
 export function getAdjacentVisiblePageIndex(definition: WorksheetDefinition, responses: Record<string, unknown>, currentIndex: number, direction: 1 | -1) {
   const visibleIndexes = getVisiblePages(definition, responses).map((page) => definition.pages.indexOf(page))
   const position = visibleIndexes.indexOf(currentIndex)

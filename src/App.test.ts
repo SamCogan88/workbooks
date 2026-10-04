@@ -12,7 +12,7 @@ import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceInte
 import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
+import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, reorderBlocks, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -512,6 +512,27 @@ describe('builder option reference integrity', () => {
     })
 
     expect(updated.pages[0]?.blocks[0]?.config?.pairs[0]?.answer).toBe('Sunlight')
+  })
+})
+
+describe('builder block ordering', () => {
+  const blocks = [
+    { id: 'intro', type: 'content', title: 'Intro' },
+    { id: 'question', type: 'shortText', label: 'Question' },
+    { id: 'follow-up', type: 'longText', label: 'Follow up' },
+  ] as any
+
+  it('moves a block up using the shared insert-index reorder helper', () => {
+    expect(reorderBlocks(blocks, 'question', 0).map((block) => block.id)).toEqual(['question', 'intro', 'follow-up'])
+  })
+
+  it('moves a block down using the same insert-index semantics as drag-and-drop', () => {
+    expect(reorderBlocks(blocks, 'question', 3).map((block) => block.id)).toEqual(['intro', 'follow-up', 'question'])
+  })
+
+  it('returns the same list when a move would not change order', () => {
+    expect(reorderBlocks(blocks, 'intro', 0)).toBe(blocks)
+    expect(reorderBlocks(blocks, 'missing', 1)).toBe(blocks)
   })
 })
 
