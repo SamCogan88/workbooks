@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
@@ -192,6 +192,45 @@ describe('visual thinking blocks', () => {
     expect(screen.getAllByRole('radiogroup')).toHaveLength(4)
     fireEvent.click(screen.getAllByRole('radio')[0])
     expect(update).toHaveBeenCalled()
+  })
+
+  it('stores duplicate choice and checklist labels by stable option id', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'choice', type: 'singleSelect', label: 'Choose', config: { options: [{ id: 'first', label: 'Agree' }, { id: 'second', label: 'Agree' }] } }, {}, update))
+    fireEvent.click(screen.getAllByLabelText('Agree')[1])
+    expect(update).toHaveBeenLastCalledWith('choice', 'second')
+
+    update.mockClear()
+    cleanup()
+    render(renderBlock({ id: 'checks', type: 'checklist', label: 'Check', config: { options: [{ id: 'a', label: 'Same' }, { id: 'b', label: 'Same' }] } }, {}, update))
+    fireEvent.click(screen.getAllByLabelText('Same')[1])
+    expect(update).toHaveBeenLastCalledWith('checks', ['b'])
+  })
+
+  it('stores duplicate categorize, matrix, and radar labels by stable ids', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'cat', type: 'categorize', label: 'Sort', config: { items: [{ id: 'item-a', label: 'Repeat' }, { id: 'item-b', label: 'Repeat' }], categories: ['One'] } }, {}, update))
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'One' } })
+    expect(update).toHaveBeenLastCalledWith('cat', { 'item-b': 'One' })
+
+    update.mockClear()
+    cleanup()
+    const { container } = render(renderBlock({ id: 'matrix', type: 'matrix', label: 'Rate', config: { rows: [{ id: 'row-a', label: 'Repeat' }, { id: 'row-b', label: 'Repeat' }], min: 1, max: 5 } }, {}, update))
+    fireEvent.change(container.querySelectorAll('input[type="range"]')[1], { target: { value: '4' } })
+    expect(update).toHaveBeenLastCalledWith('matrix', { 'row-b': 4 })
+
+    update.mockClear()
+    cleanup()
+    render(renderBlock({ id: 'radar', type: 'radar', label: 'Radar', config: { dimensions: [{ id: 'dim-a', label: 'Repeat' }, { id: 'dim-b', label: 'Repeat' }] } }, {}, update))
+    fireEvent.change(screen.getAllByRole('slider')[1], { target: { value: '8' } })
+    expect(update).toHaveBeenLastCalledWith('radar', { 'dim-b': 8 })
+  })
+
+  it('falls back to stable decision matrix ids when imported cells lack ids', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'decision', type: 'decisionMatrix', label: 'Compare', config: { options: [{ label: 'Option' }, { label: 'Option' }], criteria: [{ label: 'Cost' }, { label: 'Cost' }], min: 1, max: 2 } }, {}, update))
+    fireEvent.click(screen.getAllByRole('radio')[7])
+    expect(update).toHaveBeenLastCalledWith('decision', { 'option-2': { 'criterion-2': 2 } })
   })
 
   it('builds every board preset and validates meaningful entries', () => {
