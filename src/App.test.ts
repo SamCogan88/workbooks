@@ -8,6 +8,7 @@ import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { createBuilderId } from './lib/builderIds'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { formatDocumentTitle, getRouteDocumentTitle } from './lib/documentTitle'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
@@ -80,6 +81,24 @@ describe('online workbook join routing', () => {
 })
 
 afterEach(cleanup)
+
+describe('document titles', () => {
+  it('uses the app name for the shell title', () => {
+    expect(formatDocumentTitle()).toBe('Workbooks')
+  })
+
+  it('names static routes descriptively', () => {
+    expect(getRouteDocumentTitle('/builder', 'Climate reflection')).toBe('Worksheet Builder – Workbooks')
+    expect(getRouteDocumentTitle('/join/ABC123')).toBe('Join Workbook – Workbooks')
+    expect(getRouteDocumentTitle('/teacher/workbooks/workbook-1/report')).toBe('Workbook Responses – Workbooks')
+  })
+
+  it('includes the active worksheet title on worksheet routes', () => {
+    expect(getRouteDocumentTitle('/worksheet', 'Climate reflection')).toBe('Climate reflection – Workbooks')
+    expect(getRouteDocumentTitle('/preview', 'Climate reflection')).toBe('Preview Climate reflection – Workbooks')
+    expect(getRouteDocumentTitle('/report', 'Climate reflection')).toBe('Report for Climate reflection – Workbooks')
+  })
+})
 
 describe('modal overlay accessibility', () => {
   it('traps focus, makes siblings inert, closes with Escape and restores focus', () => {

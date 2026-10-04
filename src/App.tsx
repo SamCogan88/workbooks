@@ -1,4 +1,4 @@
-import { HashRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent, type ReactNode } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
@@ -64,6 +64,7 @@ import {
 import { createBuilderId } from './lib/builderIds'
 import { getPublishCardState } from './lib/builderPublishState'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { formatDocumentTitle, getRouteDocumentTitle } from './lib/documentTitle'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
@@ -160,6 +161,18 @@ const BLOCK_TYPE_ICONS: Record<string, typeof FileText> = {
 function BlockTypeIcon({ type, className = 'h-4 w-4' }: { type: string; className?: string }) {
   const Icon = BLOCK_TYPE_ICONS[type] || FileText
   return <Icon aria-hidden="true" className={className} />
+}
+
+function useDocumentTitle(title: string) {
+  useEffect(() => {
+    document.title = title
+  }, [title])
+}
+
+function RouteDocumentTitle({ definition }: { definition: WorksheetDefinition }) {
+  const location = useLocation()
+  useDocumentTitle(getRouteDocumentTitle(location.pathname, definition.title))
+  return null
 }
 
 function getBlockDisplayLabel(block: WorksheetBlock) {
@@ -468,6 +481,7 @@ function App() {
 
   return (
     <HashRouter>
+      <RouteDocumentTitle definition={activeDefinition} />
       <TeacherAuthProvider>
         <div className="min-h-screen bg-slate-100 text-slate-900">
           <GlobalBreadcrumb />
@@ -522,6 +536,8 @@ function OnlineJoinPage() {
   const [workbook, setWorkbook] = useState<OnlineWorksheetRow | null>(null)
   const [loading, setLoading] = useState(Boolean(publicCode))
   const [error, setError] = useState('')
+
+  useDocumentTitle(workbook ? formatDocumentTitle(workbook.definition.title) : getRouteDocumentTitle('/join'))
 
   useEffect(() => {
     if (!publicCode) return
@@ -736,6 +752,8 @@ function OnlineTeacherReportPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reportNotice, setReportNotice] = useState('')
+
+  useDocumentTitle(workbook ? formatDocumentTitle(`${workbook.definition.title} Responses`) : getRouteDocumentTitle(`/teacher/workbooks/${workbookId}/report`))
 
   useEffect(() => {
     if (authLoading) return
