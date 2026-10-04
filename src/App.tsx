@@ -63,6 +63,7 @@ import {
 } from './lib/aggregation'
 import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
@@ -3639,6 +3640,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
 
 function formatBlockValue(block: WorksheetBlock, value: any) {
   if (value === undefined || value === null || value === '') return ''
+  if (block.type === 'richText') return stripHtml(sanitizeRichTextHtml(String(value)))
   if (typeof value === 'string') return value
   if (typeof value === 'number') return String(value)
   if (block.type === 'wordCloud') return value.filter(Boolean).join(', ')
@@ -3934,7 +3936,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
 
   const renderResponseValue = (block: WorksheetBlock, value: any) => {
     if (block.type === 'richText') {
-      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: String(value) }} />
+      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: sanitizeRichTextHtml(String(value)) }} />
     }
 
     if (block.type === 'checklist') {
