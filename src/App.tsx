@@ -78,6 +78,7 @@ import {
   stripHtml,
 } from './lib/worksheetLogic'
 import { sanitiseWorksheetResponses } from './lib/responseValidation'
+import { getPdfLineCapacity } from './lib/pdfLayout'
 
 const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
@@ -1678,33 +1679,42 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       y = 52
     }
 
-    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
-      const lines = pdf.splitTextToSize(text, width)
-      pdf.text(lines, x, top)
-      return lines.length * lineHeight
-    }
-
     const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
       const innerWidth = pageWidth - 104
       const lineHeight = 12
       const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
-      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
-      ensurePdfSpace(cardHeight + 10)
-      if (tone === 'section') {
-        pdf.setFillColor(248, 250, 252)
-        pdf.setDrawColor(203, 213, 225)
-      } else {
-        pdf.setFillColor(255, 255, 255)
-        pdf.setDrawColor(226, 232, 240)
+      let remainingLines = wrappedLines.length ? wrappedLines : ['']
+      let continued = false
+
+      while (remainingLines.length > 0) {
+        const fixedHeight = 34 + 14 + 10
+        let capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        if (capacity < 1) {
+          pdf.addPage()
+          y = 52
+          capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        }
+
+        const pageLines = remainingLines.slice(0, Math.max(1, capacity))
+        remainingLines = remainingLines.slice(pageLines.length)
+        const cardHeight = 34 + pageLines.length * lineHeight + 14
+        if (tone === 'section') {
+          pdf.setFillColor(248, 250, 252)
+          pdf.setDrawColor(203, 213, 225)
+        } else {
+          pdf.setFillColor(255, 255, 255)
+          pdf.setDrawColor(226, 232, 240)
+        }
+        pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+        pdf.setTextColor(15, 23, 42)
+        pdf.setFontSize(11)
+        pdf.text(continued ? `${title} (continued)` : title, 64, y + 18)
+        pdf.setTextColor(71, 85, 105)
+        pdf.setFontSize(9)
+        pdf.text(pageLines, 64, y + 34)
+        y += cardHeight + 10
+        continued = true
       }
-      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
-      pdf.setTextColor(15, 23, 42)
-      pdf.setFontSize(11)
-      pdf.text(title, 64, y + 18)
-      pdf.setTextColor(71, 85, 105)
-      pdf.setFontSize(9)
-      pdf.text(wrappedLines, 64, y + 34)
-      y += cardHeight + 10
     }
 
     pdf.setFillColor(15, 23, 42)
@@ -1750,19 +1760,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
       if (answeredBlocks.length === 0 && !contextText) return
 
-      ensurePdfSpace(80)
-      pdf.setFillColor(248, 250, 252)
-      pdf.setDrawColor(203, 213, 225)
-      pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
-      pdf.setTextColor(15, 23, 42)
-      pdf.setFontSize(13)
-      pdf.text(page.title, 64, y + 20)
-      if (contextText) {
-        pdf.setFontSize(9)
-        pdf.setTextColor(71, 85, 105)
-        drawWrappedText(contextText, 64, y + 36, pageWidth - 136)
-      }
-      y += 72
+      drawPdfCard(page.title, contextText ? [contextText] : [], 'section')
 
       if (answeredBlocks.length === 0) {
         drawPdfCard('Responses', ['No recorded responses on this page.'])
@@ -1776,10 +1774,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           const scores = value as Record<string, number>
           const scoreEntries = Object.entries(scores).filter(([, score]) => Number.isFinite(Number(score)))
           if (!scoreEntries.length) return
-          ensurePdfSpace(132)
+          const radarHeight = Math.max(122, 46 + scoreEntries.length * 12)
+          ensurePdfSpace(radarHeight + 10)
           pdf.setFillColor(255, 255, 255)
           pdf.setDrawColor(226, 232, 240)
-          pdf.roundedRect(52, y, pageWidth - 104, 122, 10, 10, 'FD')
+          pdf.roundedRect(52, y, pageWidth - 104, radarHeight, 10, 10, 'FD')
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -1789,17 +1788,22 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           scoreEntries.forEach(([label, score], index) => {
             pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
           })
-          y += 134
+          y += radarHeight + 12
           return
         }
 
         if (block.type === 'quadrant' && value && typeof value === 'object') {
           const point = value as Record<string, unknown>
           const rationale = typeof point.rationale === 'string' && point.rationale.trim() ? String(point.rationale).trim() : 'No rationale recorded.'
-          ensurePdfSpace(144)
+          const rationaleLines = pdf.splitTextToSize(rationale, pageWidth - 292)
+          const firstPageLineLimit = getPdfLineCapacity(pageHeight - 42 - y - 88 - 10, 12)
+          const firstPageLines = rationaleLines.slice(0, Math.max(1, firstPageLineLimit))
+          const remainingRationaleLines = rationaleLines.slice(firstPageLines.length)
+          const quadrantHeight = Math.max(134, 88 + firstPageLines.length * 12)
+          ensurePdfSpace(quadrantHeight + 10)
           pdf.setFillColor(255, 255, 255)
           pdf.setDrawColor(226, 232, 240)
-          pdf.roundedRect(52, y, pageWidth - 104, 134, 10, 10, 'FD')
+          pdf.roundedRect(52, y, pageWidth - 104, quadrantHeight, 10, 10, 'FD')
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -1808,8 +1812,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           pdf.setTextColor(71, 85, 105)
           pdf.text(`x: ${(Number(point.x) || 0).toFixed(1)}`, 172, y + 42)
           pdf.text(`y: ${(Number(point.y) || 0).toFixed(1)}`, 172, y + 56)
-          drawWrappedText(rationale, 172, y + 74, pageWidth - 292)
-          y += 146
+          pdf.text(firstPageLines, 172, y + 74)
+          y += quadrantHeight + 12
+          if (remainingRationaleLines.length) {
+            drawPdfCard(`${getBlockDisplayLabel(block)} rationale`, remainingRationaleLines)
+          }
           return
         }
 
@@ -4433,33 +4440,42 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       y = 52
     }
 
-    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
-      const lines = pdf.splitTextToSize(text, width)
-      pdf.text(lines, x, top)
-      return lines.length * lineHeight
-    }
-
     const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
       const innerWidth = pageWidth - 104
       const lineHeight = 12
       const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
-      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
-      ensurePdfSpace(cardHeight + 10)
-      if (tone === 'section') {
-        pdf.setFillColor(248, 250, 252)
-        pdf.setDrawColor(203, 213, 225)
-      } else {
-        pdf.setFillColor(255, 255, 255)
-        pdf.setDrawColor(226, 232, 240)
+      let remainingLines = wrappedLines.length ? wrappedLines : ['']
+      let continued = false
+
+      while (remainingLines.length > 0) {
+        const fixedHeight = 34 + 14 + 10
+        let capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        if (capacity < 1) {
+          pdf.addPage()
+          y = 52
+          capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        }
+
+        const pageLines = remainingLines.slice(0, Math.max(1, capacity))
+        remainingLines = remainingLines.slice(pageLines.length)
+        const cardHeight = 34 + pageLines.length * lineHeight + 14
+        if (tone === 'section') {
+          pdf.setFillColor(248, 250, 252)
+          pdf.setDrawColor(203, 213, 225)
+        } else {
+          pdf.setFillColor(255, 255, 255)
+          pdf.setDrawColor(226, 232, 240)
+        }
+        pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+        pdf.setTextColor(15, 23, 42)
+        pdf.setFontSize(11)
+        pdf.text(continued ? `${title} (continued)` : title, 64, y + 18)
+        pdf.setTextColor(71, 85, 105)
+        pdf.setFontSize(9)
+        pdf.text(pageLines, 64, y + 34)
+        y += cardHeight + 10
+        continued = true
       }
-      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
-      pdf.setTextColor(15, 23, 42)
-      pdf.setFontSize(11)
-      pdf.text(title, 64, y + 18)
-      pdf.setTextColor(71, 85, 105)
-      pdf.setFontSize(9)
-      pdf.text(wrappedLines, 64, y + 34)
-      y += cardHeight + 10
     }
 
     pdf.setFillColor(15, 23, 42)
@@ -4493,10 +4509,14 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     y += 66
 
     filteredGroupings.forEach((grouping) => {
-      ensurePdfSpace(126)
+      const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
+      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
+      const metrics = Object.entries(avgRadar)
+      const radarCardHeight = Math.max(120, 64 + metrics.length * 12)
+      ensurePdfSpace(radarCardHeight + 6)
       pdf.setFillColor(255, 255, 255)
       pdf.setDrawColor(226, 232, 240)
-      pdf.roundedRect(52, y, 500, 120, 12, 12, 'FD')
+      pdf.roundedRect(52, y, 500, radarCardHeight, 12, 12, 'FD')
       pdf.setTextColor(15, 23, 42)
       pdf.setFontSize(15)
       pdf.text(grouping.label, 68, y + 24)
@@ -4504,13 +4524,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       pdf.setTextColor(100, 116, 139)
       pdf.text(`${formatCountLabel(grouping.responses.length, 'evaluation')} in this ${synthesisConfig.groupLabel.toLowerCase()}`, 68, y + 38)
 
-      const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
       drawPdfRadar(pdf, 190, y + 80, 46, avgRadar)
 
       pdf.setTextColor(51, 65, 85)
       pdf.setFontSize(9)
-      const metrics = Object.entries(avgRadar)
       metrics.forEach(([label, value], idx) => {
         const rowY = y + 52 + idx * 12
         pdf.text(label, 325, rowY)
@@ -4519,23 +4536,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         pdf.line(325, rowY + 3, 470, rowY + 3)
       })
 
-      y += 132
+      y += radarCardHeight + 12
 
       const visibleSections = getVisiblePageSections(grouping.responses)
       visibleSections.forEach((section) => {
-        ensurePdfSpace(78)
-        pdf.setFillColor(248, 250, 252)
-        pdf.setDrawColor(203, 213, 225)
-        pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
-        pdf.setTextColor(15, 23, 42)
-        pdf.setFontSize(13)
-        pdf.text(section.page.title, 64, y + 20)
-        if (section.contextText) {
-          pdf.setFontSize(9)
-          pdf.setTextColor(71, 85, 105)
-          drawWrappedText(section.contextText, 64, y + 36, pageWidth - 136)
-        }
-        y += 72
+        drawPdfCard(section.page.title, section.contextText ? [section.contextText] : [], 'section')
 
         section.visibleBlocks.forEach((block) => {
           const entries = getBlockEntries(block, grouping.responses)
@@ -4548,10 +4553,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
             const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
             const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
             const averages = aggregateRadarValues(grouping.responses, dimensions, block.id)
-            ensurePdfSpace(128)
+            const radarHeight = Math.max(118, 46 + Object.keys(averages).length * 12)
+            ensurePdfSpace(radarHeight + 10)
             pdf.setFillColor(255, 255, 255)
             pdf.setDrawColor(226, 232, 240)
-            pdf.roundedRect(52, y, pageWidth - 104, 118, 10, 10, 'FD')
+            pdf.roundedRect(52, y, pageWidth - 104, radarHeight, 10, 10, 'FD')
             pdf.setTextColor(15, 23, 42)
             pdf.setFontSize(11)
             pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -4561,7 +4567,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
             Object.entries(averages).forEach(([label, score], index) => {
               pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
             })
-            y += 130
+            y += radarHeight + 12
             return
           }
 
