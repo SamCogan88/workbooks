@@ -4,6 +4,7 @@ import { createElement, Fragment } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
+import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
@@ -186,6 +187,24 @@ describe('quadrant summary chart', () => {
     expect(screen.getByText('Impact')).toBeTruthy()
     expect(screen.getByText('Lower confidence')).toBeTruthy()
     expect(screen.getByText('Higher confidence')).toBeTruthy()
+  })
+})
+
+describe('builder publish card state', () => {
+  const workbook = { id: 'online-1', title: 'Published title', public_code: 'ABC123' } as any
+
+  it('marks a published workbook stale after definition edits', () => {
+    const publishedDefinition = JSON.stringify({ title: 'Published title', pages: [{ id: 'page-1' }] })
+    const editedDefinition = JSON.stringify({ title: 'Edited title', pages: [{ id: 'page-1' }] })
+
+    expect(getPublishCardState('', workbook, publishedDefinition, publishedDefinition)).toBe('published')
+    expect(getPublishCardState('', workbook, publishedDefinition, editedDefinition)).toBe('unpublished')
+  })
+
+  it('shows current publish errors once the previous result is cleared', () => {
+    const currentDefinition = JSON.stringify({ title: '', pages: [{ id: 'page-1' }] })
+    expect(getPublishCardState('Add a title and at least one page before publishing.', null, null, currentDefinition)).toBe('error')
+    expect(getPublishCardState('Add a title and at least one page before publishing.', null, null, currentDefinition)).toBe('error')
   })
 })
 

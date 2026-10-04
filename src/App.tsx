@@ -61,6 +61,7 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
+import { getPublishCardState } from './lib/builderPublishState'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
@@ -5196,6 +5197,7 @@ function BuilderPage({
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState('')
   const [publishedWorkbook, setPublishedWorkbook] = useState<OnlineWorksheetRow | null>(null)
+  const [publishedDefinitionJson, setPublishedDefinitionJson] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [pastedJson, setPastedJson] = useState('')
@@ -5701,22 +5703,30 @@ function BuilderPage({
   const shareLink = publishedWorkbook
     ? `${window.location.origin}${window.location.pathname}#/join/${publishedWorkbook.public_code}`
     : ''
+  const currentDefinitionJson = useMemo(() => JSON.stringify(definition), [definition])
+  const publishCardState = getPublishCardState(publishError, publishedWorkbook, publishedDefinitionJson, currentDefinitionJson)
 
   const handlePublish = async () => {
+    const definitionToPublish = definition
+    const definitionToPublishJson = JSON.stringify(definitionToPublish)
     setPublishError('')
+    setPublishedWorkbook(null)
+    setPublishedDefinitionJson(null)
+    setShareCopied(false)
     if (!user) {
       setPublishError('Sign in with a teacher account before publishing.')
       return
     }
-    if (!definition.title.trim() || definition.pages.length === 0) {
+    if (!definitionToPublish.title.trim() || definitionToPublish.pages.length === 0) {
       setPublishError('Add a title and at least one page before publishing.')
       return
     }
 
     setPublishing(true)
     try {
-      const workbook = await publishWorksheet(definition)
+      const workbook = await publishWorksheet(definitionToPublish)
       setPublishedWorkbook(workbook)
+      setPublishedDefinitionJson(definitionToPublishJson)
     } catch (error) {
       setPublishError(error instanceof Error ? error.message : 'The workbook could not be published. Please try again.')
     } finally {
@@ -5856,9 +5866,9 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
       </div>
 
-      {(publishError || publishedWorkbook) && (
-        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishedWorkbook ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
-          {publishedWorkbook ? (
+      {publishCardState !== 'hidden' && (
+        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+          {publishCardState === 'published' && publishedWorkbook ? (
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">Published and ready to share</p>
@@ -5869,6 +5879,15 @@ Make the language concise and appropriate for the learners. Do not include Markd
                 </div>
               </div>
               <button type="button" onClick={() => void copyShareLink()} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"><Copy className="h-4 w-4" />{shareCopied ? 'Link copied' : 'Copy invite link'}</button>
+            </div>
+          ) : publishCardState === 'unpublished' && publishedWorkbook ? (
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="text-amber-900">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em]">Unpublished changes</p>
+                <h2 className="mt-1 text-xl font-bold">Republish to update learners</h2>
+                <p className="mt-2 text-sm">Learners still see the last published version of {publishedWorkbook.title}.</p>
+              </div>
+              <button type="button" onClick={() => void handlePublish()} disabled={publishing || authLoading} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-60"><CloudUpload className="h-4 w-4" />{publishing ? 'Publishing…' : 'Republish'}</button>
             </div>
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-amber-900">
