@@ -4,9 +4,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getWorksheetResponseImportError, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
+  it('rejects imported responses for a different worksheet version', () => {
+    const definition = { id: 'worksheet-a', version: 2 } as any
+    const response = {
+      responseSchema: 'interactive-worksheet-response',
+      worksheetId: 'worksheet-a',
+      worksheetVersion: 1,
+    } as any
+
+    expect(getWorksheetResponseImportError(definition, response)).toBe('worksheet version must match 2.')
+    expect(getWorksheetResponseImportError(definition, { ...response, worksheetVersion: 2 })).toBe('')
+  })
+
   it('includes the media and analysis block types with sensible defaults', () => {
     expect(getDefaultBlockConfig('checklist', 1)).toMatchObject({
       options: ['Option 1', 'Option 2'],
@@ -199,10 +211,12 @@ describe('visual thinking blocks', () => {
     const block = { id: 'decision', type: 'decisionMatrix', required: true, config } as any
     const complete = Object.fromEntries(config.options.map((option: any) => [option.id, Object.fromEntries(config.criteria.map((criterion: any) => [criterion.id, 4]))]))
     expect(isRequiredBlockSatisfied(block, { decision: { [config.options[0].id]: { [config.criteria[0].id]: 4 } } })).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { decision: { ...complete, [config.options[0].id]: { ...complete[config.options[0].id], [config.criteria[0].id]: 999 } } })).toBe(false)
     expect(isRequiredBlockSatisfied(block, { decision: complete })).toBe(true)
-    const responses = [complete, complete].map((matrix, index) => ({ responseSchema: 'interactive-worksheet-response', schemaVersion: 1, worksheetId: 'w', worksheetVersion: 1, responseId: String(index), createdAt: '', updatedAt: '', responses: { decision: matrix } })) as any
+    const invalid = { ...complete, [config.options[0].id]: { ...complete[config.options[0].id], [config.criteria[0].id]: 999 } }
+    const responses = [complete, invalid].map((matrix, index) => ({ responseSchema: 'interactive-worksheet-response', schemaVersion: 1, worksheetId: 'w', worksheetVersion: 1, responseId: String(index), createdAt: '', updatedAt: '', responses: { decision: matrix } })) as any
     const summary = aggregateDecisionMatrix(responses, 'decision', config.options, config.criteria)
-    expect(summary[0].criteria[0]).toMatchObject({ average: 4, count: 2 })
+    expect(summary[0].criteria[0]).toMatchObject({ average: 4, count: 1 })
   })
 
   it('renders all decision matrix cells and persists a selected rating', () => {
@@ -677,6 +691,9 @@ describe('required page completion', () => {
     expect(isRequiredBlockSatisfied(page.blocks[0], responses)).toBe(true)
     expect(isRequiredBlockSatisfied(page.blocks[1], responses)).toBe(true)
     expect(isRequiredBlockSatisfied(page.blocks[2], responses)).toBe(true)
+    expect(isRequiredBlockSatisfied(page.blocks[0], { ...responses, rating: 99 })).toBe(false)
+    expect(isRequiredBlockSatisfied(page.blocks[1], { ...responses, matrix: { Clarity: 2, Accuracy: -1 } })).toBe(false)
+    expect(isRequiredBlockSatisfied(page.blocks[2], { ...responses, radar: { Ease: 5, Impact: Number.POSITIVE_INFINITY } })).toBe(false)
     expect(isRequiredBlockSatisfied(page.blocks[3], responses)).toBe(true)
     expect(isRequiredBlockSatisfied(page.blocks[4], responses)).toBe(true)
     expect(getMissingRequiredBlocks(page, responses)).toHaveLength(0)

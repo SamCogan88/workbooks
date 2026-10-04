@@ -93,6 +93,16 @@ describe('worksheet engine core logic', () => {
     expect(averages['Pedagogical value']).toBe(8.5)
   })
 
+  it('ignores non-finite and out-of-range radar values', () => {
+    const responses = [
+      createResponse('response-1', { 'radar-eval': { Ease: 8 } }),
+      createResponse('response-2', { 'radar-eval': { Ease: 999 } }),
+      createResponse('response-3', { 'radar-eval': { Ease: Number.POSITIVE_INFINITY } }),
+    ]
+
+    expect(aggregateRadarValues(responses, ['Ease'])).toEqual({ Ease: 8 })
+  })
+
   it('creates separate groups for different grouping values', () => {
     const responses = [
       createResponse('response-1', { 'tool-name': 'Diffit', 'group-name': 'Group 1' }),
@@ -216,6 +226,7 @@ describe('worksheet engine core logic', () => {
     const responses = [
       { responses: { 'quadrant-map': { x: 80, y: 20 } } },
       { responses: { 'quadrant-map': { x: 60, y: 40 } } },
+      { responses: { 'quadrant-map': { x: 999, y: Number.NaN } } },
     ] as any
 
     const aggregate = aggregateQuadrantMean(responses)

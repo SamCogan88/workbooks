@@ -77,7 +77,10 @@ import {
   getMatchingPairKey,
   getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
+  getNumericRange,
   getQuizSummary,
+  getWorksheetResponseImportError,
+  numberInRange,
   reconcileCategorizeResponse,
   reconcileRankingResponse,
   reconcileWorksheetResponses,
@@ -1895,7 +1898,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
         if (block.type === 'radar' && value && typeof value === 'object') {
           const scores = value as Record<string, number>
-          const scoreEntries = Object.entries(scores).filter(([, score]) => Number.isFinite(Number(score)))
+          const { min, max } = getNumericRange(block.config, 1, 10)
+          const scoreEntries = Object.entries(scores)
+            .map(([dimension, score]) => [dimension, numberInRange(score, min, max)] as const)
+            .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
           if (!scoreEntries.length) return
           const radarHeight = Math.max(122, 46 + scoreEntries.length * 12)
           ensurePdfSpace(radarHeight + 10)
@@ -1905,11 +1911,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
-          drawPdfRadar(pdf, 118, y + 72, 34, scores)
+          drawPdfRadar(pdf, 118, y + 72, 34, Object.fromEntries(scoreEntries))
           pdf.setFontSize(9)
           pdf.setTextColor(71, 85, 105)
           scoreEntries.forEach(([label, score], index) => {
-            pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
+            pdf.text(`${label}: ${score.toFixed(1)}`, 180, y + 34 + index * 12)
           })
           y += radarHeight + 12
           return
@@ -1917,6 +1923,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
         if (block.type === 'quadrant' && value && typeof value === 'object') {
           const point = value as Record<string, unknown>
+          const pointX = numberInRange(point.x, 0, 100) ?? 0
+          const pointY = numberInRange(point.y, 0, 100) ?? 0
           const rationale = typeof point.rationale === 'string' && point.rationale.trim() ? String(point.rationale).trim() : 'No rationale recorded.'
           const rationaleLines = pdf.splitTextToSize(rationale, pageWidth - 292)
           const firstPageLineLimit = getPdfLineCapacity(pageHeight - 42 - y - 88 - 10, 12)
@@ -1930,11 +1938,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
-          drawPdfQuadrant(pdf, 64, y + 30, 92, Number(point.x) || 0, Number(point.y) || 0)
+          drawPdfQuadrant(pdf, 64, y + 30, 92, pointX, pointY)
           pdf.setFontSize(9)
           pdf.setTextColor(71, 85, 105)
-          pdf.text(`x: ${(Number(point.x) || 0).toFixed(1)}`, 172, y + 42)
-          pdf.text(`y: ${(Number(point.y) || 0).toFixed(1)}`, 172, y + 56)
+          pdf.text(`x: ${pointX.toFixed(1)}`, 172, y + 42)
+          pdf.text(`y: ${pointY.toFixed(1)}`, 172, y + 56)
           pdf.text(firstPageLines, 172, y + 74)
           y += quadrantHeight + 12
           if (remainingRationaleLines.length) {
@@ -1944,9 +1952,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         }
 
         if (block.type === 'matrix' && value && typeof value === 'object') {
+          const { min, max } = getNumericRange(block.config, 1, 5)
           const lines = Object.entries(value as Record<string, unknown>)
-            .filter(([, score]) => Number.isFinite(Number(score)))
-            .map(([row, score]) => `${row}: ${Number(score).toFixed(1)}`)
+            .map(([row, score]) => [row, numberInRange(score, min, max)] as const)
+            .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
+            .map(([row, score]) => `${row}: ${score.toFixed(1)}`)
           if (!lines.length) return
           drawPdfCard(getBlockDisplayLabel(block), lines)
           return
@@ -2170,11 +2180,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 function RadarBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const dimensions = getLabeledConfigItems(block.config?.dimensions, 'dimension')
   const valueMap: Record<string, number> = responses[block.id] || {}
+  const { min, max } = getNumericRange(block.config, 1, 10)
   const radius = 100
   const center = 150
   const scores = dimensions.map((dimension, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = Number(valueMap[dimension.id] ?? valueMap[dimension.label] ?? 5)
+    const value = numberInRange(valueMap[dimension.id] ?? valueMap[dimension.label], min, max) ?? Math.round((min + max) / 2)
     const distance = (value / 10) * radius
     return `${center + Math.cos(angle) * distance},${center + Math.sin(angle) * distance}`
   })
@@ -2210,7 +2221,7 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
 
       <div className="space-y-3">
         {dimensions.map((dimension) => {
-          const value = valueMap[dimension.id] ?? valueMap[dimension.label] ?? 5
+          const value = numberInRange(valueMap[dimension.id] ?? valueMap[dimension.label], min, max) ?? Math.round((min + max) / 2)
           return (
             <div key={dimension.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-sm">
@@ -3847,7 +3858,7 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
 
   const points = dimensions.map((_, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = Number(values[index] ?? 0)
+    const value = numberInRange(values[index], 0, 10) ?? 0
     const distance = (value / 10) * radius
     const x = center + Math.cos(angle) * distance
     const y = center + Math.sin(angle) * distance
@@ -3888,12 +3899,14 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
 }
 
 function QuadrantMiniChart({ x, y }: { x: number; y: number }) {
+  const safeX = numberInRange(x, 0, 100) ?? 0
+  const safeY = numberInRange(y, 0, 100) ?? 0
   return (
     <svg viewBox="0 0 220 220" className="h-48 w-full max-w-[260px]">
       <rect x="0" y="0" width="220" height="220" fill="#f8fafc" rx="18" />
       <line x1="110" y1="0" x2="110" y2="220" stroke="#cbd5e1" strokeWidth="2" />
       <line x1="0" y1="110" x2="220" y2="110" stroke="#cbd5e1" strokeWidth="2" />
-      <circle cx={(x / 100) * 220} cy={220 - (y / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
+      <circle cx={(safeX / 100) * 220} cy={220 - (safeY / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
       <text x="18" y="112" fontSize="11" fill="#475569">Time</text>
       <text x="160" y="112" fontSize="11" fill="#475569">Learning</text>
       <text x="92" y="210" fontSize="11" fill="#475569">Low risk</text>
@@ -3909,7 +3922,7 @@ function drawPdfRadar(pdf: jsPDF, centreX: number, centreY: number, radius: numb
 
   const points = dimensions.map((_, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = Number(values[index] ?? 0)
+    const value = numberInRange(values[index], 0, 10) ?? 0
     const distance = (value / 10) * radius
     const x = centreX + Math.cos(angle) * distance
     const y = centreY + Math.sin(angle) * distance
@@ -4148,7 +4161,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       const dimensionLabels = Object.fromEntries(configuredDimensionItems.map((dimension) => [dimension.id, dimension.label]))
       const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
       const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
-      const averages = Object.fromEntries(Object.entries(aggregateRadarValues(groupingResponses, dimensions, block.id)).map(([dimension, score]) => [dimensionLabels[dimension] || dimension, score]))
+      const averages = Object.fromEntries(Object.entries(aggregateRadarValues(groupingResponses, dimensions, block.id, getNumericRange(block.config, 1, 10))).map(([dimension, score]) => [dimensionLabels[dimension] || dimension, score]))
 
       return (
         <>
@@ -4226,7 +4239,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     if (block.type === 'decisionMatrix') {
       const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
       const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
-      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria)
+      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria, getNumericRange(block.config, 1, 5))
       return <><div className="flex items-center justify-between gap-3"><div><h4 className="text-base font-semibold text-slate-900">{title}</h4><p className="mt-1 text-sm text-slate-500">Average ratings by option and criterion. Counts reflect valid submitted values.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-violet-700">Decision matrix</span></div><div className="mt-4 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-slate-200"><th className="p-2">Option</th>{criteria.map((criterion: any) => <th key={criterion.id} className="p-2">{criterion.label}</th>)}<th className="p-2">Overall</th></tr></thead><tbody>{summary.map((option) => <tr key={option.id} className="border-b border-slate-100"><th className="p-2 font-medium text-slate-800">{option.label}<span className="block text-xs font-normal text-slate-500">{option.count} response(s)</span></th>{option.criteria.map((criterion) => <td key={criterion.id} className="p-2">{criterion.count ? criterion.average.toFixed(1) : '—'}<span className="block text-[10px] text-slate-400">n={criterion.count}</span></td>)}<td className="p-2 font-semibold">{option.overallMean.toFixed(1)}</td></tr>)}</tbody></table></div></>
     }
 
@@ -4283,11 +4296,12 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (block.type === 'matrix') {
-      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
-      const averages = rows.map((row: string) => {
+      const rows = getLabeledConfigItems(block.config?.rows, 'row')
+      const { min, max } = getNumericRange(block.config, 1, 5)
+      const averages = rows.map((row) => {
         const values = groupingResponses
-          .map((response) => Number(response.responses?.[block.id]?.[row]))
-          .filter((value) => Number.isFinite(value))
+          .map((response) => numberInRange(response.responses?.[block.id]?.[row.id] ?? response.responses?.[block.id]?.[row.label], min, max))
+          .filter((value): value is number => value !== undefined)
         return {
           row,
           average: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
@@ -4306,8 +4320,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           </div>
           <div className="mt-4 space-y-2">
             {averages.map(({ row, average }) => (
-              <div key={`${block.id}-${row}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                <span className="text-sm text-slate-700">{row}</span>
+              <div key={`${block.id}-${row.id}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-sm text-slate-700">{row.label}</span>
                 <span className="text-sm font-semibold text-slate-900">{average.toFixed(1)}</span>
               </div>
             ))}
@@ -4317,9 +4331,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (block.type === 'rating') {
+      const { min, max } = getNumericRange(block.config, 0, 10)
       const numericEntries = entries
         .map(({ response, label, value }) => ({ response, label, value: Number(value) }))
-        .filter((entry) => Number.isFinite(entry.value))
+        .filter((entry) => numberInRange(entry.value, min, max) !== undefined)
       const average = numericEntries.length ? numericEntries.reduce((sum, entry) => sum + entry.value, 0) / numericEntries.length : 0
 
       return (
@@ -4562,14 +4577,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       try {
         const text = await file.text()
         const json = JSON.parse(text) as WorksheetResponse
-        if (json.worksheetId !== definition.id) {
+        const importError = getWorksheetResponseImportError(definition, json)
+        if (importError) {
           rejected += 1
-          setError(`Rejected ${file.name}: worksheet ID must match ${definition.id}.`)
-          continue
-        }
-        if (json.responseSchema !== 'interactive-worksheet-response') {
-          rejected += 1
-          setError(`Rejected ${file.name}: invalid response schema.`)
+          setError(`Rejected ${file.name}: ${importError}`)
           continue
         }
         parsed.push(json)

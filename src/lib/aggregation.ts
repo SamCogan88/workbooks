@@ -1,4 +1,5 @@
 import type { GroupedResponseSet, WorksheetDefinition, WorksheetResponse, WorksheetSynthesisSettings } from './types'
+import { getLabeledConfigItems, getNumericRange, numberInRange } from './worksheetLogic'
 
 export interface ResolvedSynthesisConfig {
   groupByBlockId?: string
@@ -165,6 +166,7 @@ export function aggregateRadarValues(
   responses: WorksheetResponse[],
   dimensions: string[],
   radarBlockId = 'radar-eval',
+  range = { min: 1, max: 10 },
 ) {
   const grouped: Record<string, number[]> = {}
 
@@ -175,8 +177,8 @@ export function aggregateRadarValues(
   responses.forEach((response) => {
     const radar = response.responses?.[radarBlockId] || {}
     dimensions.forEach((dimension) => {
-      const value = Number(radar[dimension]) || 0
-      grouped[dimension].push(value)
+      const value = numberInRange(radar[dimension], range.min, range.max)
+      if (value !== undefined) grouped[dimension].push(value)
     })
   })
 
@@ -198,8 +200,12 @@ export function aggregateQuadrantMean(responses: WorksheetResponse[], quadrantBl
 
   responses.forEach((response) => {
     const point = response.responses?.[quadrantBlockId] || {}
-    xValues.push(Number(point.x) || 0)
-    yValues.push(Number(point.y) || 0)
+    const x = numberInRange(point.x, 0, 100)
+    const y = numberInRange(point.y, 0, 100)
+    if (x !== undefined && y !== undefined) {
+      xValues.push(x)
+      yValues.push(y)
+    }
   })
 
   return {
@@ -223,10 +229,15 @@ export function aggregateDecisionMatrix(
   blockId: string,
   options: Array<{ id: string; label: string }>,
   criteria: Array<{ id: string; label: string }>,
+  range = { min: 1, max: 5 },
 ) {
-  return options.map((option) => {
-    const criterionResults = criteria.map((criterion) => {
-      const values = responses.map((response) => Number(response.responses?.[blockId]?.[option.id]?.[criterion.id])).filter(Number.isFinite)
+  const normalizedOptions = getLabeledConfigItems(options, 'option')
+  const normalizedCriteria = getLabeledConfigItems(criteria, 'criterion')
+  return normalizedOptions.map((option) => {
+    const criterionResults = normalizedCriteria.map((criterion) => {
+      const values = responses
+        .map((response) => numberInRange(response.responses?.[blockId]?.[option.id]?.[criterion.id], range.min, range.max))
+        .filter((value): value is number => value !== undefined)
       return { ...criterion, count: values.length, average: averageArray(values) }
     })
     const populated = criterionResults.filter((criterion) => criterion.count > 0)
@@ -248,6 +259,8 @@ export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBloc
   const allResponses = groupings.flatMap((group) => group.responses)
   const totalResponses = allResponses.length
   const highlights: string[] = []
+  const radarBlock = definition?.pages.flatMap((page) => page.blocks).find((block) => block.id === radarBlockId)
+  const radarRange = getNumericRange(radarBlock?.config, 1, 10)
 
   if (groupings.length > 1) {
     const largest = [...groupings].sort((left, right) => right.responses.length - left.responses.length)[0]
@@ -259,8 +272,8 @@ export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBloc
     const radar = response.responses?.[radarBlockId]
     if (!radar || typeof radar !== 'object') return
     Object.entries(radar).forEach(([dimension, rawValue]) => {
-      const value = Number(rawValue)
-      if (!Number.isFinite(value)) return
+      const value = numberInRange(rawValue, radarRange.min, radarRange.max)
+      if (value === undefined) return
       radarValues.set(dimension, [...(radarValues.get(dimension) || []), value])
     })
   })

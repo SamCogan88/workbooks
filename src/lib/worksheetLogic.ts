@@ -1,4 +1,4 @@
-import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage, WorksheetSettings } from './types'
+import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings } from './types'
 
 const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
 const ID_PREFIX_BY_BLOCK_TYPE: Record<string, Record<string, string>> = {
@@ -241,6 +241,27 @@ export function getRadarDimensions(block: WorksheetBlock) {
   return getLabeledConfigItems(block.config?.dimensions, 'dimension')
 }
 
+export function getNumericRange(config: Record<string, any> | undefined, fallbackMin: number, fallbackMax: number) {
+  const min = Number(config?.min ?? fallbackMin)
+  const max = Number(config?.max ?? fallbackMax)
+  return {
+    min: Number.isFinite(min) ? min : fallbackMin,
+    max: Number.isFinite(max) ? max : fallbackMax,
+  }
+}
+
+export function numberInRange(value: unknown, min: number, max: number) {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) && numericValue >= min && numericValue <= max ? numericValue : undefined
+}
+
+export function getWorksheetResponseImportError(definition: WorksheetDefinition, response: Partial<WorksheetResponse>) {
+  if (response.worksheetId !== definition.id) return `worksheet ID must match ${definition.id}.`
+  if (response.worksheetVersion !== definition.version) return `worksheet version must match ${definition.version}.`
+  if (response.responseSchema !== 'interactive-worksheet-response') return 'invalid response schema.'
+  return ''
+}
+
 export function getStructuredDefaultResponse(block: WorksheetBlock) {
   switch (block.type) {
     case 'rating': {
@@ -300,17 +321,21 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       const reconciled = reconcileCategorizeResponse(block, value)
       return items.length > 0 && items.every((item) => String(reconciled[item.id] ?? '').trim().length > 0)
     }
-    case 'rating':
-      return Number.isFinite(Number(value))
+    case 'rating': {
+      const { min, max } = getNumericRange(block.config, 0, 10)
+      return numberInRange(value, min, max) !== undefined
+    }
     case 'matrix': {
       if (!value || typeof value !== 'object') return false
       const rows = getMatrixRows(block)
-      return rows.length > 0 && rows.every((row) => Number.isFinite(Number((value as Record<string, unknown>)[row.id] ?? (value as Record<string, unknown>)[row.label])))
+      const { min, max } = getNumericRange(block.config, 1, 5)
+      return rows.length > 0 && rows.every((row) => numberInRange((value as Record<string, unknown>)[row.id] ?? (value as Record<string, unknown>)[row.label], min, max) !== undefined)
     }
     case 'radar': {
       if (!value || typeof value !== 'object') return false
       const dimensions = getRadarDimensions(block)
-      return dimensions.length > 0 && dimensions.every((dimension) => Number.isFinite(Number((value as Record<string, unknown>)[dimension.id] ?? (value as Record<string, unknown>)[dimension.label])))
+      const { min, max } = getNumericRange(block.config, 1, 10)
+      return dimensions.length > 0 && dimensions.every((dimension) => numberInRange((value as Record<string, unknown>)[dimension.id] ?? (value as Record<string, unknown>)[dimension.label], min, max) !== undefined)
     }
     case 'quadrant': {
       if (!value || typeof value !== 'object') return false
@@ -329,10 +354,11 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       if (!value || typeof value !== 'object') return false
       const options = getLabeledConfigItems(block.config?.options, 'option')
       const criteria = getLabeledConfigItems(block.config?.criteria, 'criterion')
+      const { min, max } = getNumericRange(block.config, 1, 5)
       return options.length > 0 && criteria.length > 0 && options.every((option: { id?: unknown }) =>
         criteria.every((criterion: { id?: unknown; label?: unknown }) => {
           const optionValues = (value as Record<string, any>)[String(option.id)] ?? (value as Record<string, any>)[String((option as { label?: unknown }).label)]
-          return Number.isFinite(Number(optionValues?.[String(criterion.id)] ?? optionValues?.[String(criterion.label)]))
+          return numberInRange(optionValues?.[String(criterion.id)] ?? optionValues?.[String(criterion.label)], min, max) !== undefined
         }))
     }
     case 'board':
