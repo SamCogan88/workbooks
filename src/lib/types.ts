@@ -80,6 +80,7 @@ export interface WorksheetResponse {
 
 export interface StoredSession {
   responseId: string
+  createdAt?: string
   pageIndex: number
   responses: Record<string, any>
   updatedAt: string

@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
+import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
@@ -313,6 +314,28 @@ describe('worksheet quiz summary', () => {
     expect(summary.percent).toBeCloseTo(40)
     expect(summary.items[0].isCorrect).toBe(true)
     expect(summary.items[1].isCorrect).toBe(false)
+  })
+})
+
+describe('stored worksheet sessions', () => {
+  it('persists the response creation timestamp with the draft', () => {
+    const session = {
+      responseId: 'response-1',
+      createdAt: '2026-01-01T10:00:00.000Z',
+      pageIndex: 1,
+      responses: { notes: 'Saved answer' },
+      updatedAt: '2026-01-01T10:05:00.000Z',
+    }
+
+    saveSession(session, 'worksheet-1', 1, session.responseId)
+
+    expect(loadSession('worksheet-1', 1, session.responseId)).toEqual(session)
+    expect(getStoredSessionCreatedAt(session, 'fallback')).toBe(session.createdAt)
+  })
+
+  it('uses an older draft update timestamp when no creation timestamp was stored', () => {
+    expect(getStoredSessionCreatedAt({ updatedAt: '2026-01-02T10:05:00.000Z' }, 'fallback')).toBe('2026-01-02T10:05:00.000Z')
+    expect(getStoredSessionCreatedAt(null, 'fallback')).toBe('fallback')
   })
 })
 

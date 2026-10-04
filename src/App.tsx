@@ -61,7 +61,7 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
-import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
@@ -1399,7 +1399,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [exportError, setExportError] = useState('')
   const [submittedOnlineResponse, setSubmittedOnlineResponse] = useState<OnlineResponseRow | null>(null)
-  const [responseCreatedAt] = useState(() => new Date().toISOString())
+  const [responseCreatedAt, setResponseCreatedAt] = useState(() => new Date().toISOString())
   const hasSubmittedOnlineResponse = Boolean(onlineWorksheetId && submittedOnlineResponse)
 
   useEffect(() => {
@@ -1421,10 +1421,12 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     if (saved) {
       setResponses(saved.responses || {})
       setPageIndex(saved.pageIndex || 0)
+      setResponseCreatedAt(getStoredSessionCreatedAt(saved))
       setStatus('In progress')
     } else {
       setResponses({})
       setPageIndex(0)
+      setResponseCreatedAt(new Date().toISOString())
       setStatus('In progress')
     }
     setSubmittedOnlineResponse(null)
@@ -1453,14 +1455,14 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   useEffect(() => {
     if (definition.settings.autosave && responseId && isSessionHydrated) {
       saveSession(
-        { responseId, pageIndex, responses, updatedAt: new Date().toISOString() },
+        { responseId, createdAt: responseCreatedAt, pageIndex, responses, updatedAt: new Date().toISOString() },
         definition.id,
         definition.version,
         responseId,
         onlineWorksheetId,
       )
     }
-  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseId, responses])
+  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseCreatedAt, responseId, responses])
 
   const visiblePages = useMemo(() => getVisiblePages(definition, responses), [definition, responses])
   const visiblePageIndexes = useMemo(() => visiblePages.map((page) => definition.pages.indexOf(page)), [definition.pages, visiblePages])
@@ -1749,10 +1751,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   const handleStartNew = () => {
     if (!window.confirm('Start a new response? This will clear the current saved version.')) return
     const nextId = getDefaultResponseId()
+    const nextCreatedAt = new Date().toISOString()
     setShowCompletionDialog(false)
     setValidationAttempted(false)
     setNavigationWarning('')
     setExportError('')
+    setResponseCreatedAt(nextCreatedAt)
     setResponseId(nextId)
     setResponses({})
     setPageIndex(0)
