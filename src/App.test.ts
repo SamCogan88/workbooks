@@ -382,6 +382,19 @@ describe('application routes', () => {
     const myWorkbooksLink = screen.getByRole('link', { name: 'My workbooks' })
     expect(myWorkbooksLink.getAttribute('href')).toBe('#/teacher')
   })
+
+  it('places setup before the block library in the narrow builder layout', () => {
+    window.location.hash = '#/builder'
+    localStorage.removeItem('worksheet-active-definition')
+
+    render(createElement(App))
+
+    const setupPanel = screen.getByRole('heading', { name: 'Configure the worksheet and learner completion flow' }).closest('section')
+    const blockLibrary = screen.getByRole('heading', { name: 'Block library' }).closest('aside')
+
+    expect(setupPanel?.className).toContain('order-1')
+    expect(blockLibrary?.className).toContain('order-2')
+  })
 })
 
 describe('conditional visibility', () => {

@@ -6147,7 +6147,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
       </ModalOverlay>
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
-        <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${builderMode === 'setup' ? 'order-2 xl:order-none' : ''}`}>
           <h2 className="mb-4 inline-flex items-center gap-2 text-lg font-semibold text-slate-900">
             <Wrench className="h-5 w-5" />
             Block library
@@ -6227,7 +6227,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
           </div>
         </aside>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <section className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${builderMode === 'setup' ? 'order-1 xl:order-none' : ''}`}>
           {builderMode === 'pages' && !selectedPage && (
             <div className="mb-4 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-6 text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
