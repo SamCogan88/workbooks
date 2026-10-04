@@ -2658,7 +2658,11 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
 }
 
 function RandomizerBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const items = Array.isArray(block.config?.items) ? block.config.items.filter((item: unknown) => typeof item === 'string' && item.trim()) : []
+  const configuredItems = block.config?.items
+  const items = useMemo(
+    () => Array.isArray(configuredItems) ? configuredItems.filter((item: unknown) => typeof item === 'string' && item.trim()) : [],
+    [configuredItems],
+  )
   const prompt = block.config?.prompt || 'Generate a random item from this list.'
   const currentValue = responses[block.id]
   const requireFirstGeneration = Boolean(block.config?.requireFirstGeneration)

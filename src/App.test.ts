@@ -308,6 +308,24 @@ describe('worksheet quiz summary', () => {
 })
 
 describe('required page completion', () => {
+  it('renders an idle randomizer without triggering a nested update loop', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      render(renderBlock({
+        id: 'tool-spin',
+        type: 'randomizer',
+        label: 'Spin for a tool',
+        config: { items: ['Diffit', 'NotebookLM'], displayStyle: 'word-flicker' },
+      } as any, {}, vi.fn()))
+
+      expect(screen.getByText('Click Generate to start')).toBeTruthy()
+      expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('Maximum update depth exceeded'))
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
   it('treats required response blocks as incomplete until they have meaningful values', () => {
     const page = {
       id: 'page-1',
