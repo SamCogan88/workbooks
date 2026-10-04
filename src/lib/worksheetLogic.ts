@@ -1,6 +1,22 @@
-import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage, WorksheetSettings } from './types'
+import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage, WorksheetResponse, WorksheetSettings } from './types'
 
 const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
+const ID_PREFIX_BY_BLOCK_TYPE: Record<string, Record<string, string>> = {
+  singleSelect: { options: 'option' },
+  multipleChoice: { options: 'option' },
+  quiz: { options: 'option' },
+  checklist: { options: 'option' },
+  ranking: { options: 'option' },
+  confidence: { options: 'option' },
+  verdict: { options: 'option' },
+  categorize: { items: 'item' },
+  matrix: { rows: 'row' },
+  radar: { dimensions: 'dimension' },
+  decisionMatrix: { options: 'option', criteria: 'criterion' },
+}
+
+export type LabeledConfigItem = { id: string; label: string }
+export type ConditionOption = { label: string; value: string | number | boolean }
 
 export function isResponseProducingBlock(block: WorksheetBlock) {
   if (NON_RESPONSE_BLOCK_TYPES.has(block.type)) return false
@@ -11,9 +27,17 @@ export function stripHtml(value: string) {
   return value.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()
 }
 
+export function hasMeaningfulRichTextValue(value: string) {
+  return stripHtml(value).length > 0
+}
+
+export function normalizeRichTextResponse(value: string) {
+  return hasMeaningfulRichTextValue(value) ? value : ''
+}
+
 export function hasMeaningfulResponseValue(value: unknown): boolean {
   if (value === undefined || value === null) return false
-  if (typeof value === 'string') return stripHtml(value).length > 0
+  if (typeof value === 'string') return value.trim().length > 0
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value === 'boolean') return true
   if (Array.isArray(value)) return value.some(hasMeaningfulResponseValue)
@@ -21,22 +45,158 @@ export function hasMeaningfulResponseValue(value: unknown): boolean {
   return false
 }
 
-function comparableValue(value: unknown) {
-  return typeof value === 'string' ? value.trim().toLocaleLowerCase() : value
+function comparableValue(value: string | number | boolean) {
+  return String(value).trim().toLocaleLowerCase()
 }
 
-export function isConditionMet(condition: WorksheetCondition | undefined, responses: Record<string, unknown>) {
+function conditionPrimitives(value: unknown): Array<string | number | boolean> {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [value]
+  if (Array.isArray(value)) return value.flatMap(conditionPrimitives)
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).flatMap(conditionPrimitives)
+  return []
+}
+
+export function getMatchingPairKey(pair: { id?: unknown; prompt?: unknown }, index: number) {
+  return String(pair.id ?? `${pair.prompt}-${index}`)
+}
+
+function fallbackItemId(prefix: string, index: number) {
+  return `${prefix}-${index + 1}`
+}
+
+export function getLabeledConfigItems(items: unknown, prefix: string): LabeledConfigItem[] {
+  if (!Array.isArray(items)) return []
+  const used = new Set<string>()
+  return items.map((item, index) => {
+    const candidate = item && typeof item === 'object' ? item as { id?: unknown; label?: unknown } : undefined
+    const label = candidate ? String(candidate.label ?? '') : String(item ?? '')
+    let id = candidate?.id === undefined || candidate.id === null || String(candidate.id).trim() === ''
+      ? fallbackItemId(prefix, index)
+      : String(candidate.id)
+    if (used.has(id)) id = fallbackItemId(prefix, index)
+    let suffix = 2
+    const base = id
+    while (used.has(id)) id = `${base}-${suffix++}`
+    used.add(id)
+    return { id, label }
+  }).filter((item) => item.label.trim().length > 0)
+}
+
+function numericConditionOptions(min: unknown, max: unknown, fallbackMin: number, fallbackMax: number): ConditionOption[] {
+  const start = Number(min ?? fallbackMin)
+  const end = Number(max ?? fallbackMax)
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start > end || end - start > 100) return []
+  return Array.from({ length: end - start + 1 }, (_, index) => {
+    const value = start + index
+    return { label: String(value), value }
+  })
+}
+
+export function getConditionOptions(block: WorksheetBlock): ConditionOption[] {
+  if (block.type === 'trueFalse') return [{ label: 'True', value: true }, { label: 'False', value: false }]
+  if (block.type === 'rating') return numericConditionOptions(block.config?.min, block.config?.max, 0, 10)
+  if (block.type === 'matrix' || block.type === 'decisionMatrix') return numericConditionOptions(block.config?.min, block.config?.max, 1, 5)
+  if (block.type === 'radar') return numericConditionOptions(block.config?.min, block.config?.max, 1, 10)
+  if (block.type === 'continuum') return numericConditionOptions(0, 100, 0, 100)
+  if (block.type === 'categorize') return getLabeledConfigItems(block.config?.categories, 'category').map((item) => ({ label: item.label, value: item.label }))
+  if (block.type === 'matching') {
+    const configured = Array.isArray(block.config?.options) ? block.config.options : []
+    return configured.map((option: unknown) => ({ label: String(option), value: String(option) }))
+  }
+  const configured = getLabeledConfigItems(block.config?.options, 'option')
+  return configured.map((option) => ({ label: option.label, value: option.id }))
+}
+
+export function isConditionSourceBlock(block: WorksheetBlock) {
+  if (!isResponseProducingBlock(block)) return false
+  return block.type !== 'hotspot'
+}
+
+function getConditionExpectedValues(condition: WorksheetCondition, sourceBlock?: WorksheetBlock) {
+  const expected = conditionPrimitives(condition.value)
+  if (!sourceBlock) return expected
+  const normalizedConditionValue = comparableValue(condition.value)
+  getConditionOptions(sourceBlock).forEach((option) => {
+    if (comparableValue(option.value) === normalizedConditionValue || comparableValue(option.label) === normalizedConditionValue) {
+      expected.push(option.value, option.label)
+    }
+  })
+  return expected
+}
+
+export function reconcileRankingResponse(options: unknown, value: unknown): LabeledConfigItem[] {
+  const configured = getLabeledConfigItems(options, 'option')
+  if (!configured.length) return []
+  const remaining = new Map(configured.map((item) => [item.id, item]))
+  const ordered: LabeledConfigItem[] = []
+  const storedValues = Array.isArray(value) ? value : []
+
+  storedValues.forEach((entry) => {
+    const item = configured.find((option) => remaining.has(option.id) && (entry === option.id || entry === option.label))
+    if (!item) return
+    ordered.push(item)
+    remaining.delete(item.id)
+  })
+
+  return [...ordered, ...remaining.values()]
+}
+
+export function reconcileCategorizeResponse(block: WorksheetBlock, value: unknown) {
+  const assignments = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const categories = new Set((Array.isArray(block.config?.categories) ? block.config.categories : [])
+    .map((category: unknown) => typeof category === 'object' && category !== null ? String((category as { label?: unknown }).label ?? '') : String(category ?? ''))
+    .filter((category) => category.trim().length > 0))
+
+  return Object.fromEntries(getLabeledConfigItems(block.config?.items, 'item').map((item) => {
+    const assigned = assignments[item.id] ?? assignments[item.label] ?? ''
+    const category = String(assigned)
+    return [item.id, categories.has(category) ? category : '']
+  }))
+}
+
+export function reconcileWorksheetResponses(definition: WorksheetDefinition, responses: Record<string, unknown>) {
+  const next = { ...responses }
+  definition.pages.flatMap((page) => page.blocks).forEach((block) => {
+    if (!(block.id in next)) return
+    if (block.type === 'ranking') {
+      next[block.id] = reconcileRankingResponse(block.config?.options, next[block.id]).map((item) => item.id)
+    } else if (block.type === 'categorize') {
+      next[block.id] = reconcileCategorizeResponse(block, next[block.id])
+    }
+  })
+  return next
+}
+
+export function normalizeWorksheetDefinitionStableIds(definition: WorksheetDefinition): WorksheetDefinition {
+  return {
+    ...definition,
+    pages: definition.pages.map((page) => ({
+      ...page,
+      blocks: page.blocks.map((block) => {
+        const config = block.config || {}
+        const prefixes = ID_PREFIX_BY_BLOCK_TYPE[block.type]
+        if (!prefixes) return block
+        const nextConfig = { ...config }
+        Object.entries(prefixes).forEach(([field, prefix]) => {
+          if (Array.isArray(nextConfig[field])) nextConfig[field] = getLabeledConfigItems(nextConfig[field], prefix)
+        })
+        return { ...block, config: nextConfig }
+      }),
+    })),
+  }
+}
+
+export function isConditionMet(condition: WorksheetCondition | undefined, responses: Record<string, unknown>, sourceBlock?: WorksheetBlock) {
   if (!condition) return true
   const response = responses[condition.blockId]
   if (!hasMeaningfulResponseValue(response)) return false
-  const expected = comparableValue(condition.value)
-  const values = Array.isArray(response) ? response.map(comparableValue) : [comparableValue(response)]
-  const equals = values.some((value) => value === expected)
-  const contains = Array.isArray(response)
-    ? equals
-    : typeof values[0] === 'string' && typeof expected === 'string'
-      ? values[0].includes(expected)
-      : equals
+  const expectedValues = getConditionExpectedValues(condition, sourceBlock)
+  const values = conditionPrimitives(response)
+  const equals = values.some((value) => expectedValues.some((expected) => comparableValue(value) === comparableValue(expected)))
+  const contains = values.some((value) => expectedValues.some((expected) => {
+    if (comparableValue(value) === comparableValue(expected)) return true
+    return typeof value === 'string' && typeof expected === 'string' && comparableValue(value).includes(comparableValue(expected))
+  }))
 
   switch (condition.operator) {
     case 'equals': return equals
@@ -47,12 +207,24 @@ export function isConditionMet(condition: WorksheetCondition | undefined, respon
   }
 }
 
-export function getVisibleBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
-  return page.blocks.filter((block) => isConditionMet(block.condition, responses))
+function findConditionSourceBlock(definition: WorksheetDefinition | undefined, condition: WorksheetCondition | undefined) {
+  if (!definition || !condition) return undefined
+  return definition.pages.flatMap((page) => page.blocks).find((block) => block.id === condition.blockId)
+}
+
+export function getVisibleBlocks(page: WorksheetPage, responses: Record<string, unknown>, definition?: WorksheetDefinition) {
+  return page.blocks.filter((block) => isConditionMet(block.condition, responses, findConditionSourceBlock(definition, block.condition)))
 }
 
 export function getVisiblePages(definition: WorksheetDefinition, responses: Record<string, unknown>) {
-  return definition.pages.filter((page) => isConditionMet(page.condition, responses))
+  return definition.pages.filter((page) => isConditionMet(page.condition, responses, findConditionSourceBlock(definition, page.condition)))
+}
+
+export function getVisiblePagesWithBlocks(definition: WorksheetDefinition, responses: Record<string, unknown>) {
+  return getVisiblePages(definition, responses).map((page) => ({
+    page,
+    blocks: getVisibleBlocks(page, responses, definition),
+  }))
 }
 
 export function getAdjacentVisiblePageIndex(definition: WorksheetDefinition, responses: Record<string, unknown>, currentIndex: number, direction: 1 | -1) {
@@ -77,17 +249,32 @@ export function getImageDisplayConfig(block: WorksheetBlock) {
 }
 
 export function getMatrixRows(block: WorksheetBlock) {
-  return Array.isArray(block.config?.rows) ? block.config.rows.map((row: unknown) => String(row)).filter(Boolean) : []
+  return getLabeledConfigItems(block.config?.rows, 'row')
 }
 
-export function getRadarDimensionLabels(block: WorksheetBlock) {
-  return Array.isArray(block.config?.dimensions)
-    ? block.config.dimensions
-      .map((dimension: unknown) => typeof dimension === 'string'
-        ? dimension
-        : String((dimension as { label?: unknown })?.label || ''))
-      .filter(Boolean)
-    : []
+export function getRadarDimensions(block: WorksheetBlock) {
+  return getLabeledConfigItems(block.config?.dimensions, 'dimension')
+}
+
+export function getNumericRange(config: Record<string, any> | undefined, fallbackMin: number, fallbackMax: number) {
+  const min = Number(config?.min ?? fallbackMin)
+  const max = Number(config?.max ?? fallbackMax)
+  return {
+    min: Number.isFinite(min) ? min : fallbackMin,
+    max: Number.isFinite(max) ? max : fallbackMax,
+  }
+}
+
+export function numberInRange(value: unknown, min: number, max: number) {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) && numericValue >= min && numericValue <= max ? numericValue : undefined
+}
+
+export function getWorksheetResponseImportError(definition: WorksheetDefinition, response: Partial<WorksheetResponse>) {
+  if (response.worksheetId !== definition.id) return `worksheet ID must match ${definition.id}.`
+  if (response.worksheetVersion !== definition.version) return `worksheet version must match ${definition.version}.`
+  if (response.responseSchema !== 'interactive-worksheet-response') return 'invalid response schema.'
+  return ''
 }
 
 export function getStructuredDefaultResponse(block: WorksheetBlock) {
@@ -101,11 +288,11 @@ export function getStructuredDefaultResponse(block: WorksheetBlock) {
       const rows = getMatrixRows(block)
       if (!rows.length) return undefined
       const value = Number(block.config?.defaultValue ?? block.config?.min ?? 1)
-      return Number.isFinite(value) ? Object.fromEntries(rows.map((row) => [row, value])) : undefined
+      return Number.isFinite(value) ? Object.fromEntries(rows.map((row) => [row.id, value])) : undefined
     }
     case 'radar': {
-      const labels = getRadarDimensionLabels(block)
-      return labels.length ? Object.fromEntries(labels.map((label) => [label, 5])) : undefined
+      const dimensions = getRadarDimensions(block)
+      return dimensions.length ? Object.fromEntries(dimensions.map((dimension) => [dimension.id, 5])) : undefined
     }
     default:
       return undefined
@@ -125,15 +312,18 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
     case 'randomizer':
     case 'shortAnswer':
     case 'fillBlank':
+      return typeof value === 'string' && value.trim().length > 0
     case 'richText':
-      return typeof value === 'string' && stripHtml(value).length > 0
+      return typeof value === 'string' && hasMeaningfulRichTextValue(value)
     case 'singleSelect':
     case 'verdict':
       return typeof value === 'string' && value.trim().length > 0
     case 'checklist':
       return Array.isArray(value) && value.some((item) => typeof item === 'string' ? item.trim().length > 0 : hasMeaningfulResponseValue(item))
-    case 'ranking':
-      return Array.isArray(value) && value.length > 0
+    case 'ranking': {
+      const options = getLabeledConfigItems(block.config?.options, 'option')
+      return options.length > 0 && Array.isArray(value) && reconcileRankingResponse(options, value).length === options.length
+    }
     case 'wordCloud':
     case 'hotspot':
       return Array.isArray(value) && value.some(hasMeaningfulResponseValue)
@@ -143,20 +333,25 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       return typeof value === 'string' && value.trim().length > 0
     case 'categorize': {
       if (!value || typeof value !== 'object') return false
-      const items = Array.isArray(block.config?.items) ? block.config.items : []
-      return items.length > 0 && items.every((item: unknown) => String((value as Record<string, unknown>)[String(item)] || '').trim().length > 0)
+      const items = getLabeledConfigItems(block.config?.items, 'item')
+      const reconciled = reconcileCategorizeResponse(block, value)
+      return items.length > 0 && items.every((item) => String(reconciled[item.id] ?? '').trim().length > 0)
     }
-    case 'rating':
-      return Number.isFinite(Number(value))
+    case 'rating': {
+      const { min, max } = getNumericRange(block.config, 0, 10)
+      return numberInRange(value, min, max) !== undefined
+    }
     case 'matrix': {
       if (!value || typeof value !== 'object') return false
       const rows = getMatrixRows(block)
-      return rows.length > 0 && rows.every((row) => Number.isFinite(Number((value as Record<string, unknown>)[row])))
+      const { min, max } = getNumericRange(block.config, 1, 5)
+      return rows.length > 0 && rows.every((row) => numberInRange((value as Record<string, unknown>)[row.id] ?? (value as Record<string, unknown>)[row.label], min, max) !== undefined)
     }
     case 'radar': {
       if (!value || typeof value !== 'object') return false
-      const labels = getRadarDimensionLabels(block)
-      return labels.length > 0 && labels.every((label) => Number.isFinite(Number((value as Record<string, unknown>)[label])))
+      const dimensions = getRadarDimensions(block)
+      const { min, max } = getNumericRange(block.config, 1, 10)
+      return dimensions.length > 0 && dimensions.every((dimension) => numberInRange((value as Record<string, unknown>)[dimension.id] ?? (value as Record<string, unknown>)[dimension.label], min, max) !== undefined)
     }
     case 'quadrant': {
       if (!value || typeof value !== 'object') return false
@@ -173,10 +368,14 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
     }
     case 'decisionMatrix': {
       if (!value || typeof value !== 'object') return false
-      const options = Array.isArray(block.config?.options) ? block.config.options : []
-      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
+      const options = getLabeledConfigItems(block.config?.options, 'option')
+      const criteria = getLabeledConfigItems(block.config?.criteria, 'criterion')
+      const { min, max } = getNumericRange(block.config, 1, 5)
       return options.length > 0 && criteria.length > 0 && options.every((option: { id?: unknown }) =>
-        criteria.every((criterion: { id?: unknown }) => Number.isFinite(Number((value as Record<string, any>)[String(option.id)]?.[String(criterion.id)]))))
+        criteria.every((criterion: { id?: unknown; label?: unknown }) => {
+          const optionValues = (value as Record<string, any>)[String(option.id)] ?? (value as Record<string, any>)[String((option as { label?: unknown }).label)]
+          return numberInRange(optionValues?.[String(criterion.id)] ?? optionValues?.[String(criterion.label)], min, max) !== undefined
+        }))
     }
     case 'board':
       return Boolean(value && typeof value === 'object' && Object.values(value as Record<string, unknown>).some((entries) => Array.isArray(entries)
@@ -195,7 +394,7 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       if (!value || typeof value !== 'object') return false
       const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
       return pairs.length > 0 && pairs.every((pair: { id?: unknown; prompt?: unknown }, index: number) => {
-        const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
+        const pairKey = getMatchingPairKey(pair, index)
         const selected = (value as Record<string, unknown>)[pairKey]
         return typeof selected === 'string' && selected.trim().length > 0
       })
@@ -205,8 +404,8 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
   }
 }
 
-export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
-  return getVisibleBlocks(page, responses).filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
+export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, unknown>, definition?: WorksheetDefinition) {
+  return getVisibleBlocks(page, responses, definition).filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
 }
 
 export function getMissingRequiredBlockLocations(definition: WorksheetDefinition, responses: Record<string, unknown>) {
@@ -214,6 +413,10 @@ export function getMissingRequiredBlockLocations(definition: WorksheetDefinition
     const pageIndex = definition.pages.indexOf(page)
     return getMissingRequiredBlocks(page, responses).map((block) => ({ page, pageIndex, block }))
   })
+}
+
+export function getFillBlankCorrectAnswerPatch(correctAnswer: string) {
+  return { correctAnswer, answers: undefined }
 }
 
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, unknown>) {
@@ -239,8 +442,8 @@ export function getQuizSummary(definition: WorksheetDefinition, responses: Recor
       } else if (block.type === 'matching') {
         const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
         const selections = answer && typeof answer === 'object' ? answer as Record<string, unknown> : {}
-        isCorrect = pairs.length > 0 && pairs.every((pair: { id: string; prompt: string; answer: string }) =>
-          String(selections[pair.id] ?? selections[pair.prompt] ?? '').trim().toLowerCase() === String(pair.answer ?? '').trim().toLowerCase())
+        isCorrect = pairs.length > 0 && pairs.every((pair: { id?: unknown; prompt?: unknown; answer?: unknown }, index: number) =>
+          String(selections[getMatchingPairKey(pair, index)] ?? '').trim().toLowerCase() === String(pair.answer ?? '').trim().toLowerCase())
       } else if (block.type === 'fillBlank') {
         const acceptedAnswers = Array.isArray(block.config?.answers)
           ? block.config.answers
@@ -250,9 +453,15 @@ export function getQuizSummary(definition: WorksheetDefinition, responses: Recor
       } else if (block.config?.multipleAnswers) {
         const selected = Array.isArray(answer) ? answer : [answer].filter((candidate) => candidate !== undefined)
         const expected = Array.isArray(block.config?.correctAnswer) ? block.config.correctAnswer : [block.config?.correctAnswer].filter((candidate) => candidate !== undefined)
-        isCorrect = JSON.stringify([...selected].sort()) === JSON.stringify([...expected].sort())
+        const options = getLabeledConfigItems(block.config?.options, 'option')
+        const selectedIds = selected.map((value) => options.find((option) => option.id === value || option.label === value)?.id ?? value)
+        const expectedIds = expected.map((value) => options.find((option) => option.id === value || option.label === value)?.id ?? value)
+        isCorrect = JSON.stringify([...selectedIds].sort()) === JSON.stringify([...expectedIds].sort())
       } else {
-        isCorrect = answer !== undefined && answer === block.config?.correctAnswer
+        const options = getLabeledConfigItems(block.config?.options, 'option')
+        const selectedId = options.find((option) => option.id === answer || option.label === answer)?.id ?? answer
+        const expectedId = options.find((option) => option.id === block.config?.correctAnswer || option.label === block.config?.correctAnswer)?.id ?? block.config?.correctAnswer
+        isCorrect = answer !== undefined && selectedId === expectedId
       }
 
       return {
@@ -269,6 +478,10 @@ export function getQuizSummary(definition: WorksheetDefinition, responses: Recor
   const totalMax = items.reduce((total, item) => total + Number(item.points || 0), 0)
   const totalScore = items.reduce((total, item) => total + Number(item.achievedPoints || 0), 0)
   return { totalQuestions: items.length, totalScore, totalMax, percent: totalMax === 0 ? 0 : totalScore / totalMax * 100, items }
+}
+
+export function formatQuizPercent(percent: number) {
+  return Number.isFinite(percent) ? Math.floor(percent).toFixed(0) : '0'
 }
 
 export function getDefaultPageTimer() {

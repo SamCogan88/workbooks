@@ -61,23 +61,39 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
-import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
+  getFillBlankCorrectAnswerPatch,
+  formatQuizPercent,
   getBoardPresetColumns,
   canNavigateToVisiblePage,
+  getConditionOptions,
   getImageDisplayConfig,
+  getLabeledConfigItems,
+  getMatchingPairKey,
   getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
+  getNumericRange,
   getQuizSummary,
+  getWorksheetResponseImportError,
+  numberInRange,
+  reconcileCategorizeResponse,
+  reconcileRankingResponse,
+  reconcileWorksheetResponses,
   getStructuredDefaultResponse,
   getVisibleBlocks,
   getVisiblePages,
+  getVisiblePagesWithBlocks,
   hasMeaningfulResponseValue,
+  isConditionSourceBlock,
   isResponseProducingBlock,
+  normalizeRichTextResponse,
+  normalizeWorksheetDefinitionStableIds,
   stripHtml,
 } from './lib/worksheetLogic'
 import { sanitiseWorksheetResponses } from './lib/responseValidation'
@@ -289,6 +305,14 @@ function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
   )
 }
 
+function getSelectedOptionValues(value: unknown) {
+  return Array.isArray(value) ? value : [value].filter((entry) => entry !== undefined && entry !== null && entry !== '')
+}
+
+function matchesOptionValue(value: unknown, option: { id: string; label: string }) {
+  return value === option.id || value === option.label
+}
+
 function App() {
   const [activeDefinition, setActiveDefinition] = useState<WorksheetDefinition>(() => {
     const raw = localStorage.getItem(ACTIVE_DEFINITION_KEY)
@@ -296,7 +320,7 @@ function App() {
 
     try {
       const parsed = JSON.parse(raw) as unknown
-      return isWorksheetDefinition(parsed) ? parsed : EMPTY_WORKSHEET_DEFINITION
+      return isWorksheetDefinition(parsed) ? normalizeWorksheetDefinitionStableIds(parsed) : EMPTY_WORKSHEET_DEFINITION
     } catch {
       return EMPTY_WORKSHEET_DEFINITION
     }
@@ -318,7 +342,7 @@ function App() {
         setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
         return
       }
-      setActiveDefinition(parsed)
+      setActiveDefinition(normalizeWorksheetDefinitionStableIds(parsed))
       setDefinitionStatus(`Loaded ${parsed.title} (${parsed.id} v${parsed.version}) from ${file.name}.`)
     } catch {
       setDefinitionStatus('Import failed: malformed JSON file.')
@@ -351,8 +375,8 @@ function App() {
           <Route path="/account" element={<TeacherAccountPage />} />
           <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setActiveDefinition} />} />
           <Route path="/teacher/workbooks/:workbookId/report" element={<OnlineTeacherReportPage />} />
-          <Route path="/join" element={<OnlineJoinPage />} />
-          <Route path="/join/:publicCode" element={<OnlineJoinPage />} />
+          <Route path="/join" element={<OnlineJoinPageRoute />} />
+          <Route path="/join/:publicCode" element={<OnlineJoinPageRoute />} />
           <Route
             path="/builder"
             element={(
@@ -369,6 +393,11 @@ function App() {
       </TeacherAuthProvider>
     </HashRouter>
   )
+}
+
+export function OnlineJoinPageRoute() {
+  const { publicCode = '' } = useParams()
+  return <OnlineJoinPage key={publicCode} />
 }
 
 function OnlineJoinPage() {
@@ -1399,7 +1428,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [exportError, setExportError] = useState('')
   const [submittedOnlineResponse, setSubmittedOnlineResponse] = useState<OnlineResponseRow | null>(null)
-  const [responseCreatedAt] = useState(() => new Date().toISOString())
+  const [responseCreatedAt, setResponseCreatedAt] = useState(() => new Date().toISOString())
   const hasSubmittedOnlineResponse = Boolean(onlineWorksheetId && submittedOnlineResponse)
 
   useEffect(() => {
@@ -1421,10 +1450,12 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     if (saved) {
       setResponses(saved.responses || {})
       setPageIndex(saved.pageIndex || 0)
+      setResponseCreatedAt(getStoredSessionCreatedAt(saved))
       setStatus('In progress')
     } else {
       setResponses({})
       setPageIndex(0)
+      setResponseCreatedAt(new Date().toISOString())
       setStatus('In progress')
     }
     setSubmittedOnlineResponse(null)
@@ -1453,14 +1484,14 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   useEffect(() => {
     if (definition.settings.autosave && responseId && isSessionHydrated) {
       saveSession(
-        { responseId, pageIndex, responses, updatedAt: new Date().toISOString() },
+        { responseId, createdAt: responseCreatedAt, pageIndex, responses, updatedAt: new Date().toISOString() },
         definition.id,
         definition.version,
         responseId,
         onlineWorksheetId,
       )
     }
-  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseId, responses])
+  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseCreatedAt, responseId, responses])
 
   const visiblePages = useMemo(() => getVisiblePages(definition, responses), [definition, responses])
   const visiblePageIndexes = useMemo(() => visiblePages.map((page) => definition.pages.indexOf(page)), [definition.pages, visiblePages])
@@ -1469,7 +1500,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const currentVisiblePageIndex = visiblePageIndexes.indexOf(pageIndex)
   const isRestrictedNavigation = definition.settings.navigation === 'sequential' || !definition.settings.allowPageJumping
   const visibleBlocks = currentPage
-    ? getVisibleBlocks(currentPage, responses).filter((block) => previewMode || getBlockAudience(block) === 'student')
+    ? getVisibleBlocks(currentPage, responses, definition).filter((block) => previewMode || getBlockAudience(block) === 'student')
     : []
   const currentTimer = currentPage?.timer ?? null
   const [pageRemainingSeconds, setPageRemainingSeconds] = useState<number | null>(null)
@@ -1484,8 +1515,8 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
   }, [definition.settings.completionMessage, onlineWorksheetId])
   const missingRequiredBlocks = useMemo(
-    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
-    [currentPage, responses],
+    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses, definition) : []),
+    [currentPage, definition, responses],
   )
   const missingRequiredBlockLocations = useMemo(
     () => getMissingRequiredBlockLocations(definition, responses),
@@ -1626,8 +1657,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     updatedAt: new Date().toISOString(),
     group: String(responses['group-name'] || ''),
     subject: String(responses['tool-name'] || responses['subject-name'] || ''),
-    responses,
-  }), [definition.id, definition.version, responseCreatedAt, responseId, responses])
+    responses: reconcileWorksheetResponses(definition, responses),
+  }), [definition, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
     if (!onlineWorksheetId || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
@@ -1749,10 +1780,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   const handleStartNew = () => {
     if (!window.confirm('Start a new response? This will clear the current saved version.')) return
     const nextId = getDefaultResponseId()
+    const nextCreatedAt = new Date().toISOString()
     setShowCompletionDialog(false)
     setValidationAttempted(false)
     setNavigationWarning('')
     setExportError('')
+    setResponseCreatedAt(nextCreatedAt)
     setResponseId(nextId)
     setResponses({})
     setPageIndex(0)
@@ -1770,7 +1803,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
     const generatedAt = new Date().toLocaleString()
-    const responseBlocks = getResponseProducingBlocks(definition).filter((block) => getBlockAudience(block) === 'student')
+    const visiblePdfPages = getVisiblePagesWithBlocks(definition, document.responses)
+      .map(({ page, blocks }) => ({
+        page,
+        blocks: blocks.filter((block) => getBlockAudience(block) === 'student'),
+      }))
+    const responseBlocks = visiblePdfPages.flatMap(({ blocks }) => blocks.filter(isResponseProducingBlock))
     const answeredCount = responseBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id])).length
     let y = 42
 
@@ -1854,10 +1892,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     })
     y += 68
 
-    definition.pages.forEach((page) => {
-      const visibleBlocks = page.blocks.filter((block) => getBlockAudience(block) === 'student' && isResponseProducingBlock(block))
-      const answeredBlocks = visibleBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
-      const contextText = getPageContextText(page)
+    visiblePdfPages.forEach(({ page, blocks }) => {
+      const answeredBlocks = blocks
+        .filter(isResponseProducingBlock)
+        .filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
+      const contextText = getPageContextText({ ...page, blocks })
 
       if (answeredBlocks.length === 0 && !contextText) return
 
@@ -1873,7 +1912,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
         if (block.type === 'radar' && value && typeof value === 'object') {
           const scores = value as Record<string, number>
-          const scoreEntries = Object.entries(scores).filter(([, score]) => Number.isFinite(Number(score)))
+          const { min, max } = getNumericRange(block.config, 1, 10)
+          const scoreEntries = Object.entries(scores)
+            .map(([dimension, score]) => [dimension, numberInRange(score, min, max)] as const)
+            .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
           if (!scoreEntries.length) return
           const radarHeight = Math.max(122, 46 + scoreEntries.length * 12)
           ensurePdfSpace(radarHeight + 10)
@@ -1883,11 +1925,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
-          drawPdfRadar(pdf, 118, y + 72, 34, scores)
+          drawPdfRadar(pdf, 118, y + 72, 34, Object.fromEntries(scoreEntries))
           pdf.setFontSize(9)
           pdf.setTextColor(71, 85, 105)
           scoreEntries.forEach(([label, score], index) => {
-            pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
+            pdf.text(`${label}: ${score.toFixed(1)}`, 180, y + 34 + index * 12)
           })
           y += radarHeight + 12
           return
@@ -1895,6 +1937,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
         if (block.type === 'quadrant' && value && typeof value === 'object') {
           const point = value as Record<string, unknown>
+          const pointX = numberInRange(point.x, 0, 100) ?? 0
+          const pointY = numberInRange(point.y, 0, 100) ?? 0
           const rationale = typeof point.rationale === 'string' && point.rationale.trim() ? String(point.rationale).trim() : 'No rationale recorded.'
           const rationaleLines = pdf.splitTextToSize(rationale, pageWidth - 292)
           const firstPageLineLimit = getPdfLineCapacity(pageHeight - 42 - y - 88 - 10, 12)
@@ -1908,11 +1952,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
-          drawPdfQuadrant(pdf, 64, y + 30, 92, Number(point.x) || 0, Number(point.y) || 0)
+          drawPdfQuadrant(pdf, 64, y + 30, 92, pointX, pointY)
           pdf.setFontSize(9)
           pdf.setTextColor(71, 85, 105)
-          pdf.text(`x: ${(Number(point.x) || 0).toFixed(1)}`, 172, y + 42)
-          pdf.text(`y: ${(Number(point.y) || 0).toFixed(1)}`, 172, y + 56)
+          pdf.text(`x: ${pointX.toFixed(1)}`, 172, y + 42)
+          pdf.text(`y: ${pointY.toFixed(1)}`, 172, y + 56)
           pdf.text(firstPageLines, 172, y + 74)
           y += quadrantHeight + 12
           if (remainingRationaleLines.length) {
@@ -1922,9 +1966,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         }
 
         if (block.type === 'matrix' && value && typeof value === 'object') {
+          const { min, max } = getNumericRange(block.config, 1, 5)
           const lines = Object.entries(value as Record<string, unknown>)
-            .filter(([, score]) => Number.isFinite(Number(score)))
-            .map(([row, score]) => `${row}: ${Number(score).toFixed(1)}`)
+            .map(([row, score]) => [row, numberInRange(score, min, max)] as const)
+            .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
+            .map(([row, score]) => `${row}: ${score.toFixed(1)}`)
           if (!lines.length) return
           drawPdfCard(getBlockDisplayLabel(block), lines)
           return
@@ -2080,7 +2126,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-emerald-700">Quiz score</p>
               <p className="mt-2 text-2xl font-bold text-emerald-900">{quizSummary.totalScore}/{quizSummary.totalMax}</p>
-              <p className="text-sm text-emerald-700">{quizSummary.percent.toFixed(0)}% correct</p>
+              <p className="text-sm text-emerald-700">{formatQuizPercent(quizSummary.percent)}% correct</p>
             </div>
           )}
 
@@ -2146,15 +2192,14 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 }
 
 function RadarBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const dimensions = block.config?.dimensions || []
+  const dimensions = getLabeledConfigItems(block.config?.dimensions, 'dimension')
   const valueMap: Record<string, number> = responses[block.id] || {}
+  const { min, max } = getNumericRange(block.config, 1, 10)
   const radius = 100
   const center = 150
-  const scores = dimensions.map((dimension: any) => {
-    const index = dimensions.indexOf(dimension)
+  const scores = dimensions.map((dimension, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const label = typeof dimension === 'string' ? dimension : dimension.label
-    const value = Number(valueMap[label] ?? 5)
+    const value = numberInRange(valueMap[dimension.id] ?? valueMap[dimension.label], min, max) ?? Math.round((min + max) / 2)
     const distance = (value / 10) * radius
     return `${center + Math.cos(angle) * distance},${center + Math.sin(angle) * distance}`
   })
@@ -2174,16 +2219,14 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
           return <polygon key={ring} points={points} fill="none" stroke="#cbd5e1" strokeWidth="1" />
         })}
 
-        {dimensions.map((dimension: any, index: number) => {
-          const label = typeof dimension === 'string' ? dimension : dimension.label
-          const key = typeof dimension === 'string' ? `${label}-${index}` : dimension.id
+        {dimensions.map((dimension, index: number) => {
           const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
           const x = center + Math.cos(angle) * 120
           const y = center + Math.sin(angle) * 120
           return (
-            <g key={key}>
+            <g key={dimension.id}>
               <line x1={center} y1={center} x2={x} y2={y} stroke="#cbd5e1" strokeWidth="1" />
-              <text x={center + Math.cos(angle) * 138} y={center + Math.sin(angle) * 138} textAnchor="middle" fontSize="9" fill="#334155">{label}</text>
+              <text x={center + Math.cos(angle) * 138} y={center + Math.sin(angle) * 138} textAnchor="middle" fontSize="9" fill="#334155">{dimension.label}</text>
             </g>
           )
         })}
@@ -2191,23 +2234,22 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
       </svg>
 
       <div className="space-y-3">
-        {dimensions.map((dimension: any, index: number) => {
-          const label = typeof dimension === 'string' ? dimension : dimension.label
-          const key = typeof dimension === 'string' ? `${label}-${index}` : dimension.id
+        {dimensions.map((dimension) => {
+          const value = numberInRange(valueMap[dimension.id] ?? valueMap[dimension.label], min, max) ?? Math.round((min + max) / 2)
           return (
-            <div key={key} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div key={dimension.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="font-medium text-slate-700">{label}</span>
-                <span className="font-bold text-slate-900">{valueMap[label] ?? 5}/10</span>
+                <span className="font-medium text-slate-700">{dimension.label}</span>
+                <span className="font-bold text-slate-900">{value}/10</span>
               </div>
               <input
                 type="range"
                 min={1}
                 max={10}
-                value={valueMap[label] ?? 5}
+                value={value}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => {
-                  const next = { ...(responses[block.id] || {}), [label]: Number(event.target.value) }
+                  const next = { ...(responses[block.id] || {}), [dimension.id]: Number(event.target.value) }
                   updateResponse(block.id, next)
                 }}
                 className="w-full"
@@ -2555,7 +2597,7 @@ function RichTextSurface({
     editable,
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
-      onChange(editor.getHTML())
+      onChange(normalizeRichTextResponse(editor.getHTML()))
     },
   })
 
@@ -2747,7 +2789,7 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
     )
   }
 
-  const currentValue = typeof responses[block.id] === 'string' ? responses[block.id] : ''
+  const currentValue = typeof responses[block.id] === 'string' ? normalizeRichTextResponse(responses[block.id]) : ''
 
   return (
     <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-slate-50'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
@@ -2779,7 +2821,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const displayStyle: 'word-flicker' | 'wheel' | 'card-shuffle' = configuredDisplayStyle === 'wheel' || configuredDisplayStyle === 'card-shuffle' || configuredDisplayStyle === 'word-flicker'
     ? configuredDisplayStyle
     : 'word-flicker'
-  const animationDurationMs = Math.max(300, Number(block.config?.animationDurationMs ?? 1800))
+  const animationDurationMs = normalizeRandomizerAnimationDuration(block.config?.animationDurationMs)
   const hasCurrentValue = typeof currentValue === 'string' && items.includes(String(currentValue))
   const isLocked = requireFirstGeneration && hasCurrentValue
   const [displayValue, setDisplayValue] = useState<string>(currentValue ?? '')
@@ -2790,11 +2832,27 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const [cardDeckItems, setCardDeckItems] = useState<string[]>(items)
   const [cardPhase, setCardPhase] = useState<'preview' | 'flipping' | 'choosing' | 'revealed'>('preview')
   const [revealedCardIndex, setRevealedCardIndex] = useState<number | null>(null)
+  const animatedIntervalRef = useRef<number | null>(null)
+  const animatedTimeoutRef = useRef<number | null>(null)
+  const cardTimeoutRef = useRef<number | null>(null)
 
-  const getShuffledItems = () => {
-    if (block.config?.shuffle === false) return [...items]
-    return [...items].sort(() => Math.random() - 0.5)
-  }
+  const clearAnimatedTimers = useCallback(() => {
+    if (animatedIntervalRef.current !== null) {
+      window.clearInterval(animatedIntervalRef.current)
+      animatedIntervalRef.current = null
+    }
+    if (animatedTimeoutRef.current !== null) {
+      window.clearTimeout(animatedTimeoutRef.current)
+      animatedTimeoutRef.current = null
+    }
+  }, [])
+
+  const clearCardTimer = useCallback(() => {
+    if (cardTimeoutRef.current !== null) {
+      window.clearTimeout(cardTimeoutRef.current)
+      cardTimeoutRef.current = null
+    }
+  }, [])
 
   const cardCanPick = cardPhase === 'choosing'
   const cardHasGenerated = cardPhase !== 'preview'
@@ -2802,27 +2860,31 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const generateAnimatedValue = useCallback(() => {
     if (!items.length) return
 
-    const nextValue = getShuffledItems()[0]
+    clearAnimatedTimers()
+    const nextValue = block.config?.shuffle === false ? items[0] : selectRandomItem(items)
+    if (!nextValue) return
     const rollingIntervalMs = Math.max(80, Math.min(140, Math.round(animationDurationMs / 14)))
 
     setIsAnimating(true)
     const timer = window.setInterval(() => {
-      const rollingItem = getShuffledItems()[Math.floor(Math.random() * getShuffledItems().length)] || nextValue
+      const rollingItem = selectRandomItem(items) || nextValue
       setDisplayValue(rollingItem)
     }, rollingIntervalMs)
+    animatedIntervalRef.current = timer
 
-    window.setTimeout(() => {
-      window.clearInterval(timer)
+    animatedTimeoutRef.current = window.setTimeout(() => {
+      clearAnimatedTimers()
       setDisplayValue(nextValue)
       setIsAnimating(false)
       updateResponse(block.id, nextValue)
     }, animationDurationMs)
-  }, [animationDurationMs, block.config?.shuffle, block.id, items, updateResponse])
+  }, [animationDurationMs, block.config?.shuffle, block.id, clearAnimatedTimers, items, updateResponse])
 
   const generateWheelValue = useCallback(() => {
     if (!items.length) return
 
-    const nextValue = getShuffledItems()[0]
+    const nextValue = block.config?.shuffle === false ? items[0] : selectRandomItem(items)
+    if (!nextValue) return
     const nextIndex = items.indexOf(nextValue)
     if (nextIndex < 0) return
 
@@ -2836,17 +2898,27 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const beginCardShuffle = useCallback(() => {
     if (!items.length) return
 
+    clearCardTimer()
+    const deckItems = block.config?.shuffle === false ? [...items] : shuffleRandomizerItems(items)
     setCardPhase('flipping')
     setRevealedCardIndex(null)
     setDisplayValue('')
-    setCardDeckItems(getShuffledItems())
+    setCardDeckItems(deckItems)
     setIsAnimating(true)
 
-    window.setTimeout(() => {
+    cardTimeoutRef.current = window.setTimeout(() => {
+      cardTimeoutRef.current = null
       setIsAnimating(false)
       setCardPhase('choosing')
     }, animationDurationMs)
-  }, [animationDurationMs, block.config?.shuffle, items])
+  }, [animationDurationMs, block.config?.shuffle, clearCardTimer, items])
+
+  useEffect(() => {
+    return () => {
+      clearAnimatedTimers()
+      clearCardTimer()
+    }
+  }, [clearAnimatedTimers, clearCardTimer])
 
   const handleGenerateClick = useCallback(() => {
     if (!items.length || isAnimating || isLocked) return
@@ -2899,6 +2971,8 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
 
   useEffect(() => {
     if (!items.length) {
+      clearAnimatedTimers()
+      clearCardTimer()
       setDisplayValue('')
       setIsAnimating(false)
       setWheelTargetIndex(null)
@@ -2936,7 +3010,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
     }
 
     setCardDeckItems(items)
-  }, [currentValue, displayStyle, isAnimating, items, pendingWheelValue])
+  }, [clearAnimatedTimers, clearCardTimer, currentValue, displayStyle, isAnimating, items, pendingWheelValue])
 
   const displayClasses = isAnimating
     ? {
@@ -3179,71 +3253,79 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         </label>
       )
     case 'singleSelect':
+      {
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {(block.config?.options || []).map((option: string) => (
-            <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
-              <span>{option}</span>
+          {options.map((option) => (
+            <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={matchesOptionValue(responses[block.id], option)} onChange={() => updateResponse(block.id, option.id)} />
+              <span>{option.label}</span>
             </label>
           ))}
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
+      }
     case 'randomizer': {
       return <RandomizerBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     }
     case 'multipleChoice':
     case 'quiz': {
       const allowMultiple = Boolean(block.config?.multipleAnswers)
-      const selectedValues = allowMultiple ? (Array.isArray(responses[block.id]) ? responses[block.id] : []) : responses[block.id]
+      const selectedValues = allowMultiple ? getSelectedOptionValues(responses[block.id]) : responses[block.id]
       const correctAnswer = block.config?.correctAnswer
       const showFeedback = block.config?.showFeedback !== false
+      const options = getLabeledConfigItems(block.config?.options, 'option')
+      const correctValues = getSelectedOptionValues(correctAnswer)
+      const isCorrectOption = (option: { id: string; label: string }) => correctValues.some((value) => matchesOptionValue(value, option))
+      const selectedIds = allowMultiple ? getSelectedOptionValues(selectedValues) : getSelectedOptionValues(selectedValues)
+      const correctIds = options.filter(isCorrectOption).map((option) => option.id)
 
       return (
         <fieldset className="space-y-3">
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Quiz question'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {allowMultiple ? (
-            (block.config?.options || []).map((option: string) => {
-              const checked = Array.isArray(selectedValues) && selectedValues.includes(option)
-              const isCorrect = Array.isArray(correctAnswer) && correctAnswer.includes(option)
+            options.map((option) => {
+              const checked = selectedValues.some((value: unknown) => matchesOptionValue(value, option))
+              const isCorrect = isCorrectOption(option)
               const isSelected = checked
               const showState = selectedValues !== undefined && isSelected
               return (
-                <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+                <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={() => {
                       const nextValues = Array.isArray(selectedValues) ? [...selectedValues] : []
-                      const index = nextValues.indexOf(option)
+                      const index = nextValues.findIndex((value) => matchesOptionValue(value, option))
                       if (index >= 0) nextValues.splice(index, 1)
-                      else nextValues.push(option)
+                      else nextValues.push(option.id)
                       updateResponse(block.id, nextValues)
                     }}
                   />
-                  <span>{option}</span>
+                  <span>{option.label}</span>
                 </label>
               )
             })
           ) : (
-            (block.config?.options || []).map((option: string) => {
-              const isCorrect = option === correctAnswer
-              const isSelected = selectedValues === option
+            options.map((option) => {
+              const isCorrect = isCorrectOption(option)
+              const isSelected = matchesOptionValue(selectedValues, option)
               const showState = selectedValues !== undefined && isSelected
               return (
-                <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                  <input type="radio" name={block.id} checked={selectedValues === option} onChange={() => updateResponse(block.id, option)} />
-                  <span>{option}</span>
+                <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <input type="radio" name={block.id} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
+                  <span>{option.label}</span>
                 </label>
               )
             })
           )}
           {selectedValues !== undefined && showFeedback && (
-            <div className={`rounded-xl border px-3 py-2 text-sm ${allowMultiple ? (JSON.stringify((Array.isArray(selectedValues) ? selectedValues : []).sort()) === JSON.stringify((Array.isArray(correctAnswer) ? correctAnswer : []).sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700') : (selectedValues === correctAnswer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700')}`}>
-              {allowMultiple ? (JSON.stringify((Array.isArray(selectedValues) ? selectedValues : []).sort()) === JSON.stringify((Array.isArray(correctAnswer) ? correctAnswer : []).sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String((Array.isArray(correctAnswer) ? correctAnswer : []).join(', ') || 'Not set')}.`) : (selectedValues === correctAnswer ? 'Correct.' : `Incorrect. Correct answer: ${String(correctAnswer || 'Not set')}.`)}
+            <div className={`rounded-xl border px-3 py-2 text-sm ${JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
+              {JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String(options.filter(isCorrectOption).map((option) => option.label).join(', ') || 'Not set')}.`}
               {block.config?.explanation && <p className="mt-2 text-sm text-slate-700">{block.config.explanation}</p>}
             </div>
           )}
@@ -3308,12 +3390,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
       const options = Array.isArray(block.config?.options) ? block.config.options : []
       const currentSelection = (responses[block.id] && typeof responses[block.id] === 'object') ? responses[block.id] : {}
-      const correctAnswerMap = Object.fromEntries(pairs.map((pair: any) => [String(pair.id ?? pair.prompt), String(pair.answer ?? '')]))
+      const correctAnswerMap = Object.fromEntries(pairs.map((pair: any, index: number) => [getMatchingPairKey(pair, index), String(pair.answer ?? '')]))
       return (
         <div className="space-y-3">
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
           {pairs.map((pair: any, index: number) => {
-            const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
+            const pairKey = getMatchingPairKey(pair, index)
             const selected = currentSelection[pairKey] ?? ''
             return (
               <div key={pairKey} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_210px]">
@@ -3372,24 +3454,25 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     }
     case 'checklist': {
       const selectedValues = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {(block.config?.options || []).map((option: string) => {
-            const checked = selectedValues.includes(option)
+          {options.map((option) => {
+            const checked = selectedValues.some((value: unknown) => matchesOptionValue(value, option))
             return (
-              <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => {
                     const next = checked
-                      ? selectedValues.filter((entry: string) => entry !== option)
-                      : [...selectedValues, option]
+                      ? selectedValues.filter((entry: unknown) => !matchesOptionValue(entry, option))
+                      : [...selectedValues, option.id]
                     updateResponse(block.id, next)
                   }}
                 />
-                <span>{option}</span>
+                <span>{option.label}</span>
               </label>
             )
           })}
@@ -3398,9 +3481,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'ranking': {
-      const currentOrder = Array.isArray(responses[block.id]) ? responses[block.id] : (block.config?.options || [])
+      const currentOrder = reconcileRankingResponse(block.config?.options, responses[block.id])
+      const storedOrder: unknown[] = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      const currentIds = currentOrder.map((item) => item.id)
+      const needsSave = currentIds.length > 0 && (storedOrder.length !== currentIds.length || storedOrder.some((entry, index) => entry !== currentIds[index]))
       const moveOption = (index: number, direction: -1 | 1) => {
-        const next = [...currentOrder]
+        const next = [...currentIds]
         const targetIndex = index + direction
         if (targetIndex < 0 || targetIndex >= next.length) return
         const [moved] = next.splice(index, 1)
@@ -3410,32 +3496,34 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       return (
         <div className="space-y-2">
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
-          {currentOrder.map((option: string, index: number) => (
-            <div key={`${block.id}-${option}-${index}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          {currentOrder.map((option, index: number) => (
+            <div key={`${block.id}-${option.id}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
-              <span className="flex-1 text-sm text-slate-700">{option}</span>
+              <span className="flex-1 text-sm text-slate-700">{option.label}</span>
               <div className="flex gap-1">
                 <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
                 <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
               </div>
             </div>
           ))}
+          {needsSave && <button type="button" onClick={() => updateResponse(block.id, currentIds)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Keep this order</button>}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Rank the items or choose “Keep this order” to continue.</p>}
         </div>
       )
     }
     case 'categorize': {
-      const items = Array.isArray(block.config?.items) ? block.config.items : []
-      const categories = Array.isArray(block.config?.categories) ? block.config.categories : []
-      const assignments = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
+      const items = getLabeledConfigItems(block.config?.items, 'item')
+      const categories = Array.isArray(block.config?.categories) ? block.config.categories.map((category: any) => typeof category === 'object' ? String(category.label || '') : String(category)) : []
+      const assignments = reconcileCategorizeResponse(block, responses[block.id])
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError}>
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <div className="grid gap-2">
-            {items.map((item: string) => (
-              <label key={item} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
-                <span className="text-sm font-medium text-slate-700">{item}</span>
-                <select value={assignments[item] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            {items.map((item) => (
+              <label key={item.id} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
+                <span className="text-sm font-medium text-slate-700">{item.label}</span>
+                <select value={assignments[item.id] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item.id]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
                   <option value="">Choose a category</option>
                   {categories.map((category: string) => <option key={category} value={category}>{category}</option>)}
                 </select>
@@ -3497,37 +3585,37 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'confidence': {
-      const options = Array.isArray(block.config?.options) ? block.config.options : []
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3">
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          <div className="grid gap-2 sm:grid-cols-3">{options.map((option: string, index: number) => <button type="button" key={option} onClick={() => updateResponse(block.id, option)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${responses[block.id] === option ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option}</button>)}</div>
+          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
           {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
         </fieldset>
       )
     }
     case 'matrix': {
-      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+      const rows = getLabeledConfigItems(block.config?.rows, 'row')
       const values = responses[block.id] || {}
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       return (
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
-          {rows.map((row: string) => (
-            <div key={`${block.id}-${row}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          {rows.map((row) => (
+            <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-slate-700">{row}</span>
-                <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{values[row] ?? block.config?.defaultValue ?? min}</span>
+                <span className="text-sm font-medium text-slate-700">{row.label}</span>
+                <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min}</span>
               </div>
               <input
                 type="range"
                 min={min}
                 max={max}
                 step={1}
-                value={Number(values[row] ?? block.config?.defaultValue ?? min)}
+                value={Number(values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min)}
                 aria-required={block.required ? true : undefined}
-                onChange={(event) => updateResponse(block.id, { ...values, [row]: Number(event.target.value) })}
+                onChange={(event) => updateResponse(block.id, { ...values, [row.id]: Number(event.target.value) })}
                 className="w-full"
               />
             </div>
@@ -3663,8 +3751,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'decisionMatrix': {
-      const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
-      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
+      const matrixOptions = getLabeledConfigItems(block.config?.options, 'option')
+      const criteria = getLabeledConfigItems(block.config?.criteria, 'criterion')
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       const values = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
@@ -3673,8 +3761,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
           <div><p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>{block.description && <p className="mt-1 text-xs text-slate-500">{block.description}</p>}</div>
           <div className="space-y-4">
             {matrixOptions.map((option: any) => {
-              const optionValues = values[option.id] || {}
-              const completed = criteria.map((criterion: any) => Number(optionValues[criterion.id])).filter(Number.isFinite)
+              const optionValues = values[option.id] || values[option.label] || {}
+              const completed = criteria.map((criterion) => Number(optionValues[criterion.id] ?? optionValues[criterion.label])).filter(Number.isFinite)
               const total = completed.reduce((sum: number, value: number) => sum + value, 0)
               return (
                 <section key={option.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -3683,7 +3771,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                     {criteria.map((criterion: any) => <div key={criterion.id} className="grid gap-2 sm:grid-cols-[minmax(140px,1fr)_auto] sm:items-center">
                       <span className="text-sm text-slate-700">{criterion.label}</span>
                       <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={`${option.label}: ${criterion.label}`}>
-                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={optionValues[criterion.id] === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${optionValues[criterion.id] === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
+                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={(optionValues[criterion.id] ?? optionValues[criterion.label]) === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${(optionValues[criterion.id] ?? optionValues[criterion.label]) === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
                       </div>
                     </div>)}
                   </div>
@@ -3734,18 +3822,21 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     case 'quadrant':
       return <QuadrantBoard block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'verdict':
+      {
+      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {(block.config?.options || []).map((option: string) => (
-            <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
-              <span>{option}</span>
+          {options.map((option) => (
+            <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={matchesOptionValue(responses[block.id], option)} onChange={() => updateResponse(block.id, option.id)} />
+              <span>{option.label}</span>
             </label>
           ))}
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
+      }
     default:
       return null
   }
@@ -3754,17 +3845,39 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
 function formatBlockValue(block: WorksheetBlock, value: any) {
   if (value === undefined || value === null || value === '') return ''
   if (block.type === 'richText') return stripHtml(sanitizeRichTextHtml(String(value)))
+  if (['singleSelect', 'confidence', 'verdict'].includes(block.type)) {
+    const option = getLabeledConfigItems(block.config?.options, 'option').find((item) => matchesOptionValue(value, item))
+    return option?.label || String(value)
+  }
+  if (block.type === 'checklist' || block.type === 'multipleChoice' || block.type === 'quiz') {
+    const options = getLabeledConfigItems(block.config?.options, 'option')
+    const values = getSelectedOptionValues(value)
+    return values.map((entry) => options.find((option) => matchesOptionValue(entry, option))?.label || String(entry)).join(', ')
+  }
   if (typeof value === 'string') return value
   if (typeof value === 'number') return String(value)
   if (block.type === 'wordCloud') return value.filter(Boolean).join(', ')
   if (block.type === 'hotspot') return value.map((point: any) => `(${point.x}%, ${point.y}%)`).join(', ')
-  if (block.type === 'categorize') return Object.entries(value).map(([item, category]) => `${item}: ${category}`).join('; ')
-  if (block.type === 'radar') return `Radar: ${Object.entries(value as Record<string, number>).map(([label, score]) => `${label}: ${score}`).join(', ')}`
+  if (block.type === 'categorize') {
+    const itemLabels = Object.fromEntries(getLabeledConfigItems(block.config?.items, 'item').map((item) => [item.id, item.label]))
+    return Object.entries(reconcileCategorizeResponse(block, value)).filter(([, category]) => String(category).trim()).map(([item, category]) => `${itemLabels[item] || item}: ${category}`).join('; ')
+  }
+  if (block.type === 'ranking') {
+    return reconcileRankingResponse(block.config?.options, value).map((item) => item.label).join(', ')
+  }
+  if (block.type === 'matrix') {
+    const rowLabels = Object.fromEntries(getLabeledConfigItems(block.config?.rows, 'row').map((row) => [row.id, row.label]))
+    return Object.entries(value as Record<string, number>).map(([row, score]) => `${rowLabels[row] || row}: ${score}`).join(', ')
+  }
+  if (block.type === 'radar') {
+    const dimensionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.dimensions, 'dimension').map((dimension) => [dimension.id, dimension.label]))
+    return `Radar: ${Object.entries(value as Record<string, number>).map(([dimension, score]) => `${dimensionLabels[dimension] || dimension}: ${score}`).join(', ')}`
+  }
   if (block.type === 'quadrant') return `Quadrant: x=${value.x}, y=${value.y}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'continuum') return `Position: ${value.position}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'decisionMatrix') {
-    const optionLabels = Object.fromEntries((block.config?.options || []).map((option: any) => [option.id, option.label]))
-    const criterionLabels = Object.fromEntries((block.config?.criteria || []).map((criterion: any) => [criterion.id, criterion.label]))
+    const optionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.options, 'option').map((option) => [option.id, option.label]))
+    const criterionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.criteria, 'criterion').map((criterion) => [criterion.id, criterion.label]))
     return Object.entries(value as Record<string, any>).map(([option, ratings]) => `${optionLabels[option] || option}: ${Object.entries(ratings).map(([criterion, score]) => `${criterionLabels[criterion] || criterion}: ${score}`).join(', ')}`).join(' | ')
   }
   if (block.type === 'board') {
@@ -3791,7 +3904,7 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
 
   const points = dimensions.map((_, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = Number(values[index] ?? 0)
+    const value = numberInRange(values[index], 0, 10) ?? 0
     const distance = (value / 10) * radius
     const x = center + Math.cos(angle) * distance
     const y = center + Math.sin(angle) * distance
@@ -3831,17 +3944,19 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
   )
 }
 
-function QuadrantMiniChart({ x, y }: { x: number; y: number }) {
+export function QuadrantMiniChart({ x, y, xLeft = 'Time', xRight = 'Learning', yBottom = 'Low risk', yTop = 'High risk' }: { x: number; y: number; xLeft?: string; xRight?: string; yBottom?: string; yTop?: string }) {
+  const safeX = numberInRange(x, 0, 100) ?? 0
+  const safeY = numberInRange(y, 0, 100) ?? 0
   return (
     <svg viewBox="0 0 220 220" className="h-48 w-full max-w-[260px]">
       <rect x="0" y="0" width="220" height="220" fill="#f8fafc" rx="18" />
       <line x1="110" y1="0" x2="110" y2="220" stroke="#cbd5e1" strokeWidth="2" />
       <line x1="0" y1="110" x2="220" y2="110" stroke="#cbd5e1" strokeWidth="2" />
-      <circle cx={(x / 100) * 220} cy={220 - (y / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
-      <text x="18" y="112" fontSize="11" fill="#475569">Time</text>
-      <text x="160" y="112" fontSize="11" fill="#475569">Learning</text>
-      <text x="92" y="210" fontSize="11" fill="#475569">Low risk</text>
-      <text x="92" y="18" fontSize="11" fill="#475569">High risk</text>
+      <circle cx={(safeX / 100) * 220} cy={220 - (safeY / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
+      <text x="18" y="112" fontSize="11" fill="#475569">{xLeft}</text>
+      <text x="160" y="112" fontSize="11" fill="#475569">{xRight}</text>
+      <text x="92" y="210" fontSize="11" fill="#475569">{yBottom}</text>
+      <text x="92" y="18" fontSize="11" fill="#475569">{yTop}</text>
     </svg>
   )
 }
@@ -3853,7 +3968,7 @@ function drawPdfRadar(pdf: jsPDF, centreX: number, centreY: number, radius: numb
 
   const points = dimensions.map((_, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = Number(values[index] ?? 0)
+    const value = numberInRange(values[index], 0, 10) ?? 0
     const distance = (value / 10) * radius
     const x = centreX + Math.cos(angle) * distance
     const y = centreY + Math.sin(angle) * distance
@@ -4064,13 +4179,13 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (block.type === 'ranking') {
-      const items = Array.isArray(value) ? value : []
+      const items = reconcileRankingResponse(block.config?.options, value)
       return (
         <ol className="mt-2 space-y-2 text-sm text-slate-700">
           {items.map((item, index) => (
-            <li key={`${block.id}-${String(item)}-${index}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <li key={`${block.id}-${item.id}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
-              <span>{String(item)}</span>
+              <span>{item.label}</span>
             </li>
           ))}
         </ol>
@@ -4087,12 +4202,12 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     const title = getBlockDisplayLabel(block)
 
     if (block.type === 'radar') {
-      const configuredDimensions = Array.isArray(block.config?.dimensions)
-        ? block.config.dimensions.map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || ''))).filter(Boolean)
-        : []
+      const configuredDimensionItems = getLabeledConfigItems(block.config?.dimensions, 'dimension')
+      const configuredDimensions = configuredDimensionItems.map((dimension) => dimension.id)
+      const dimensionLabels = Object.fromEntries(configuredDimensionItems.map((dimension) => [dimension.id, dimension.label]))
       const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
       const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
-      const averages = aggregateRadarValues(groupingResponses, dimensions, block.id)
+      const averages = Object.fromEntries(Object.entries(aggregateRadarValues(groupingResponses, dimensions, block.id, getNumericRange(block.config, 1, 10))).map(([dimension, score]) => [dimensionLabels[dimension] || dimension, score]))
 
       return (
         <>
@@ -4136,7 +4251,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} />
+              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} xLeft={block.config?.xLeft} xRight={block.config?.xRight} yBottom={block.config?.yBottom} yTop={block.config?.yTop} />
               <div className="mt-3 flex justify-between text-sm text-slate-700">
                 <span>x: {averagePoint.x.toFixed(1)}</span>
                 <span>y: {averagePoint.y.toFixed(1)}</span>
@@ -4170,7 +4285,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     if (block.type === 'decisionMatrix') {
       const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
       const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
-      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria)
+      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria, getNumericRange(block.config, 1, 5))
       return <><div className="flex items-center justify-between gap-3"><div><h4 className="text-base font-semibold text-slate-900">{title}</h4><p className="mt-1 text-sm text-slate-500">Average ratings by option and criterion. Counts reflect valid submitted values.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-violet-700">Decision matrix</span></div><div className="mt-4 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-slate-200"><th className="p-2">Option</th>{criteria.map((criterion: any) => <th key={criterion.id} className="p-2">{criterion.label}</th>)}<th className="p-2">Overall</th></tr></thead><tbody>{summary.map((option) => <tr key={option.id} className="border-b border-slate-100"><th className="p-2 font-medium text-slate-800">{option.label}<span className="block text-xs font-normal text-slate-500">{option.count} response(s)</span></th>{option.criteria.map((criterion) => <td key={criterion.id} className="p-2">{criterion.count ? criterion.average.toFixed(1) : '—'}<span className="block text-[10px] text-slate-400">n={criterion.count}</span></td>)}<td className="p-2 font-semibold">{option.overallMean.toFixed(1)}</td></tr>)}</tbody></table></div></>
     }
 
@@ -4227,11 +4342,12 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (block.type === 'matrix') {
-      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
-      const averages = rows.map((row: string) => {
+      const rows = getLabeledConfigItems(block.config?.rows, 'row')
+      const { min, max } = getNumericRange(block.config, 1, 5)
+      const averages = rows.map((row) => {
         const values = groupingResponses
-          .map((response) => Number(response.responses?.[block.id]?.[row]))
-          .filter((value) => Number.isFinite(value))
+          .map((response) => numberInRange(response.responses?.[block.id]?.[row.id] ?? response.responses?.[block.id]?.[row.label], min, max))
+          .filter((value): value is number => value !== undefined)
         return {
           row,
           average: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
@@ -4250,8 +4366,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
           </div>
           <div className="mt-4 space-y-2">
             {averages.map(({ row, average }) => (
-              <div key={`${block.id}-${row}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                <span className="text-sm text-slate-700">{row}</span>
+              <div key={`${block.id}-${row.id}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-sm text-slate-700">{row.label}</span>
                 <span className="text-sm font-semibold text-slate-900">{average.toFixed(1)}</span>
               </div>
             ))}
@@ -4261,9 +4377,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (block.type === 'rating') {
+      const { min, max } = getNumericRange(block.config, 0, 10)
       const numericEntries = entries
         .map(({ response, label, value }) => ({ response, label, value: Number(value) }))
-        .filter((entry) => Number.isFinite(entry.value))
+        .filter((entry) => numberInRange(entry.value, min, max) !== undefined)
       const average = numericEntries.length ? numericEntries.reduce((sum, entry) => sum + entry.value, 0) / numericEntries.length : 0
 
       return (
@@ -4506,14 +4623,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       try {
         const text = await file.text()
         const json = JSON.parse(text) as WorksheetResponse
-        if (json.worksheetId !== definition.id) {
+        const importError = getWorksheetResponseImportError(definition, json)
+        if (importError) {
           rejected += 1
-          setError(`Rejected ${file.name}: worksheet ID must match ${definition.id}.`)
-          continue
-        }
-        if (json.responseSchema !== 'interactive-worksheet-response') {
-          rejected += 1
-          setError(`Rejected ${file.name}: invalid response schema.`)
+          setError(`Rejected ${file.name}: ${importError}`)
           continue
         }
         parsed.push(json)
@@ -4941,12 +5054,6 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   return mode === 'student' ? renderStudentView() : renderTeacherView()
 }
 
-function getConditionOptions(block: WorksheetBlock) {
-  if (block.type === 'trueFalse') return [{ label: 'True', value: true }, { label: 'False', value: false }]
-  const configured = Array.isArray(block.config?.options) ? block.config.options : []
-  return configured.map((option: unknown) => ({ label: String(option), value: String(option) }))
-}
-
 function ConditionalDisplayEditor({
   condition,
   candidates,
@@ -5000,7 +5107,7 @@ function ConditionalDisplayEditor({
               }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 {expectedOptions.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
               </select>
-            ) : <input value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
+            ) : <input type={source?.type === 'numeric' ? 'number' : 'text'} value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: source?.type === 'numeric' && event.target.value !== '' ? Number(event.target.value) : event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
           </label>
           <button type="button" onClick={() => onChange(undefined)} className="justify-self-start text-xs font-medium text-red-700">Remove condition</button>
         </div>
@@ -5110,9 +5217,9 @@ function BuilderPage({
   const priorPageResponseBlocks = definition.pages
     .slice(0, Math.max(0, selectedPageIndex))
     .flatMap((page) => page.blocks)
-    .filter(isResponseProducingBlock)
+    .filter(isConditionSourceBlock)
   const priorBlockResponseBlocks = selectedPage && selectedBlock
-    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isResponseProducingBlock)]
+    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isConditionSourceBlock)]
     : priorPageResponseBlocks
 
   const addPage = () => {
@@ -5486,12 +5593,12 @@ function BuilderPage({
   }
 
   const selectedConfig = (selectedBlock?.config || {}) as Record<string, any>
-  const optionList = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
+  const optionList = getLabeledConfigItems(selectedConfig.options, 'option')
   const randomizerItems = Array.isArray(selectedConfig.items) ? (selectedConfig.items as string[]) : []
-  const rankingOptions = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
-  const matrixRows = Array.isArray(selectedConfig.rows) ? (selectedConfig.rows as string[]) : []
-  const decisionOptions = Array.isArray(selectedConfig.options) ? selectedConfig.options as Array<{ id: string; label: string }> : []
-  const decisionCriteria = Array.isArray(selectedConfig.criteria) ? selectedConfig.criteria as Array<{ id: string; label: string }> : []
+  const rankingOptions = getLabeledConfigItems(selectedConfig.options, 'option')
+  const matrixRows = getLabeledConfigItems(selectedConfig.rows, 'row')
+  const decisionOptions = getLabeledConfigItems(selectedConfig.options, 'option')
+  const decisionCriteria = getLabeledConfigItems(selectedConfig.criteria, 'criterion')
   const boardColumns = Array.isArray(selectedConfig.columns) ? selectedConfig.columns as Array<{ id: string; label: string; description?: string }> : []
   const radarDimensions = Array.isArray(selectedConfig.dimensions)
     ? (selectedConfig.dimensions as any[]).map((dimension, index) => {
@@ -5580,10 +5687,11 @@ function BuilderPage({
         setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
         return
       }
-      setDefinition(parsed)
-      setSelectedPageId(parsed.pages[0]?.id || '')
-      setSelectedBlockId(parsed.pages[0]?.blocks[0]?.id || '')
-      setBuilderMode(parsed.pages.length > 0 ? 'pages' : 'setup')
+      const normalized = normalizeWorksheetDefinitionStableIds(parsed)
+      setDefinition(normalized)
+      setSelectedPageId(normalized.pages[0]?.id || '')
+      setSelectedBlockId(normalized.pages[0]?.blocks[0]?.id || '')
+      setBuilderMode(normalized.pages.length > 0 ? 'pages' : 'setup')
       setPastedJson('')
       setShowImportDialog(false)
     } catch {
@@ -6511,14 +6619,18 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   {(selectedBlock.type === 'multipleChoice' || selectedBlock.type === 'singleSelect' || selectedBlock.type === 'verdict' || selectedBlock.type === 'checklist' || selectedBlock.type === 'ranking' || selectedBlock.type === 'quiz' || selectedBlock.type === 'trueFalse' || selectedBlock.type === 'matching' || selectedBlock.type === 'confidence') && (
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">{selectedBlock.type === 'ranking' ? 'Ranking options' : selectedBlock.type === 'trueFalse' ? 'True/false choices' : selectedBlock.type === 'matching' ? 'Matching choices' : selectedBlock.type === 'quiz' ? 'Quiz options' : 'Options'}</p>
-                      {(selectedBlock.type === 'trueFalse' ? ['True', 'False'] : selectedBlock.type === 'matching' ? (selectedConfig.options || ['Option 1', 'Option 2']) : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option: string, index: number) => (
-                        <div key={`${selectedBlock.id}-option-${index}`} className="flex items-center gap-2">
+                      {(selectedBlock.type === 'trueFalse'
+                        ? ['True', 'False'].map((label, index) => ({ id: `option-${index + 1}`, label }))
+                        : selectedBlock.type === 'matching'
+                          ? getLabeledConfigItems(selectedConfig.options || ['Option 1', 'Option 2'], 'option')
+                          : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option, index: number) => (
+                        <div key={`${selectedBlock.id}-${option.id}`} className="flex items-center gap-2">
                           <input
-                            value={option}
+                            value={option.label}
                             onChange={(event) => {
                               const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
                               const next = [...current]
-                              next[index] = event.target.value
+                              next[index] = { ...option, label: event.target.value }
                               updateSelectedConfig({ options: next })
                             }}
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -6538,7 +6650,10 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ))}
                       <button
                         type="button"
-                        onClick={() => updateSelectedConfig({ options: [...(selectedBlock.type === 'ranking' ? rankingOptions : optionList), `Option ${(selectedBlock.type === 'ranking' ? rankingOptions : optionList).length + 1}`] })}
+                        onClick={() => {
+                          const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
+                          updateSelectedConfig({ options: [...current, { id: `option-${Date.now()}`, label: `Option ${current.length + 1}` }] })
+                        }}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
                       >
                         Add option
@@ -6548,7 +6663,10 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
                   {selectedBlock.type === 'categorize' && (
                     <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={(selectedConfig.items || []).join('\n')} onChange={(event) => updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={getLabeledConfigItems(selectedConfig.items, 'item').map((item) => item.label).join('\n')} onChange={(event) => {
+                        const current = getLabeledConfigItems(selectedConfig.items, 'item')
+                        updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean).map((label, index) => ({ id: current[index]?.id || `item-${Date.now()}-${index}`, label })) })
+                      }} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Categories, one per line<textarea value={(selectedConfig.categories || []).join('\n')} onChange={(event) => updateSelectedConfig({ categories: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                     </div>
                   )}
@@ -6586,15 +6704,15 @@ Make the language concise and appropriate for the learners. Do not include Markd
                             Correct answer
                             {selectedConfig.multipleAnswers ? (
                               <select multiple value={Array.isArray(selectedConfig.correctAnswer) ? selectedConfig.correctAnswer : (selectedConfig.correctAnswer ? [selectedConfig.correctAnswer] : [])} onChange={(event) => updateSelectedConfig({ correctAnswer: Array.from(event.target.selectedOptions, (option) => option.value) })} className="mt-1 min-h-28 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
-                                {(selectedConfig.options || []).map((option: string) => (
-                                  <option key={option} value={option}>{option}</option>
+                                {optionList.map((option) => (
+                                  <option key={option.id} value={option.id}>{option.label}</option>
                                 ))}
                               </select>
                             ) : (
                               <select value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
                                 <option value="">Select an answer</option>
-                                {(selectedConfig.options || []).map((option: string) => (
-                                  <option key={option} value={option}>{option}</option>
+                                {optionList.map((option) => (
+                                  <option key={option.id} value={option.id}>{option.label}</option>
                                 ))}
                               </select>
                             )}
@@ -6633,7 +6751,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ) : (
                         <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
                           Correct answer
-                          <input value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
+                          <input value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig(selectedBlock.type === 'fillBlank' ? getFillBlankCorrectAnswerPatch(event.target.value) : { correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
                         </label>
                       )}
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -6689,12 +6807,12 @@ Make the language concise and appropriate for the learners. Do not include Markd
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">Matrix rows</p>
                       {matrixRows.map((row, index) => (
-                        <div key={`${selectedBlock.id}-row-${index}`} className="flex items-center gap-2">
+                        <div key={row.id} className="flex items-center gap-2">
                           <input
-                            value={row}
+                            value={row.label}
                             onChange={(event) => {
                               const next = [...matrixRows]
-                              next[index] = event.target.value
+                              next[index] = { ...row, label: event.target.value }
                               updateSelectedConfig({ rows: next })
                             }}
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -6713,7 +6831,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ))}
                       <button
                         type="button"
-                        onClick={() => updateSelectedConfig({ rows: [...matrixRows, `Criteria ${matrixRows.length + 1}`] })}
+                        onClick={() => updateSelectedConfig({ rows: [...matrixRows, { id: `row-${Date.now()}`, label: `Criteria ${matrixRows.length + 1}` }] })}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
                       >
                         Add row

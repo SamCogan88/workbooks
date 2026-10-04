@@ -1,11 +1,92 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createElement, Fragment } from 'react'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import { renderBlock } from './App'
+import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
-import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
+import { loadPublishedWorksheet } from './lib/onlineRepository'
+import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
+import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+
+vi.mock('./lib/onlineRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
+  return {
+    ...actual,
+    loadPublishedWorksheet: vi.fn(),
+  }
+})
+
+const mockedLoadPublishedWorksheet = vi.mocked(loadPublishedWorksheet)
+
+function workbook(publicCode: string, title: string) {
+  return {
+    id: `worksheet-${publicCode.toLowerCase()}`,
+    public_code: publicCode,
+    definition: {
+      id: `definition-${publicCode.toLowerCase()}`,
+      version: 1,
+      title,
+      description: '',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: false,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [{ id: 'page-1', title: 'Page 1', blocks: [] }],
+    },
+  } as any
+}
+
+function JoinRouteHarness() {
+  const navigate = useNavigate()
+  return createElement(
+    Fragment,
+    null,
+    createElement('button', { type: 'button', onClick: () => navigate('/join/CODE2') }, 'Open CODE2'),
+    createElement(Routes, null, createElement(Route, { path: '/join/:publicCode', element: createElement(OnlineJoinPageRoute) })),
+  )
+}
+
+describe('online workbook join routing', () => {
+  it('clears the previous workbook when the join code changes in the same tab', async () => {
+    mockedLoadPublishedWorksheet.mockImplementation((publicCode: string) => {
+      if (publicCode === 'CODE1') return Promise.resolve(workbook('CODE1', 'First workbook'))
+      return Promise.reject(new Error('not found'))
+    })
+
+    render(createElement(
+      MemoryRouter,
+      { initialEntries: ['/join/CODE1'] },
+      createElement(JoinRouteHarness),
+    ))
+
+    expect(await screen.findByRole('heading', { name: 'First workbook' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open CODE2' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('We could not find a published workbook with that code.')
+    expect(screen.queryByRole('heading', { name: 'First workbook' })).toBeNull()
+
+    await waitFor(() => expect(mockedLoadPublishedWorksheet).toHaveBeenLastCalledWith('CODE2'))
+  })
+})
 
 describe('worksheet block defaults', () => {
+  it('rejects imported responses for a different worksheet version', () => {
+    const definition = { id: 'worksheet-a', version: 2 } as any
+    const response = {
+      responseSchema: 'interactive-worksheet-response',
+      worksheetId: 'worksheet-a',
+      worksheetVersion: 1,
+    } as any
+
+    expect(getWorksheetResponseImportError(definition, response)).toBe('worksheet version must match 2.')
+    expect(getWorksheetResponseImportError(definition, { ...response, worksheetVersion: 2 })).toBe('')
+  })
+
   it('includes the media and analysis block types with sensible defaults', () => {
     expect(getDefaultBlockConfig('checklist', 1)).toMatchObject({
       options: ['Option 1', 'Option 2'],
@@ -89,6 +170,24 @@ describe('worksheet block defaults', () => {
   })
 })
 
+describe('quadrant summary chart', () => {
+  it('renders configured axis labels', () => {
+    render(createElement(QuadrantMiniChart, {
+      x: 52,
+      y: 74,
+      xLeft: 'Cost',
+      xRight: 'Impact',
+      yBottom: 'Lower confidence',
+      yTop: 'Higher confidence',
+    }))
+
+    expect(screen.getByText('Cost')).toBeTruthy()
+    expect(screen.getByText('Impact')).toBeTruthy()
+    expect(screen.getByText('Lower confidence')).toBeTruthy()
+    expect(screen.getByText('Higher confidence')).toBeTruthy()
+  })
+})
+
 describe('conditional visibility', () => {
   const definition = {
     id: 'branching', version: 1, title: 'Branching', description: '',
@@ -117,6 +216,26 @@ describe('conditional visibility', () => {
     expect(isConditionMet({ blockId: 'choice', operator: 'notContains', value: 'Canvas' }, { choice: ['Teams'] })).toBe(true)
   })
 
+  it('matches numeric and nested structured response values', () => {
+    expect(isConditionMet({ blockId: 'score', operator: 'equals', value: 10 }, { score: 10 })).toBe(true)
+    expect(isConditionMet({ blockId: 'score', operator: 'equals', value: '10' }, { score: 10 })).toBe(true)
+    expect(isConditionMet({ blockId: 'matrix', operator: 'contains', value: 4 }, { matrix: { clarity: 3, accuracy: 4 } })).toBe(true)
+    expect(isConditionMet({ blockId: 'board', operator: 'contains', value: 'risk' }, { board: { risks: [{ text: 'Schedule risk' }] } })).toBe(true)
+  })
+
+  it('maps configured condition labels to stable option ids', () => {
+    const source = { id: 'lms', type: 'singleSelect', config: { options: [{ id: 'teams-id', label: 'Teams' }] } } as any
+    expect(getConditionOptions(source)).toEqual([{ label: 'Teams', value: 'teams-id' }])
+    expect(isConditionMet({ blockId: 'lms', operator: 'equals', value: 'Teams' }, { lms: 'teams-id' }, source)).toBe(true)
+    const stableDefinition = { ...definition, pages: [{ id: 'choice', title: 'Choose', blocks: [source] }, definition.pages[1]] } as any
+    expect(getVisiblePages(stableDefinition, { lms: 'teams-id' }).map((page) => page.id)).toEqual(['choice', 'teams'])
+  })
+
+  it('filters unsupported hotspot blocks from conditional sources', () => {
+    expect(isConditionSourceBlock({ id: 'spot', type: 'hotspot' } as any)).toBe(false)
+    expect(isConditionSourceBlock({ id: 'rating', type: 'rating' } as any)).toBe(true)
+  })
+
   it('ignores hidden required blocks and skips hidden pages in navigation and progress inputs', () => {
     expect(getMissingRequiredBlocks(definition.pages[1], { lms: 'Teams' })).toHaveLength(0)
     expect(getAdjacentVisiblePageIndex(definition, { lms: 'Moodle' }, 0, 1)).toBe(2)
@@ -131,6 +250,13 @@ describe('conditional visibility', () => {
     expect(canNavigateToVisiblePage({ navigation: 'free', allowPageJumping: true }, 0, 2)).toBe(true)
     expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 2, 0)).toBe(true)
     expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 0, 1)).toBe(true)
+  })
+
+  it('returns only visible pages and blocks for exports', () => {
+    const sections = getVisiblePagesWithBlocks(definition, { lms: 'Teams' })
+
+    expect(sections.map(({ page }) => page.id)).toEqual(['choice', 'teams', 'finish'])
+    expect(sections.find(({ page }) => page.id === 'teams')?.blocks.map((block) => block.id)).toEqual(['teams-info'])
   })
 
   it('preserves conditions through JSON serialization', () => {
@@ -178,10 +304,12 @@ describe('visual thinking blocks', () => {
     const block = { id: 'decision', type: 'decisionMatrix', required: true, config } as any
     const complete = Object.fromEntries(config.options.map((option: any) => [option.id, Object.fromEntries(config.criteria.map((criterion: any) => [criterion.id, 4]))]))
     expect(isRequiredBlockSatisfied(block, { decision: { [config.options[0].id]: { [config.criteria[0].id]: 4 } } })).toBe(false)
+    expect(isRequiredBlockSatisfied(block, { decision: { ...complete, [config.options[0].id]: { ...complete[config.options[0].id], [config.criteria[0].id]: 999 } } })).toBe(false)
     expect(isRequiredBlockSatisfied(block, { decision: complete })).toBe(true)
-    const responses = [complete, complete].map((matrix, index) => ({ responseSchema: 'interactive-worksheet-response', schemaVersion: 1, worksheetId: 'w', worksheetVersion: 1, responseId: String(index), createdAt: '', updatedAt: '', responses: { decision: matrix } })) as any
+    const invalid = { ...complete, [config.options[0].id]: { ...complete[config.options[0].id], [config.criteria[0].id]: 999 } }
+    const responses = [complete, invalid].map((matrix, index) => ({ responseSchema: 'interactive-worksheet-response', schemaVersion: 1, worksheetId: 'w', worksheetVersion: 1, responseId: String(index), createdAt: '', updatedAt: '', responses: { decision: matrix } })) as any
     const summary = aggregateDecisionMatrix(responses, 'decision', config.options, config.criteria)
-    expect(summary[0].criteria[0]).toMatchObject({ average: 4, count: 2 })
+    expect(summary[0].criteria[0]).toMatchObject({ average: 4, count: 1 })
   })
 
   it('renders all decision matrix cells and persists a selected rating', () => {
@@ -191,6 +319,65 @@ describe('visual thinking blocks', () => {
     expect(screen.getAllByRole('radiogroup')).toHaveLength(4)
     fireEvent.click(screen.getAllByRole('radio')[0])
     expect(update).toHaveBeenCalled()
+  })
+
+  it('stores duplicate choice and checklist labels by stable option id', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'choice', type: 'singleSelect', label: 'Choose', config: { options: [{ id: 'first', label: 'Agree' }, { id: 'second', label: 'Agree' }] } }, {}, update))
+    fireEvent.click(screen.getAllByLabelText('Agree')[1])
+    expect(update).toHaveBeenLastCalledWith('choice', 'second')
+
+    update.mockClear()
+    cleanup()
+    render(renderBlock({ id: 'checks', type: 'checklist', label: 'Check', config: { options: [{ id: 'a', label: 'Same' }, { id: 'b', label: 'Same' }] } }, {}, update))
+    fireEvent.click(screen.getAllByLabelText('Same')[1])
+    expect(update).toHaveBeenLastCalledWith('checks', ['b'])
+  })
+
+  it('stores duplicate categorize, matrix, and radar labels by stable ids', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'cat', type: 'categorize', label: 'Sort', config: { items: [{ id: 'item-a', label: 'Repeat' }, { id: 'item-b', label: 'Repeat' }], categories: ['One'] } }, {}, update))
+    fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'One' } })
+    expect(update).toHaveBeenLastCalledWith('cat', { 'item-a': '', 'item-b': 'One' })
+
+    update.mockClear()
+    cleanup()
+    const { container } = render(renderBlock({ id: 'matrix', type: 'matrix', label: 'Rate', config: { rows: [{ id: 'row-a', label: 'Repeat' }, { id: 'row-b', label: 'Repeat' }], min: 1, max: 5 } }, {}, update))
+    fireEvent.change(container.querySelectorAll('input[type="range"]')[1], { target: { value: '4' } })
+    expect(update).toHaveBeenLastCalledWith('matrix', { 'row-b': 4 })
+
+    update.mockClear()
+    cleanup()
+    render(renderBlock({ id: 'radar', type: 'radar', label: 'Radar', config: { dimensions: [{ id: 'dim-a', label: 'Repeat' }, { id: 'dim-b', label: 'Repeat' }] } }, {}, update))
+    fireEvent.change(screen.getAllByRole('slider')[1], { target: { value: '8' } })
+    expect(update).toHaveBeenLastCalledWith('radar', { 'dim-b': 8 })
+  })
+
+  it('reconciles ranking responses against the configured options', () => {
+    const options = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }]
+
+    expect(reconcileRankingResponse(options, ['B', 'removed', 'a']).map((item) => item.id)).toEqual(['b', 'a', 'c'])
+    expect(isRequiredBlockSatisfied({ id: 'rank', type: 'ranking', required: true, config: { options } } as any, {})).toBe(false)
+    expect(isRequiredBlockSatisfied({ id: 'rank', type: 'ranking', required: true, config: { options } } as any, { rank: ['b'] })).toBe(true)
+
+    const update = vi.fn()
+    render(renderBlock({ id: 'rank', type: 'ranking', label: 'Rank', required: true, config: { options } }, {}, update, { showRequiredError: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep this order' }))
+    expect(update).toHaveBeenLastCalledWith('rank', ['a', 'b', 'c'])
+    expect(screen.getByText('Rank the items or choose “Keep this order” to continue.')).toBeTruthy()
+  })
+
+  it('drops stale categorize assignments from saved and exported responses', () => {
+    const block = { id: 'cat', type: 'categorize', config: { items: [{ id: 'keep', label: 'Keep' }, { id: 'new', label: 'New' }], categories: ['One'] } } as any
+    expect(reconcileCategorizeResponse(block, { old: 'Two', Keep: 'One', new: 'Removed' })).toEqual({ keep: 'One', new: '' })
+    expect(reconcileWorksheetResponses({ pages: [{ blocks: [block] }] } as any, { cat: { old: 'One', keep: 'One' } })).toEqual({ cat: { keep: 'One', new: '' } })
+  })
+
+  it('falls back to stable decision matrix ids when imported cells lack ids', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'decision', type: 'decisionMatrix', label: 'Compare', config: { options: [{ label: 'Option' }, { label: 'Option' }], criteria: [{ label: 'Cost' }, { label: 'Cost' }], min: 1, max: 2 } }, {}, update))
+    fireEvent.click(screen.getAllByRole('radio')[7])
+    expect(update).toHaveBeenLastCalledWith('decision', { 'option-2': { 'criterion-2': 2 } })
   })
 
   it('builds every board preset and validates meaningful entries', () => {
@@ -314,6 +501,128 @@ describe('worksheet quiz summary', () => {
     expect(summary.items[0].isCorrect).toBe(true)
     expect(summary.items[1].isCorrect).toBe(false)
   })
+
+  it('scores matching pairs without ids using the rendered pair keys', () => {
+    const definition = {
+      id: 'matching-test',
+      version: 1,
+      title: 'Matching test',
+      description: 'A matching quiz',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [
+        {
+          id: 'page-1',
+          title: 'Quiz page',
+          blocks: [
+            {
+              id: 'matching-1',
+              type: 'matching',
+              label: 'Match the terms',
+              config: {
+                pairs: [
+                  { prompt: 'Photosynthesis', answer: 'Light energy' },
+                  { prompt: 'Mitochondria', answer: 'Cellular respiration' },
+                ],
+                options: ['Light energy', 'Cellular respiration'],
+                points: 4,
+              },
+            },
+          ],
+        },
+      ],
+    } as any
+
+    const summary = getQuizSummary(definition, {
+      'matching-1': {
+        'Photosynthesis-0': 'Light energy',
+        'Mitochondria-1': 'Cellular respiration',
+      },
+    })
+
+    expect(summary.totalScore).toBe(4)
+    expect(summary.percent).toBe(100)
+    expect(summary.items[0].isCorrect).toBe(true)
+  })
+
+  it('does not round partial quiz scores up to 100 percent', () => {
+    expect(formatQuizPercent(99.5)).toBe('99')
+    expect(formatQuizPercent(100)).toBe('100')
+  })
+
+  it('uses the edited fill-in-the-blank answer after clearing imported alternatives', () => {
+    const importedConfig = { correctAnswer: 'Paris', answers: ['Paris', 'PARIS'] as string[] | undefined }
+    const editedConfig = {
+      ...importedConfig,
+      ...getFillBlankCorrectAnswerPatch('Lyon'),
+    }
+    const definition = {
+      id: 'fill-blank-test',
+      version: 1,
+      title: 'Fill blank test',
+      description: 'A fill-in-the-blank quiz',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [
+        {
+          id: 'page-1',
+          title: 'Quiz page',
+          blocks: [
+            {
+              id: 'capital',
+              type: 'fillBlank',
+              label: 'Capital',
+              config: {
+                question: 'The capital of France is ______.',
+                ...editedConfig,
+                points: 1,
+              },
+            },
+          ],
+        },
+      ],
+    } as any
+
+    const summary = getQuizSummary(definition, { capital: 'Lyon' })
+    const oldAnswerSummary = getQuizSummary(definition, { capital: 'Paris' })
+
+    expect(editedConfig.answers).toBeUndefined()
+    expect(summary.totalScore).toBe(1)
+    expect(summary.items[0].isCorrect).toBe(true)
+    expect(oldAnswerSummary.items[0].isCorrect).toBe(false)
+  })
+})
+
+describe('stored worksheet sessions', () => {
+  it('persists the response creation timestamp with the draft', () => {
+    const session = {
+      responseId: 'response-1',
+      createdAt: '2026-01-01T10:00:00.000Z',
+      pageIndex: 1,
+      responses: { notes: 'Saved answer' },
+      updatedAt: '2026-01-01T10:05:00.000Z',
+    }
+
+    saveSession(session, 'worksheet-1', 1, session.responseId)
+
+    expect(loadSession('worksheet-1', 1, session.responseId)).toEqual(session)
+    expect(getStoredSessionCreatedAt(session, 'fallback')).toBe(session.createdAt)
+  })
+
+  it('uses an older draft update timestamp when no creation timestamp was stored', () => {
+    expect(getStoredSessionCreatedAt({ updatedAt: '2026-01-02T10:05:00.000Z' }, 'fallback')).toBe('2026-01-02T10:05:00.000Z')
+    expect(getStoredSessionCreatedAt(null, 'fallback')).toBe('fallback')
+  })
 })
 
 describe('required page completion', () => {
@@ -377,6 +686,18 @@ describe('required page completion', () => {
     } finally {
       consoleError.mockRestore()
     }
+  })
+
+  it('treats angle-bracket plain text as meaningful but empty rich text as blank', () => {
+    const shortText = { id: 'plain', type: 'shortText', required: true } as any
+    const richText = { id: 'rich', type: 'richText', required: true } as any
+
+    expect(hasMeaningfulResponseValue('<3>')).toBe(true)
+    expect(isRequiredBlockSatisfied(shortText, { plain: '<x>' })).toBe(true)
+    expect(isRequiredBlockSatisfied(richText, { rich: '<p></p>' })).toBe(false)
+    expect(isRequiredBlockSatisfied(richText, { rich: '<p>&nbsp;</p>' })).toBe(false)
+    expect(isRequiredBlockSatisfied(richText, { rich: '<p><strong>Done</strong></p>' })).toBe(true)
+    expect(normalizeRichTextResponse('<p></p>')).toBe('')
   })
 
   it('treats required response blocks as incomplete until they have meaningful values', () => {
@@ -475,6 +796,9 @@ describe('required page completion', () => {
     expect(isRequiredBlockSatisfied(page.blocks[0], responses)).toBe(true)
     expect(isRequiredBlockSatisfied(page.blocks[1], responses)).toBe(true)
     expect(isRequiredBlockSatisfied(page.blocks[2], responses)).toBe(true)
+    expect(isRequiredBlockSatisfied(page.blocks[0], { ...responses, rating: 99 })).toBe(false)
+    expect(isRequiredBlockSatisfied(page.blocks[1], { ...responses, matrix: { Clarity: 2, Accuracy: -1 } })).toBe(false)
+    expect(isRequiredBlockSatisfied(page.blocks[2], { ...responses, radar: { Ease: 5, Impact: Number.POSITIVE_INFINITY } })).toBe(false)
     expect(isRequiredBlockSatisfied(page.blocks[3], responses)).toBe(true)
     expect(isRequiredBlockSatisfied(page.blocks[4], responses)).toBe(true)
     expect(getMissingRequiredBlocks(page, responses)).toHaveLength(0)

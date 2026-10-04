@@ -27,6 +27,8 @@ export interface OnlineResponseRow {
   submitted_at: string | null
 }
 
+const SUBMITTED_RESPONSES_PAGE_SIZE = 1000
+
 function createPublicCode(length = 8) {
   const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
   const bytes = crypto.getRandomValues(new Uint8Array(length))
@@ -106,15 +108,37 @@ export async function loadOwnedWorksheet(worksheetId: string) {
 
 export async function listSubmittedResponseRows(worksheetId: string) {
   const client = requireSupabase()
-  const { data, error } = await client
-    .from('responses')
-    .select('*')
-    .eq('worksheet_id', worksheetId)
-    .eq('status', 'submitted')
-    .order('submitted_at', { ascending: false })
+  const rows: OnlineResponseRow[] = []
 
-  if (error) throw error
-  return data as OnlineResponseRow[]
+  for (let offset = 0; ; offset += SUBMITTED_RESPONSES_PAGE_SIZE) {
+    const { data, error } = await client
+      .from('responses')
+      .select('*')
+      .eq('worksheet_id', worksheetId)
+      .eq('status', 'submitted')
+      .order('submitted_at', { ascending: false })
+      .range(offset, offset + SUBMITTED_RESPONSES_PAGE_SIZE - 1)
+
+    if (error) throw error
+
+    const page = (data || []) as OnlineResponseRow[]
+    rows.push(...page)
+
+    if (page.length < SUBMITTED_RESPONSES_PAGE_SIZE) break
+  }
+
+  return uniqueSubmittedResponseRows(rows)
+}
+
+export function uniqueSubmittedResponseRows(rows: OnlineResponseRow[]) {
+  const rowsByResponseId = new Map<string, OnlineResponseRow>()
+  rows.forEach((row) => {
+    const responseId = row.answers.responseId || row.id
+    if (!rowsByResponseId.has(responseId)) {
+      rowsByResponseId.set(responseId, row)
+    }
+  })
+  return Array.from(rowsByResponseId.values())
 }
 
 export async function loadPublishedWorksheet(publicCode: string) {

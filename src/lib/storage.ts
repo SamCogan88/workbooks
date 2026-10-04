@@ -32,6 +32,10 @@ export function loadSession(worksheetId: string, worksheetVersion: number, respo
   }
 }
 
+export function getStoredSessionCreatedAt(session: Pick<StoredSession, 'createdAt' | 'updatedAt'> | null | undefined, fallback = new Date().toISOString()) {
+  return session?.createdAt || session?.updatedAt || fallback
+}
+
 export function exportResponseJson(response: WorksheetResponse) {
   const json = JSON.stringify(response, null, 2)
   const blob = new Blob([json], { type: 'application/json' })

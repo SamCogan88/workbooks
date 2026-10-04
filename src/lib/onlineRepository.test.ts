@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ensureAnonymousLearnerSession, loadPublishedWorksheet, saveOnlineResponse } from './onlineRepository'
+import { ensureAnonymousLearnerSession, listSubmittedResponseRows, loadPublishedWorksheet, saveOnlineResponse, uniqueSubmittedResponseRows, type OnlineResponseRow } from './onlineRepository'
 import { requireSupabase } from './supabase'
 import type { WorksheetResponse } from './types'
 
@@ -156,5 +156,69 @@ describe('anonymous learner sessions', () => {
     await expect(ensureAnonymousLearnerSession()).resolves.toBe(learnerSession)
     expect(mockClient.auth.signOut).toHaveBeenCalledWith({ scope: 'local' })
     expect(mockClient.auth.signInAnonymously).toHaveBeenCalledOnce()
+  })
+})
+
+function createRow(id: string, responseId = id): OnlineResponseRow {
+  return {
+    id,
+    worksheet_id: 'worksheet-1',
+    participant_id: `participant-${id}`,
+    participant_label: null,
+    answers: {
+      responseSchema: 'interactive-worksheet-response',
+      schemaVersion: 1,
+      worksheetId: 'worksheet-1',
+      worksheetVersion: 1,
+      responseId,
+      createdAt: '2026-10-03T00:00:00.000Z',
+      updatedAt: '2026-10-03T00:00:00.000Z',
+      responses: {},
+    },
+    status: 'submitted',
+    created_at: '2026-10-03T00:00:00.000Z',
+    updated_at: '2026-10-03T00:00:00.000Z',
+    submitted_at: '2026-10-03T00:00:00.000Z',
+  }
+}
+
+describe('online repository submitted responses', () => {
+  it('pages through every submitted response row', async () => {
+    const pages = [
+      Array.from({ length: 1000 }, (_value, index) => createRow(`row-${index}`)),
+      [createRow('row-1000'), createRow('row-1001')],
+    ]
+    const ranges: Array<[number, number]> = []
+    const client = {
+      from: vi.fn(() => {
+        const builder = {
+          select: vi.fn(() => builder),
+          eq: vi.fn(() => builder),
+          order: vi.fn(() => builder),
+          range: vi.fn(async (from: number, to: number) => {
+            ranges.push([from, to])
+            return { data: pages.shift() || [], error: null }
+          }),
+        }
+        return builder
+      }),
+    }
+    vi.mocked(requireSupabase).mockReturnValue(client as any)
+
+    const rows = await listSubmittedResponseRows('worksheet-1')
+
+    expect(rows).toHaveLength(1002)
+    expect(ranges).toEqual([[0, 999], [1000, 1999]])
+  })
+
+  it('keeps the newest row when online answers reuse a response id', () => {
+    const newerDuplicate = createRow('db-newer', 'response-1')
+    const olderDuplicate = createRow('db-older', 'response-1')
+    const unique = createRow('db-unique', 'response-2')
+
+    expect(uniqueSubmittedResponseRows([newerDuplicate, olderDuplicate, unique])).toEqual([
+      newerDuplicate,
+      unique,
+    ])
   })
 })
