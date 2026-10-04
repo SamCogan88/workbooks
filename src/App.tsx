@@ -1666,7 +1666,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     const labels = blocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
     const remainingCount = Math.max(0, blocks.length - labels.length)
     return `Please complete the required items before continuing:
-${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
+${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
   }, [])
 
   const buildNavigationWarning = useCallback(() => {
@@ -1683,7 +1683,6 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }
     return 'Page jumping is turned off for this worksheet. Use Next to move through one page at a time.'
   }, [definition.settings.allowPageJumping, definition.settings.navigation])
-
   useEffect(() => {
     if (!isSessionHydrated || visiblePageIndexes.length === 0 || visiblePageIndexes.includes(pageIndex)) return
     const nearest = visiblePageIndexes.find((index) => index > pageIndex) ?? visiblePageIndexes[visiblePageIndexes.length - 1]
@@ -2763,7 +2762,7 @@ function RichTextSurface({
   ]
 
   const listActions = [
-    { label: 'Bullet list', shortLabel: '��� List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
+    { label: 'Bullet list', shortLabel: '• List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
     { label: 'Numbered list', shortLabel: '1. List', run: () => editor.chain().focus().toggleOrderedList().run(), isActive: editor.isActive('orderedList'), canRun: editor.can().chain().focus().toggleOrderedList().run() },
   ]
 
@@ -3702,8 +3701,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
               <span className="flex-1 text-sm text-slate-700">{option.label}</span>
               <div className="flex gap-1">
-                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
-                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
+                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} aria-label={`Move ${option.label} up`} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↑</button>
+                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} aria-label={`Move ${option.label} down`} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↓</button>
               </div>
             </div>
           ))}
@@ -3887,7 +3886,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
-            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '���'}</span>
+            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '–'}</span>
           </div>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <input
@@ -4897,10 +4896,10 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     pdf.rect(0, 0, pageWidth, 78, 'F')
     pdf.setTextColor(255, 255, 255)
     pdf.setFontSize(22)
-    pdf.text(`${definition.title} ��� Class Evaluation Report`, 52, 40)
+    pdf.text(`${definition.title} · Class Evaluation Report`, 52, 40)
     pdf.setFontSize(10)
     pdf.setTextColor(191, 219, 254)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ���   Evaluations: ${filteredResponseCount}   ���   ${groupingLabelPlural}: ${filteredGroupings.length}   ���   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ·   Evaluations: ${filteredResponseCount}   ·   ${groupingLabelPlural}: ${filteredGroupings.length}   ·   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
 
     y = 102
     pdf.setTextColor(15, 23, 42)

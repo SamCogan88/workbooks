@@ -362,6 +362,16 @@ describe('video embeds', () => {
   })
 })
 
+describe('replacement character regressions', () => {
+  it('labels ranking move buttons with directional names', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'ranking', type: 'ranking', label: 'Rank options', config: { options: ['Option 1', 'Option 2'] } }, {}, update))
+
+    expect(screen.getByRole('button', { name: 'Move Option 1 up' }).textContent).toBe('↑')
+    expect(screen.getByRole('button', { name: 'Move Option 2 down' }).textContent).toBe('↓')
+  })
+})
+
 describe('conditional visibility', () => {
   const definition = {
     id: 'branching', version: 1, title: 'Branching', description: '',
