@@ -36,7 +36,12 @@ function createPublicCode(length = 8) {
 export async function ensureAnonymousLearnerSession() {
   const client = requireSupabase()
   const { data: sessionData } = await client.auth.getSession()
-  if (sessionData.session) return sessionData.session
+  if (sessionData.session?.user.is_anonymous) return sessionData.session
+
+  if (sessionData.session) {
+    const { error } = await client.auth.signOut({ scope: 'local' })
+    if (error) throw error
+  }
 
   const { data, error } = await client.auth.signInAnonymously()
   if (error) throw error

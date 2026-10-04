@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadPublishedWorksheet, saveOnlineResponse } from './onlineRepository'
+import { ensureAnonymousLearnerSession, loadPublishedWorksheet, saveOnlineResponse } from './onlineRepository'
 import { requireSupabase } from './supabase'
 import type { WorksheetResponse } from './types'
 
@@ -10,6 +10,7 @@ vi.mock('./supabase', () => ({
 const mockClient = {
   auth: {
     getSession: vi.fn(),
+    signOut: vi.fn(),
     signInAnonymously: vi.fn(),
   },
   from: vi.fn(),
@@ -66,7 +67,7 @@ describe('online worksheet repository', () => {
 
     vi.mocked(requireSupabase).mockReturnValue({
       auth: {
-        getSession: vi.fn().mockResolvedValue({ data: { session: { user: { id: 'learner-id' } } } }),
+        getSession: vi.fn().mockResolvedValue({ data: { session: { user: { id: 'learner-id', is_anonymous: true } } } }),
       },
       rpc,
       from,
@@ -85,8 +86,9 @@ describe('online response persistence', () => {
     vi.clearAllMocks()
     vi.mocked(requireSupabase).mockReturnValue(mockClient as any)
     mockClient.auth.getSession.mockResolvedValue({
-      data: { session: { user: { id: 'learner-1' } } },
+      data: { session: { user: { id: 'learner-1', is_anonymous: true } } },
     })
+    mockClient.auth.signOut.mockResolvedValue({ error: null })
   })
 
   it('does not upsert over an already-submitted response', async () => {
@@ -125,5 +127,34 @@ describe('online response persistence', () => {
       participant_label: 'Group 1',
       status: 'draft',
     }), { onConflict: 'worksheet_id,participant_id' })
+  })
+})
+
+describe('anonymous learner sessions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireSupabase).mockReturnValue(mockClient as any)
+    mockClient.auth.signOut.mockResolvedValue({ error: null })
+  })
+
+  it('reuses an existing anonymous learner session', async () => {
+    const session = { user: { id: 'learner-1', is_anonymous: true } }
+    mockClient.auth.getSession.mockResolvedValue({ data: { session } })
+
+    await expect(ensureAnonymousLearnerSession()).resolves.toBe(session)
+    expect(mockClient.auth.signOut).not.toHaveBeenCalled()
+    expect(mockClient.auth.signInAnonymously).not.toHaveBeenCalled()
+  })
+
+  it('replaces a signed-in teacher session before joining as a learner', async () => {
+    const learnerSession = { user: { id: 'learner-2', is_anonymous: true } }
+    mockClient.auth.getSession.mockResolvedValue({
+      data: { session: { user: { id: 'teacher-1', is_anonymous: false } } },
+    })
+    mockClient.auth.signInAnonymously.mockResolvedValue({ data: { session: learnerSession }, error: null })
+
+    await expect(ensureAnonymousLearnerSession()).resolves.toBe(learnerSession)
+    expect(mockClient.auth.signOut).toHaveBeenCalledWith({ scope: 'local' })
+    expect(mockClient.auth.signInAnonymously).toHaveBeenCalledOnce()
   })
 })
