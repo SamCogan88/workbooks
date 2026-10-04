@@ -173,6 +173,28 @@ describe('worksheet engine core logic', () => {
     expect(responseB.responseId).toBe('response-2')
   })
 
+  it('falls back to useful built-in response labels when no label block is configured', () => {
+    const definition = {
+      ...synthesisDefinition,
+      id: 'ungrouped-worksheet',
+      synthesis: undefined,
+    }
+
+    expect(getResponseLabel(createResponse('response-1', {}, { group: 'Team Mars' }) as any, definition as any)).toBe('Team Mars')
+    expect(getResponseLabel(createResponse('response-2', {}, { subject: 'Ada Lovelace' }) as any, definition as any)).toBe('Ada Lovelace')
+  })
+
+  it('uses the unique suffix of generated response ids for anonymous labels', () => {
+    const definition = {
+      ...synthesisDefinition,
+      id: 'ungrouped-worksheet',
+      synthesis: undefined,
+    }
+
+    expect(getResponseLabel(createResponse('response-1790990000000-a1b2c3', {}) as any, definition as any)).toBe('Response a1b2c3')
+    expect(getResponseLabel(createResponse('custom-response-id', {}) as any, definition as any)).toBe('Response custom-r')
+  })
+
   it('keeps AI Tool Lab compatibility when synthesis settings are absent', () => {
     const definition = {
       ...aiToolLabDefinition,

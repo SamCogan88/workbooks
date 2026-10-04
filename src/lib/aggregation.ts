@@ -108,7 +108,12 @@ export function getResponseLabel(response: WorksheetResponse, definition: Worksh
   const configuredLabel = getConfiguredGroupingValue(response, config.responseLabelBlockId)
   if (configuredLabel) return configuredLabel
   if (typeof response.group === 'string' && response.group.trim()) return response.group.trim()
-  return typeof response.responseId === 'string' && response.responseId.trim() ? response.responseId.slice(0, 8) : 'Anonymous response'
+  if (typeof response.subject === 'string' && response.subject.trim()) return response.subject.trim()
+  if (typeof response.responseId !== 'string' || !response.responseId.trim()) return 'Anonymous response'
+
+  const generatedResponseMatch = response.responseId.match(/^response-\d+-(.+)$/)
+  const fallbackId = generatedResponseMatch?.[1] || response.responseId.slice(0, 8)
+  return `Response ${fallbackId}`
 }
 
 export function groupResponsesByKey(definition: WorksheetDefinition, responses: WorksheetResponse[]) {
