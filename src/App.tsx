@@ -75,6 +75,9 @@ import {
   getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
   getQuizSummary,
+  reconcileCategorizeResponse,
+  reconcileRankingResponse,
+  reconcileWorksheetResponses,
   getStructuredDefaultResponse,
   getVisibleBlocks,
   getVisiblePages,
@@ -1639,8 +1642,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     updatedAt: new Date().toISOString(),
     group: String(responses['group-name'] || ''),
     subject: String(responses['tool-name'] || responses['subject-name'] || ''),
-    responses,
-  }), [definition.id, definition.version, responseCreatedAt, responseId, responses])
+    responses: reconcileWorksheetResponses(definition, responses),
+  }), [definition, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
     if (!onlineWorksheetId || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
@@ -3417,9 +3420,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'ranking': {
-      const currentOrder = Array.isArray(responses[block.id]) ? responses[block.id] : (block.config?.options || [])
+      const currentOrder = reconcileRankingResponse(block.config?.options, responses[block.id])
+      const storedOrder: unknown[] = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      const currentIds = currentOrder.map((item) => item.id)
+      const needsSave = currentIds.length > 0 && (storedOrder.length !== currentIds.length || storedOrder.some((entry, index) => entry !== currentIds[index]))
       const moveOption = (index: number, direction: -1 | 1) => {
-        const next = [...currentOrder]
+        const next = [...currentIds]
         const targetIndex = index + direction
         if (targetIndex < 0 || targetIndex >= next.length) return
         const [moved] = next.splice(index, 1)
@@ -3429,23 +3435,25 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       return (
         <div className="space-y-2">
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
-          {currentOrder.map((option: string, index: number) => (
-            <div key={`${block.id}-${option}-${index}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          {currentOrder.map((option, index: number) => (
+            <div key={`${block.id}-${option.id}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
-              <span className="flex-1 text-sm text-slate-700">{option}</span>
+              <span className="flex-1 text-sm text-slate-700">{option.label}</span>
               <div className="flex gap-1">
                 <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
                 <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
               </div>
             </div>
           ))}
+          {needsSave && <button type="button" onClick={() => updateResponse(block.id, currentIds)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Keep this order</button>}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Rank the items or choose “Keep this order” to continue.</p>}
         </div>
       )
     }
     case 'categorize': {
       const items = getLabeledConfigItems(block.config?.items, 'item')
       const categories = Array.isArray(block.config?.categories) ? block.config.categories.map((category: any) => typeof category === 'object' ? String(category.label || '') : String(category)) : []
-      const assignments = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
+      const assignments = reconcileCategorizeResponse(block, responses[block.id])
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError}>
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
@@ -3454,7 +3462,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             {items.map((item) => (
               <label key={item.id} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
                 <span className="text-sm font-medium text-slate-700">{item.label}</span>
-                <select value={assignments[item.id] || assignments[item.label] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item.id]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <select value={assignments[item.id] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item.id]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
                   <option value="">Choose a category</option>
                   {categories.map((category: string) => <option key={category} value={category}>{category}</option>)}
                 </select>
@@ -3791,7 +3799,10 @@ function formatBlockValue(block: WorksheetBlock, value: any) {
   if (block.type === 'hotspot') return value.map((point: any) => `(${point.x}%, ${point.y}%)`).join(', ')
   if (block.type === 'categorize') {
     const itemLabels = Object.fromEntries(getLabeledConfigItems(block.config?.items, 'item').map((item) => [item.id, item.label]))
-    return Object.entries(value).map(([item, category]) => `${itemLabels[item] || item}: ${category}`).join('; ')
+    return Object.entries(reconcileCategorizeResponse(block, value)).filter(([, category]) => String(category).trim()).map(([item, category]) => `${itemLabels[item] || item}: ${category}`).join('; ')
+  }
+  if (block.type === 'ranking') {
+    return reconcileRankingResponse(block.config?.options, value).map((item) => item.label).join(', ')
   }
   if (block.type === 'matrix') {
     const rowLabels = Object.fromEntries(getLabeledConfigItems(block.config?.rows, 'row').map((row) => [row.id, row.label]))
@@ -4105,13 +4116,13 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (block.type === 'ranking') {
-      const items = Array.isArray(value) ? value : []
+      const items = reconcileRankingResponse(block.config?.options, value)
       return (
         <ol className="mt-2 space-y-2 text-sm text-slate-700">
           {items.map((item, index) => (
-            <li key={`${block.id}-${String(item)}-${index}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <li key={`${block.id}-${item.id}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
-              <span>{String(item)}</span>
+              <span>{item.label}</span>
             </li>
           ))}
         </ol>

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -211,7 +211,7 @@ describe('visual thinking blocks', () => {
     const update = vi.fn()
     render(renderBlock({ id: 'cat', type: 'categorize', label: 'Sort', config: { items: [{ id: 'item-a', label: 'Repeat' }, { id: 'item-b', label: 'Repeat' }], categories: ['One'] } }, {}, update))
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'One' } })
-    expect(update).toHaveBeenLastCalledWith('cat', { 'item-b': 'One' })
+    expect(update).toHaveBeenLastCalledWith('cat', { 'item-a': '', 'item-b': 'One' })
 
     update.mockClear()
     cleanup()
@@ -224,6 +224,26 @@ describe('visual thinking blocks', () => {
     render(renderBlock({ id: 'radar', type: 'radar', label: 'Radar', config: { dimensions: [{ id: 'dim-a', label: 'Repeat' }, { id: 'dim-b', label: 'Repeat' }] } }, {}, update))
     fireEvent.change(screen.getAllByRole('slider')[1], { target: { value: '8' } })
     expect(update).toHaveBeenLastCalledWith('radar', { 'dim-b': 8 })
+  })
+
+  it('reconciles ranking responses against the configured options', () => {
+    const options = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }]
+
+    expect(reconcileRankingResponse(options, ['B', 'removed', 'a']).map((item) => item.id)).toEqual(['b', 'a', 'c'])
+    expect(isRequiredBlockSatisfied({ id: 'rank', type: 'ranking', required: true, config: { options } } as any, {})).toBe(false)
+    expect(isRequiredBlockSatisfied({ id: 'rank', type: 'ranking', required: true, config: { options } } as any, { rank: ['b'] })).toBe(true)
+
+    const update = vi.fn()
+    render(renderBlock({ id: 'rank', type: 'ranking', label: 'Rank', required: true, config: { options } }, {}, update, { showRequiredError: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep this order' }))
+    expect(update).toHaveBeenLastCalledWith('rank', ['a', 'b', 'c'])
+    expect(screen.getByText('Rank the items or choose “Keep this order” to continue.')).toBeTruthy()
+  })
+
+  it('drops stale categorize assignments from saved and exported responses', () => {
+    const block = { id: 'cat', type: 'categorize', config: { items: [{ id: 'keep', label: 'Keep' }, { id: 'new', label: 'New' }], categories: ['One'] } } as any
+    expect(reconcileCategorizeResponse(block, { old: 'Two', Keep: 'One', new: 'Removed' })).toEqual({ keep: 'One', new: '' })
+    expect(reconcileWorksheetResponses({ pages: [{ blocks: [block] }] } as any, { cat: { old: 'One', keep: 'One' } })).toEqual({ cat: { keep: 'One', new: '' } })
   })
 
   it('falls back to stable decision matrix ids when imported cells lack ids', () => {

@@ -6,6 +6,7 @@ const ID_PREFIX_BY_BLOCK_TYPE: Record<string, Record<string, string>> = {
   multipleChoice: { options: 'option' },
   quiz: { options: 'option' },
   checklist: { options: 'option' },
+  ranking: { options: 'option' },
   confidence: { options: 'option' },
   verdict: { options: 'option' },
   categorize: { items: 'item' },
@@ -63,6 +64,49 @@ export function getLabeledConfigItems(items: unknown, prefix: string): LabeledCo
     used.add(id)
     return { id, label }
   }).filter((item) => item.label.trim().length > 0)
+}
+
+export function reconcileRankingResponse(options: unknown, value: unknown): LabeledConfigItem[] {
+  const configured = getLabeledConfigItems(options, 'option')
+  if (!configured.length) return []
+  const remaining = new Map(configured.map((item) => [item.id, item]))
+  const ordered: LabeledConfigItem[] = []
+  const storedValues = Array.isArray(value) ? value : []
+
+  storedValues.forEach((entry) => {
+    const item = configured.find((option) => remaining.has(option.id) && (entry === option.id || entry === option.label))
+    if (!item) return
+    ordered.push(item)
+    remaining.delete(item.id)
+  })
+
+  return [...ordered, ...remaining.values()]
+}
+
+export function reconcileCategorizeResponse(block: WorksheetBlock, value: unknown) {
+  const assignments = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const categories = new Set((Array.isArray(block.config?.categories) ? block.config.categories : [])
+    .map((category: unknown) => typeof category === 'object' && category !== null ? String((category as { label?: unknown }).label ?? '') : String(category ?? ''))
+    .filter((category) => category.trim().length > 0))
+
+  return Object.fromEntries(getLabeledConfigItems(block.config?.items, 'item').map((item) => {
+    const assigned = assignments[item.id] ?? assignments[item.label] ?? ''
+    const category = String(assigned)
+    return [item.id, categories.has(category) ? category : '']
+  }))
+}
+
+export function reconcileWorksheetResponses(definition: WorksheetDefinition, responses: Record<string, unknown>) {
+  const next = { ...responses }
+  definition.pages.flatMap((page) => page.blocks).forEach((block) => {
+    if (!(block.id in next)) return
+    if (block.type === 'ranking') {
+      next[block.id] = reconcileRankingResponse(block.config?.options, next[block.id]).map((item) => item.id)
+    } else if (block.type === 'categorize') {
+      next[block.id] = reconcileCategorizeResponse(block, next[block.id])
+    }
+  })
+  return next
 }
 
 export function normalizeWorksheetDefinitionStableIds(definition: WorksheetDefinition): WorksheetDefinition {
@@ -185,8 +229,10 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       return typeof value === 'string' && value.trim().length > 0
     case 'checklist':
       return Array.isArray(value) && value.some((item) => typeof item === 'string' ? item.trim().length > 0 : hasMeaningfulResponseValue(item))
-    case 'ranking':
-      return Array.isArray(value) && value.length > 0
+    case 'ranking': {
+      const options = getLabeledConfigItems(block.config?.options, 'option')
+      return options.length > 0 && Array.isArray(value) && reconcileRankingResponse(options, value).length === options.length
+    }
     case 'wordCloud':
     case 'hotspot':
       return Array.isArray(value) && value.some(hasMeaningfulResponseValue)
@@ -197,7 +243,8 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
     case 'categorize': {
       if (!value || typeof value !== 'object') return false
       const items = getLabeledConfigItems(block.config?.items, 'item')
-      return items.length > 0 && items.every((item) => String((value as Record<string, unknown>)[item.id] ?? (value as Record<string, unknown>)[item.label] ?? '').trim().length > 0)
+      const reconciled = reconcileCategorizeResponse(block, value)
+      return items.length > 0 && items.every((item) => String(reconciled[item.id] ?? '').trim().length > 0)
     }
     case 'rating':
       return Number.isFinite(Number(value))
