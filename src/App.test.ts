@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -421,6 +421,11 @@ describe('worksheet quiz summary', () => {
     expect(summary.totalScore).toBe(4)
     expect(summary.percent).toBe(100)
     expect(summary.items[0].isCorrect).toBe(true)
+  })
+
+  it('does not round partial quiz scores up to 100 percent', () => {
+    expect(formatQuizPercent(99.5)).toBe('99')
+    expect(formatQuizPercent(100)).toBe('100')
   })
 
   it('uses the edited fill-in-the-blank answer after clearing imported alternatives', () => {

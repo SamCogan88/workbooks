@@ -384,6 +384,10 @@ export function getQuizSummary(definition: WorksheetDefinition, responses: Recor
   return { totalQuestions: items.length, totalScore, totalMax, percent: totalMax === 0 ? 0 : totalScore / totalMax * 100, items }
 }
 
+export function formatQuizPercent(percent: number) {
+  return Number.isFinite(percent) ? Math.floor(percent).toFixed(0) : '0'
+}
+
 export function getDefaultPageTimer() {
   return { enabled: false, durationSeconds: 300, behaviour: 'advisory' as const }
 }

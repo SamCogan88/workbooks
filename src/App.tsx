@@ -68,6 +68,7 @@ import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
   getFillBlankCorrectAnswerPatch,
+  formatQuizPercent,
   getBoardPresetColumns,
   canNavigateToVisiblePage,
   getImageDisplayConfig,
@@ -2099,7 +2100,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-emerald-700">Quiz score</p>
               <p className="mt-2 text-2xl font-bold text-emerald-900">{quizSummary.totalScore}/{quizSummary.totalMax}</p>
-              <p className="text-sm text-emerald-700">{quizSummary.percent.toFixed(0)}% correct</p>
+              <p className="text-sm text-emerald-700">{formatQuizPercent(quizSummary.percent)}% correct</p>
             </div>
           )}
 
