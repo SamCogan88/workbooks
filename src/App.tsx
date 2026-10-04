@@ -71,6 +71,7 @@ import {
   formatQuizPercent,
   getBoardPresetColumns,
   canNavigateToVisiblePage,
+  getConditionOptions,
   getImageDisplayConfig,
   getLabeledConfigItems,
   getMatchingPairKey,
@@ -84,6 +85,7 @@ import {
   getVisibleBlocks,
   getVisiblePages,
   hasMeaningfulResponseValue,
+  isConditionSourceBlock,
   isResponseProducingBlock,
   normalizeWorksheetDefinitionStableIds,
   stripHtml,
@@ -1487,7 +1489,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const currentVisiblePageIndex = visiblePageIndexes.indexOf(pageIndex)
   const isRestrictedNavigation = definition.settings.navigation === 'sequential' || !definition.settings.allowPageJumping
   const visibleBlocks = currentPage
-    ? getVisibleBlocks(currentPage, responses).filter((block) => previewMode || getBlockAudience(block) === 'student')
+    ? getVisibleBlocks(currentPage, responses, definition).filter((block) => previewMode || getBlockAudience(block) === 'student')
     : []
   const currentTimer = currentPage?.timer ?? null
   const [pageRemainingSeconds, setPageRemainingSeconds] = useState<number | null>(null)
@@ -1502,8 +1504,8 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
   }, [definition.settings.completionMessage, onlineWorksheetId])
   const missingRequiredBlocks = useMemo(
-    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
-    [currentPage, responses],
+    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses, definition) : []),
+    [currentPage, definition, responses],
   )
   const missingRequiredBlockLocations = useMemo(
     () => getMissingRequiredBlockLocations(definition, responses),
@@ -4995,12 +4997,6 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   return mode === 'student' ? renderStudentView() : renderTeacherView()
 }
 
-function getConditionOptions(block: WorksheetBlock) {
-  if (block.type === 'trueFalse') return [{ label: 'True', value: true }, { label: 'False', value: false }]
-  const configured = Array.isArray(block.config?.options) ? block.config.options : []
-  return configured.map((option: unknown) => ({ label: String(option), value: String(option) }))
-}
-
 function ConditionalDisplayEditor({
   condition,
   candidates,
@@ -5054,7 +5050,7 @@ function ConditionalDisplayEditor({
               }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 {expectedOptions.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
               </select>
-            ) : <input value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
+            ) : <input type={source?.type === 'numeric' ? 'number' : 'text'} value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: source?.type === 'numeric' && event.target.value !== '' ? Number(event.target.value) : event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
           </label>
           <button type="button" onClick={() => onChange(undefined)} className="justify-self-start text-xs font-medium text-red-700">Remove condition</button>
         </div>
@@ -5164,9 +5160,9 @@ function BuilderPage({
   const priorPageResponseBlocks = definition.pages
     .slice(0, Math.max(0, selectedPageIndex))
     .flatMap((page) => page.blocks)
-    .filter(isResponseProducingBlock)
+    .filter(isConditionSourceBlock)
   const priorBlockResponseBlocks = selectedPage && selectedBlock
-    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isResponseProducingBlock)]
+    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isConditionSourceBlock)]
     : priorPageResponseBlocks
 
   const addPage = () => {

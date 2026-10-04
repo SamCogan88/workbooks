@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -116,6 +116,26 @@ describe('conditional visibility', () => {
     expect(isConditionMet({ blockId: 'choice', operator: 'notEquals', value: 'Moodle' }, { choice: 'Teams' })).toBe(true)
     expect(isConditionMet({ blockId: 'choice', operator: 'contains', value: 'Teams' }, { choice: ['Teams', 'Moodle'] })).toBe(true)
     expect(isConditionMet({ blockId: 'choice', operator: 'notContains', value: 'Canvas' }, { choice: ['Teams'] })).toBe(true)
+  })
+
+  it('matches numeric and nested structured response values', () => {
+    expect(isConditionMet({ blockId: 'score', operator: 'equals', value: 10 }, { score: 10 })).toBe(true)
+    expect(isConditionMet({ blockId: 'score', operator: 'equals', value: '10' }, { score: 10 })).toBe(true)
+    expect(isConditionMet({ blockId: 'matrix', operator: 'contains', value: 4 }, { matrix: { clarity: 3, accuracy: 4 } })).toBe(true)
+    expect(isConditionMet({ blockId: 'board', operator: 'contains', value: 'risk' }, { board: { risks: [{ text: 'Schedule risk' }] } })).toBe(true)
+  })
+
+  it('maps configured condition labels to stable option ids', () => {
+    const source = { id: 'lms', type: 'singleSelect', config: { options: [{ id: 'teams-id', label: 'Teams' }] } } as any
+    expect(getConditionOptions(source)).toEqual([{ label: 'Teams', value: 'teams-id' }])
+    expect(isConditionMet({ blockId: 'lms', operator: 'equals', value: 'Teams' }, { lms: 'teams-id' }, source)).toBe(true)
+    const stableDefinition = { ...definition, pages: [{ id: 'choice', title: 'Choose', blocks: [source] }, definition.pages[1]] } as any
+    expect(getVisiblePages(stableDefinition, { lms: 'teams-id' }).map((page) => page.id)).toEqual(['choice', 'teams'])
+  })
+
+  it('filters unsupported hotspot blocks from conditional sources', () => {
+    expect(isConditionSourceBlock({ id: 'spot', type: 'hotspot' } as any)).toBe(false)
+    expect(isConditionSourceBlock({ id: 'rating', type: 'rating' } as any)).toBe(true)
   })
 
   it('ignores hidden required blocks and skips hidden pages in navigation and progress inputs', () => {

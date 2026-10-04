@@ -16,6 +16,7 @@ const ID_PREFIX_BY_BLOCK_TYPE: Record<string, Record<string, string>> = {
 }
 
 export type LabeledConfigItem = { id: string; label: string }
+export type ConditionOption = { label: string; value: string | number | boolean }
 
 export function isResponseProducingBlock(block: WorksheetBlock) {
   if (NON_RESPONSE_BLOCK_TYPES.has(block.type)) return false
@@ -36,8 +37,15 @@ export function hasMeaningfulResponseValue(value: unknown): boolean {
   return false
 }
 
-function comparableValue(value: unknown) {
-  return typeof value === 'string' ? value.trim().toLocaleLowerCase() : value
+function comparableValue(value: string | number | boolean) {
+  return String(value).trim().toLocaleLowerCase()
+}
+
+function conditionPrimitives(value: unknown): Array<string | number | boolean> {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return [value]
+  if (Array.isArray(value)) return value.flatMap(conditionPrimitives)
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).flatMap(conditionPrimitives)
+  return []
 }
 
 export function getMatchingPairKey(pair: { id?: unknown; prompt?: unknown }, index: number) {
@@ -64,6 +72,48 @@ export function getLabeledConfigItems(items: unknown, prefix: string): LabeledCo
     used.add(id)
     return { id, label }
   }).filter((item) => item.label.trim().length > 0)
+}
+
+function numericConditionOptions(min: unknown, max: unknown, fallbackMin: number, fallbackMax: number): ConditionOption[] {
+  const start = Number(min ?? fallbackMin)
+  const end = Number(max ?? fallbackMax)
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start > end || end - start > 100) return []
+  return Array.from({ length: end - start + 1 }, (_, index) => {
+    const value = start + index
+    return { label: String(value), value }
+  })
+}
+
+export function getConditionOptions(block: WorksheetBlock): ConditionOption[] {
+  if (block.type === 'trueFalse') return [{ label: 'True', value: true }, { label: 'False', value: false }]
+  if (block.type === 'rating') return numericConditionOptions(block.config?.min, block.config?.max, 0, 10)
+  if (block.type === 'matrix' || block.type === 'decisionMatrix') return numericConditionOptions(block.config?.min, block.config?.max, 1, 5)
+  if (block.type === 'radar') return numericConditionOptions(block.config?.min, block.config?.max, 1, 10)
+  if (block.type === 'continuum') return numericConditionOptions(0, 100, 0, 100)
+  if (block.type === 'categorize') return getLabeledConfigItems(block.config?.categories, 'category').map((item) => ({ label: item.label, value: item.label }))
+  if (block.type === 'matching') {
+    const configured = Array.isArray(block.config?.options) ? block.config.options : []
+    return configured.map((option: unknown) => ({ label: String(option), value: String(option) }))
+  }
+  const configured = getLabeledConfigItems(block.config?.options, 'option')
+  return configured.map((option) => ({ label: option.label, value: option.id }))
+}
+
+export function isConditionSourceBlock(block: WorksheetBlock) {
+  if (!isResponseProducingBlock(block)) return false
+  return block.type !== 'hotspot'
+}
+
+function getConditionExpectedValues(condition: WorksheetCondition, sourceBlock?: WorksheetBlock) {
+  const expected = conditionPrimitives(condition.value)
+  if (!sourceBlock) return expected
+  const normalizedConditionValue = comparableValue(condition.value)
+  getConditionOptions(sourceBlock).forEach((option) => {
+    if (comparableValue(option.value) === normalizedConditionValue || comparableValue(option.label) === normalizedConditionValue) {
+      expected.push(option.value, option.label)
+    }
+  })
+  return expected
 }
 
 export function reconcileRankingResponse(options: unknown, value: unknown): LabeledConfigItem[] {
@@ -128,18 +178,17 @@ export function normalizeWorksheetDefinitionStableIds(definition: WorksheetDefin
   }
 }
 
-export function isConditionMet(condition: WorksheetCondition | undefined, responses: Record<string, unknown>) {
+export function isConditionMet(condition: WorksheetCondition | undefined, responses: Record<string, unknown>, sourceBlock?: WorksheetBlock) {
   if (!condition) return true
   const response = responses[condition.blockId]
   if (!hasMeaningfulResponseValue(response)) return false
-  const expected = comparableValue(condition.value)
-  const values = Array.isArray(response) ? response.map(comparableValue) : [comparableValue(response)]
-  const equals = values.some((value) => value === expected)
-  const contains = Array.isArray(response)
-    ? equals
-    : typeof values[0] === 'string' && typeof expected === 'string'
-      ? values[0].includes(expected)
-      : equals
+  const expectedValues = getConditionExpectedValues(condition, sourceBlock)
+  const values = conditionPrimitives(response)
+  const equals = values.some((value) => expectedValues.some((expected) => comparableValue(value) === comparableValue(expected)))
+  const contains = values.some((value) => expectedValues.some((expected) => {
+    if (comparableValue(value) === comparableValue(expected)) return true
+    return typeof value === 'string' && typeof expected === 'string' && comparableValue(value).includes(comparableValue(expected))
+  }))
 
   switch (condition.operator) {
     case 'equals': return equals
@@ -150,12 +199,17 @@ export function isConditionMet(condition: WorksheetCondition | undefined, respon
   }
 }
 
-export function getVisibleBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
-  return page.blocks.filter((block) => isConditionMet(block.condition, responses))
+function findConditionSourceBlock(definition: WorksheetDefinition | undefined, condition: WorksheetCondition | undefined) {
+  if (!definition || !condition) return undefined
+  return definition.pages.flatMap((page) => page.blocks).find((block) => block.id === condition.blockId)
+}
+
+export function getVisibleBlocks(page: WorksheetPage, responses: Record<string, unknown>, definition?: WorksheetDefinition) {
+  return page.blocks.filter((block) => isConditionMet(block.condition, responses, findConditionSourceBlock(definition, block.condition)))
 }
 
 export function getVisiblePages(definition: WorksheetDefinition, responses: Record<string, unknown>) {
-  return definition.pages.filter((page) => isConditionMet(page.condition, responses))
+  return definition.pages.filter((page) => isConditionMet(page.condition, responses, findConditionSourceBlock(definition, page.condition)))
 }
 
 export function getAdjacentVisiblePageIndex(definition: WorksheetDefinition, responses: Record<string, unknown>, currentIndex: number, direction: 1 | -1) {
@@ -308,8 +362,8 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
   }
 }
 
-export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
-  return getVisibleBlocks(page, responses).filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
+export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, unknown>, definition?: WorksheetDefinition) {
+  return getVisibleBlocks(page, responses, definition).filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
 }
 
 export function getMissingRequiredBlockLocations(definition: WorksheetDefinition, responses: Record<string, unknown>) {
