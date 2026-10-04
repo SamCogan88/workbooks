@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { QuadrantMiniChart, renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getWorksheetResponseImportError, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('rejects imported responses for a different worksheet version', () => {
@@ -183,6 +183,13 @@ describe('conditional visibility', () => {
     expect(canNavigateToVisiblePage({ navigation: 'free', allowPageJumping: true }, 0, 2)).toBe(true)
     expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 2, 0)).toBe(true)
     expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 0, 1)).toBe(true)
+  })
+
+  it('returns only visible pages and blocks for exports', () => {
+    const sections = getVisiblePagesWithBlocks(definition, { lms: 'Teams' })
+
+    expect(sections.map(({ page }) => page.id)).toEqual(['choice', 'teams', 'finish'])
+    expect(sections.find(({ page }) => page.id === 'teams')?.blocks.map((block) => block.id)).toEqual(['teams-info'])
   })
 
   it('preserves conditions through JSON serialization', () => {

@@ -212,6 +212,13 @@ export function getVisiblePages(definition: WorksheetDefinition, responses: Reco
   return definition.pages.filter((page) => isConditionMet(page.condition, responses, findConditionSourceBlock(definition, page.condition)))
 }
 
+export function getVisiblePagesWithBlocks(definition: WorksheetDefinition, responses: Record<string, unknown>) {
+  return getVisiblePages(definition, responses).map((page) => ({
+    page,
+    blocks: getVisibleBlocks(page, responses, definition),
+  }))
+}
+
 export function getAdjacentVisiblePageIndex(definition: WorksheetDefinition, responses: Record<string, unknown>, currentIndex: number, direction: 1 | -1) {
   const visibleIndexes = getVisiblePages(definition, responses).map((page) => definition.pages.indexOf(page))
   const position = visibleIndexes.indexOf(currentIndex)

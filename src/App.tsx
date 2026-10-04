@@ -87,6 +87,7 @@ import {
   getStructuredDefaultResponse,
   getVisibleBlocks,
   getVisiblePages,
+  getVisiblePagesWithBlocks,
   hasMeaningfulResponseValue,
   isConditionSourceBlock,
   isResponseProducingBlock,
@@ -1795,7 +1796,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
     const generatedAt = new Date().toLocaleString()
-    const responseBlocks = getResponseProducingBlocks(definition).filter((block) => getBlockAudience(block) === 'student')
+    const visiblePdfPages = getVisiblePagesWithBlocks(definition, document.responses)
+      .map(({ page, blocks }) => ({
+        page,
+        blocks: blocks.filter((block) => getBlockAudience(block) === 'student'),
+      }))
+    const responseBlocks = visiblePdfPages.flatMap(({ blocks }) => blocks.filter(isResponseProducingBlock))
     const answeredCount = responseBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id])).length
     let y = 42
 
@@ -1879,10 +1885,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     })
     y += 68
 
-    definition.pages.forEach((page) => {
-      const visibleBlocks = page.blocks.filter((block) => getBlockAudience(block) === 'student' && isResponseProducingBlock(block))
-      const answeredBlocks = visibleBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
-      const contextText = getPageContextText(page)
+    visiblePdfPages.forEach(({ page, blocks }) => {
+      const answeredBlocks = blocks
+        .filter(isResponseProducingBlock)
+        .filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
+      const contextText = getPageContextText({ ...page, blocks })
 
       if (answeredBlocks.length === 0 && !contextText) return
 
