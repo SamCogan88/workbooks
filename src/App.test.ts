@@ -1,11 +1,78 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { createElement } from 'react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { createElement, Fragment } from 'react'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import { QuadrantMiniChart, renderBlock } from './App'
+import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
+import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+
+vi.mock('./lib/onlineRepository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
+  return {
+    ...actual,
+    loadPublishedWorksheet: vi.fn(),
+  }
+})
+
+const mockedLoadPublishedWorksheet = vi.mocked(loadPublishedWorksheet)
+
+function workbook(publicCode: string, title: string) {
+  return {
+    id: `worksheet-${publicCode.toLowerCase()}`,
+    public_code: publicCode,
+    definition: {
+      id: `definition-${publicCode.toLowerCase()}`,
+      version: 1,
+      title,
+      description: '',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: false,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [{ id: 'page-1', title: 'Page 1', blocks: [] }],
+    },
+  } as any
+}
+
+function JoinRouteHarness() {
+  const navigate = useNavigate()
+  return createElement(
+    Fragment,
+    null,
+    createElement('button', { type: 'button', onClick: () => navigate('/join/CODE2') }, 'Open CODE2'),
+    createElement(Routes, null, createElement(Route, { path: '/join/:publicCode', element: createElement(OnlineJoinPageRoute) })),
+  )
+}
+
+describe('online workbook join routing', () => {
+  it('clears the previous workbook when the join code changes in the same tab', async () => {
+    mockedLoadPublishedWorksheet.mockImplementation((publicCode: string) => {
+      if (publicCode === 'CODE1') return Promise.resolve(workbook('CODE1', 'First workbook'))
+      return Promise.reject(new Error('not found'))
+    })
+
+    render(createElement(
+      MemoryRouter,
+      { initialEntries: ['/join/CODE1'] },
+      createElement(JoinRouteHarness),
+    ))
+
+    expect(await screen.findByRole('heading', { name: 'First workbook' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open CODE2' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('We could not find a published workbook with that code.')
+    expect(screen.queryByRole('heading', { name: 'First workbook' })).toBeNull()
+
+    await waitFor(() => expect(mockedLoadPublishedWorksheet).toHaveBeenLastCalledWith('CODE2'))
+  })
+})
 
 describe('worksheet block defaults', () => {
   it('rejects imported responses for a different worksheet version', () => {

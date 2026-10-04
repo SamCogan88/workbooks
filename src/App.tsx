@@ -373,8 +373,8 @@ function App() {
           <Route path="/account" element={<TeacherAccountPage />} />
           <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setActiveDefinition} />} />
           <Route path="/teacher/workbooks/:workbookId/report" element={<OnlineTeacherReportPage />} />
-          <Route path="/join" element={<OnlineJoinPage />} />
-          <Route path="/join/:publicCode" element={<OnlineJoinPage />} />
+          <Route path="/join" element={<OnlineJoinPageRoute />} />
+          <Route path="/join/:publicCode" element={<OnlineJoinPageRoute />} />
           <Route
             path="/builder"
             element={(
@@ -391,6 +391,11 @@ function App() {
       </TeacherAuthProvider>
     </HashRouter>
   )
+}
+
+export function OnlineJoinPageRoute() {
+  const { publicCode = '' } = useParams()
+  return <OnlineJoinPage key={publicCode} />
 }
 
 function OnlineJoinPage() {
