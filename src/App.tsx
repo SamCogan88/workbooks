@@ -62,7 +62,7 @@ import {
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
 import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
-import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
   getDefaultBlockConfig,
@@ -1396,7 +1396,9 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const [showCompletionDialog, setShowCompletionDialog] = useState(false)
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [exportError, setExportError] = useState('')
+  const [submittedOnlineResponse, setSubmittedOnlineResponse] = useState<OnlineResponseRow | null>(null)
   const [responseCreatedAt] = useState(() => new Date().toISOString())
+  const hasSubmittedOnlineResponse = Boolean(onlineWorksheetId && submittedOnlineResponse)
 
   useEffect(() => {
     setIsSessionHydrated(false)
@@ -1423,8 +1425,28 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
       setPageIndex(0)
       setStatus('In progress')
     }
+    setSubmittedOnlineResponse(null)
     setIsSessionHydrated(true)
   }, [definition.id, definition.version, responseId])
+
+  useEffect(() => {
+    if (!onlineWorksheetId || !isSessionHydrated) return
+    let active = true
+
+    void loadParticipantResponse(onlineWorksheetId).then((savedResponse) => {
+      if (!active || savedResponse?.status !== 'submitted') return
+      setSubmittedOnlineResponse(savedResponse)
+      setResponses(savedResponse.answers.responses || {})
+      setStatus('Submitted')
+      setExportError('')
+    }).catch(() => {
+      // Autosave will surface any connectivity problem if the learner continues editing.
+    })
+
+    return () => {
+      active = false
+    }
+  }, [isSessionHydrated, onlineWorksheetId])
 
   useEffect(() => {
     if (definition.settings.autosave && responseId && isSessionHydrated) {
@@ -1544,6 +1566,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }, [buildNavigationWarning, canLeaveCurrentPage, currentPage?.id, currentTimer, currentVisiblePageIndex, pageRemainingSeconds, totalPages, visiblePageIndexes])
 
   const updateResponse = (blockId: string, value: any) => {
+    if (hasSubmittedOnlineResponse) return
     setNavigationWarning('')
     setExportError('')
     if (status === 'Required responses missing') {
@@ -1575,9 +1598,16 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }), [definition.id, definition.version, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
-    if (!onlineWorksheetId || !isSessionHydrated || status === 'Complete' || status === 'Submitting…') return
+    if (!onlineWorksheetId || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
     const timeoutId = window.setTimeout(() => {
-      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then(() => {
+      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then((savedResponse) => {
+        if (savedResponse.status === 'submitted') {
+          setSubmittedOnlineResponse(savedResponse)
+          setResponses(savedResponse.answers.responses || {})
+          setStatus('Submitted')
+          setExportError('')
+          return
+        }
         setStatus('Saved online')
       }).catch(() => {
         setStatus('Saved on this device')
@@ -1585,7 +1615,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }, 900)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildDocument, isSessionHydrated, onlineWorksheetId, responses, status])
+  }, [buildDocument, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -1615,11 +1645,24 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       return
     }
     if (onlineWorksheetId) {
+      if (hasSubmittedOnlineResponse) {
+        setExportError('This response has already been submitted. It is now read-only.')
+        setStatus('Submitted')
+        return
+      }
       setStatus('Submitting…')
       setExportError('')
       try {
         const saved = await saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || ''))
-        await submitOnlineResponse(saved.id)
+        if (saved.status === 'submitted') {
+          setSubmittedOnlineResponse(saved)
+          setResponses(saved.answers.responses || {})
+          setExportError('This response has already been submitted. It is now read-only.')
+          setStatus('Submitted')
+          return
+        }
+        const submitted = await submitOnlineResponse(saved.id)
+        setSubmittedOnlineResponse(submitted)
         setStatus('Complete')
         setShowCompletionDialog(true)
       } catch {
@@ -1947,13 +1990,18 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(260px,1fr)]">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-2xl font-semibold text-slate-900">{currentPage.title}</h2>
-          <div className="space-y-6">
+          {hasSubmittedOnlineResponse && (
+            <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              This response has already been submitted and is now read-only.
+            </div>
+          )}
+          <fieldset disabled={hasSubmittedOnlineResponse} className="space-y-6 disabled:opacity-75">
             {visibleBlocks.map((block) => (
               <div key={block.id} id={getBlockWrapperId(block.id)}>{renderBlock(block, responses, updateResponse, {
                 showRequiredError: validationAttempted && missingRequiredBlockIds.has(block.id),
               })}</div>
             ))}
-          </div>
+          </fieldset>
 
           {navigationWarning && (
             <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1964,8 +2012,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={currentVisiblePageIndex <= 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
-            <button onClick={() => void handleNext()} disabled={status === 'Submitting…'} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
-              {status === 'Submitting…' ? 'Submitting…' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
+            <button onClick={() => void handleNext()} disabled={status === 'Submitting…' || hasSubmittedOnlineResponse} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
+              {status === 'Submitting…' ? 'Submitting…' : hasSubmittedOnlineResponse ? 'Submitted' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
             </button>
           </div>
         </section>

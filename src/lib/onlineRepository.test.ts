@@ -1,10 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { loadPublishedWorksheet, saveOnlineResponse } from './onlineRepository'
 import { requireSupabase } from './supabase'
-import { loadPublishedWorksheet } from './onlineRepository'
+import type { WorksheetResponse } from './types'
 
 vi.mock('./supabase', () => ({
   requireSupabase: vi.fn(),
 }))
+
+const mockClient = {
+  auth: {
+    getSession: vi.fn(),
+    signInAnonymously: vi.fn(),
+  },
+  from: vi.fn(),
+}
+
+function createSelectBuilder(data: unknown) {
+  const builder = {
+    select: vi.fn(() => builder),
+    eq: vi.fn(() => builder),
+    maybeSingle: vi.fn(async () => ({ data, error: null })),
+  }
+  return builder
+}
+
+function createUpsertBuilder(data: unknown) {
+  const builder = {
+    upsert: vi.fn(() => builder),
+    select: vi.fn(() => builder),
+    single: vi.fn(async () => ({ data, error: null })),
+  }
+  return builder
+}
+
+const responseDocument: WorksheetResponse = {
+  responseSchema: 'interactive-worksheet-response',
+  schemaVersion: 1,
+  worksheetId: 'worksheet-definition',
+  worksheetVersion: 1,
+  responseId: 'local-response',
+  createdAt: '2026-10-03T00:00:00.000Z',
+  updatedAt: '2026-10-03T00:00:00.000Z',
+  responses: { answer: 'Learner answer' },
+}
 
 describe('online worksheet repository', () => {
   beforeEach(() => {
@@ -39,5 +77,53 @@ describe('online worksheet repository', () => {
     expect(rpc).toHaveBeenCalledWith('get_published_worksheet_by_code', { lookup_public_code: 'ABC12345' })
     expect(single).toHaveBeenCalledTimes(1)
     expect(from).not.toHaveBeenCalled()
+  })
+})
+
+describe('online response persistence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireSupabase).mockReturnValue(mockClient as any)
+    mockClient.auth.getSession.mockResolvedValue({
+      data: { session: { user: { id: 'learner-1' } } },
+    })
+  })
+
+  it('does not upsert over an already-submitted response', async () => {
+    const submittedRow = {
+      id: 'response-1',
+      worksheet_id: 'online-worksheet',
+      participant_id: 'learner-1',
+      answers: responseDocument,
+      status: 'submitted',
+    }
+    const selectBuilder = createSelectBuilder(submittedRow)
+    mockClient.from.mockReturnValue(selectBuilder)
+
+    await expect(saveOnlineResponse('online-worksheet', responseDocument)).resolves.toBe(submittedRow)
+
+    expect(mockClient.from).toHaveBeenCalledTimes(1)
+    expect(selectBuilder.eq).toHaveBeenCalledWith('participant_id', 'learner-1')
+  })
+
+  it('keeps draft saves as draft upserts', async () => {
+    const savedDraftRow = {
+      id: 'response-1',
+      worksheet_id: 'online-worksheet',
+      participant_id: 'learner-1',
+      answers: responseDocument,
+      status: 'draft',
+    }
+    const selectBuilder = createSelectBuilder(savedDraftRow)
+    const upsertBuilder = createUpsertBuilder(savedDraftRow)
+    mockClient.from.mockReturnValueOnce(selectBuilder).mockReturnValueOnce(upsertBuilder)
+
+    await expect(saveOnlineResponse('online-worksheet', responseDocument, ' Group 1 ')).resolves.toBe(savedDraftRow)
+
+    expect(upsertBuilder.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      participant_id: 'learner-1',
+      participant_label: 'Group 1',
+      status: 'draft',
+    }), { onConflict: 'worksheet_id,participant_id' })
   })
 })

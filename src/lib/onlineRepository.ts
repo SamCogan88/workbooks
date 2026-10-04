@@ -123,9 +123,30 @@ export async function loadPublishedWorksheet(publicCode: string) {
   return data
 }
 
+async function loadParticipantResponseForSession(worksheetId: string, participantId: string) {
+  const client = requireSupabase()
+  const { data, error } = await client
+    .from('responses')
+    .select('*')
+    .eq('worksheet_id', worksheetId)
+    .eq('participant_id', participantId)
+    .maybeSingle<OnlineResponseRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function loadParticipantResponse(worksheetId: string) {
+  const session = await ensureAnonymousLearnerSession()
+  return loadParticipantResponseForSession(worksheetId, session.user.id)
+}
+
 export async function saveOnlineResponse(worksheetId: string, response: WorksheetResponse, participantLabel?: string) {
   const client = requireSupabase()
   const session = await ensureAnonymousLearnerSession()
+  const existingResponse = await loadParticipantResponseForSession(worksheetId, session.user.id)
+  if (existingResponse?.status === 'submitted') return existingResponse
+
   const { data, error } = await client
     .from('responses')
     .upsert({
