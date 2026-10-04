@@ -61,13 +61,16 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
-import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
-import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
+import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
   getDefaultBlockConfig,
   getDefaultPageTimer,
   getBoardPresetColumns,
+  canNavigateToVisiblePage,
   getImageDisplayConfig,
+  getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
   getQuizSummary,
   getStructuredDefaultResponse,
@@ -77,8 +80,9 @@ import {
   isResponseProducingBlock,
   stripHtml,
 } from './lib/worksheetLogic'
+import { sanitiseWorksheetResponses } from './lib/responseValidation'
+import { getPdfLineCapacity } from './lib/pdfLayout'
 
-const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
 const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating', 'categorize', 'hotspot', 'numeric', 'wordCloud', 'confidence'])
@@ -558,7 +562,7 @@ function TeacherDashboard({ onOpenWorkbook }: { onOpenWorkbook: (definition: Wor
                   <div className="mt-4 space-y-2">
                     {responses.slice(0, 3).map((response) => (
                       <div key={response.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                        <span className="font-medium text-slate-700">{response.participant_label || response.answers.group || response.answers.subject || 'Anonymous learner'}</span>
+                        <span className="font-medium text-slate-700">{response.participant_label || response.answers?.group || response.answers?.subject || 'Anonymous learner'}</span>
                         <span className="text-xs text-slate-500">{response.submitted_at ? new Date(response.submitted_at).toLocaleString() : 'Submitted'}</span>
                       </div>
                     ))}
@@ -587,6 +591,7 @@ function OnlineTeacherReportPage() {
   const [responses, setResponses] = useState<WorksheetResponse[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [reportNotice, setReportNotice] = useState('')
 
   useEffect(() => {
     if (authLoading) return
@@ -598,10 +603,15 @@ function OnlineTeacherReportPage() {
     let active = true
     setLoading(true)
     setError('')
+    setReportNotice('')
     void Promise.all([loadOwnedWorksheet(workbookId), listSubmittedResponses(workbookId)]).then(([loadedWorkbook, loadedResponses]) => {
       if (!active) return
+      const sanitised = sanitiseWorksheetResponses(loadedWorkbook.definition, loadedResponses)
       setWorkbook(loadedWorkbook)
-      setResponses(loadedResponses)
+      setResponses(sanitised.responses)
+      if (sanitised.rejectedResponses || sanitised.rejectedValues) {
+        setReportNotice(`Loaded ${sanitised.responses.length} response(s). Skipped ${sanitised.rejectedResponses} malformed response(s) and ${sanitised.rejectedValues} malformed answer value(s).`)
+      }
       setLoading(false)
     }).catch((loadError) => {
       if (!active) return
@@ -618,7 +628,7 @@ function OnlineTeacherReportPage() {
   if (!user) return <main className="mx-auto max-w-3xl px-5 py-12 text-center"><h1 className="text-2xl font-bold">Teacher sign-in required</h1><Link to="/account" className="mt-5 inline-flex rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white">Teacher sign in</Link></main>
   if (error || !workbook) return <main className="mx-auto max-w-3xl px-5 py-12"><p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || 'Workbook not found.'}</p><Link to="/teacher" className="mt-4 inline-flex text-sm font-semibold text-blue-700">Back to my workbooks</Link></main>
 
-  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} backTo="/teacher" />
+  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} initialNotice={reportNotice} backTo="/teacher" />
 }
 
 function SystemGuidePage() {
@@ -1375,9 +1385,10 @@ function formatTimerValue(seconds: number) {
 
 function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, publicCode }: { definition: WorksheetDefinition; previewMode?: boolean; onlineWorksheetId?: string; publicCode?: string }) {
   const navigate = useNavigate()
+  const responseIdStorageKey = buildResponseIdStorageKey(definition.id, definition.version, onlineWorksheetId)
   const [pageIndex, setPageIndex] = useState(0)
   const [responseId, setResponseId] = useState(() => {
-    const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
+    const saved = localStorage.getItem(responseIdStorageKey)
     return saved || getDefaultResponseId()
   })
   const [responses, setResponses] = useState<Record<string, any>>({})
@@ -1387,24 +1398,26 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const [showCompletionDialog, setShowCompletionDialog] = useState(false)
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [exportError, setExportError] = useState('')
+  const [submittedOnlineResponse, setSubmittedOnlineResponse] = useState<OnlineResponseRow | null>(null)
   const [responseCreatedAt] = useState(() => new Date().toISOString())
+  const hasSubmittedOnlineResponse = Boolean(onlineWorksheetId && submittedOnlineResponse)
 
   useEffect(() => {
     setIsSessionHydrated(false)
-    const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
+    const saved = localStorage.getItem(responseIdStorageKey)
     if (saved) {
       setResponseId(saved)
       return
     }
     const next = getDefaultResponseId()
-    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, next)
+    localStorage.setItem(responseIdStorageKey, next)
     setResponseId(next)
-  }, [definition.id, definition.version])
+  }, [responseIdStorageKey])
 
   useEffect(() => {
     if (!responseId) return
-    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, responseId)
-    const saved = loadSession(definition.id, definition.version, responseId)
+    localStorage.setItem(responseIdStorageKey, responseId)
+    const saved = loadSession(definition.id, definition.version, responseId, onlineWorksheetId)
     if (saved) {
       setResponses(saved.responses || {})
       setPageIndex(saved.pageIndex || 0)
@@ -1414,8 +1427,28 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
       setPageIndex(0)
       setStatus('In progress')
     }
+    setSubmittedOnlineResponse(null)
     setIsSessionHydrated(true)
-  }, [definition.id, definition.version, responseId])
+  }, [definition.id, definition.version, onlineWorksheetId, responseId, responseIdStorageKey])
+
+  useEffect(() => {
+    if (!onlineWorksheetId || !isSessionHydrated) return
+    let active = true
+
+    void loadParticipantResponse(onlineWorksheetId).then((savedResponse) => {
+      if (!active || savedResponse?.status !== 'submitted') return
+      setSubmittedOnlineResponse(savedResponse)
+      setResponses(savedResponse.answers.responses || {})
+      setStatus('Submitted')
+      setExportError('')
+    }).catch(() => {
+      // Autosave will surface any connectivity problem if the learner continues editing.
+    })
+
+    return () => {
+      active = false
+    }
+  }, [isSessionHydrated, onlineWorksheetId])
 
   useEffect(() => {
     if (definition.settings.autosave && responseId && isSessionHydrated) {
@@ -1424,15 +1457,17 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
         definition.id,
         definition.version,
         responseId,
+        onlineWorksheetId,
       )
     }
-  }, [definition, isSessionHydrated, pageIndex, responseId, responses])
+  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseId, responses])
 
   const visiblePages = useMemo(() => getVisiblePages(definition, responses), [definition, responses])
   const visiblePageIndexes = useMemo(() => visiblePages.map((page) => definition.pages.indexOf(page)), [definition.pages, visiblePages])
   const totalPages = visiblePages.length
   const currentPage = definition.pages[pageIndex]
   const currentVisiblePageIndex = visiblePageIndexes.indexOf(pageIndex)
+  const isRestrictedNavigation = definition.settings.navigation === 'sequential' || !definition.settings.allowPageJumping
   const visibleBlocks = currentPage
     ? getVisibleBlocks(currentPage, responses).filter((block) => previewMode || getBlockAudience(block) === 'student')
     : []
@@ -1452,16 +1487,35 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
     [currentPage, responses],
   )
+  const missingRequiredBlockLocations = useMemo(
+    () => getMissingRequiredBlockLocations(definition, responses),
+    [definition, responses],
+  )
   const canLeaveCurrentPage = missingRequiredBlocks.length === 0
   const missingRequiredBlockIds = useMemo(() => new Set(missingRequiredBlocks.map((block) => block.id)), [missingRequiredBlocks])
 
-  const buildNavigationWarning = useCallback(() => {
-    if (!currentPage || missingRequiredBlocks.length === 0) return ''
-    const labels = missingRequiredBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
-    const remainingCount = Math.max(0, missingRequiredBlocks.length - labels.length)
+  const buildRequiredBlocksWarning = useCallback((blocks: WorksheetBlock[]) => {
+    if (blocks.length === 0) return ''
+    const labels = blocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
+    const remainingCount = Math.max(0, blocks.length - labels.length)
     return `Please complete the required items before continuing:
 ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
-  }, [currentPage, missingRequiredBlocks])
+  }, [])
+
+  const buildNavigationWarning = useCallback(() => {
+    if (!currentPage || missingRequiredBlocks.length === 0) return ''
+    return buildRequiredBlocksWarning(missingRequiredBlocks)
+  }, [buildRequiredBlocksWarning, currentPage, missingRequiredBlocks])
+
+  const buildPageJumpingWarning = useCallback(() => {
+    if (definition.settings.navigation === 'sequential' && !definition.settings.allowPageJumping) {
+      return 'This worksheet is set to sequential navigation with page jumping turned off. Use Next to move through one page at a time.'
+    }
+    if (definition.settings.navigation === 'sequential') {
+      return 'This worksheet is set to sequential navigation. Use Next to move through one page at a time.'
+    }
+    return 'Page jumping is turned off for this worksheet. Use Next to move through one page at a time.'
+  }, [definition.settings.allowPageJumping, definition.settings.navigation])
 
   useEffect(() => {
     if (!isSessionHydrated || visiblePageIndexes.length === 0 || visiblePageIndexes.includes(pageIndex)) return
@@ -1535,9 +1589,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }, [buildNavigationWarning, canLeaveCurrentPage, currentPage?.id, currentTimer, currentVisiblePageIndex, pageRemainingSeconds, totalPages, visiblePageIndexes])
 
   const updateResponse = (blockId: string, value: any) => {
+    if (hasSubmittedOnlineResponse) return
     setNavigationWarning('')
     setExportError('')
-    if (status === 'Required responses missing') {
+    if (status === 'Required responses missing' || status === 'Page jumping disabled') {
       setStatus('In progress')
     }
     setResponses((previous) => ({ ...previous, [blockId]: value }))
@@ -1551,6 +1606,15 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     const focusTarget = wrapper?.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')
     focusTarget?.focus()
   }, [missingRequiredBlocks])
+
+  const focusMissingBlock = useCallback((blockId: string) => {
+    window.setTimeout(() => {
+      const wrapper = document.getElementById(getBlockWrapperId(blockId))
+      wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const focusTarget = wrapper?.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')
+      focusTarget?.focus()
+    })
+  }, [])
 
   const buildDocument = useCallback((): WorksheetResponse => ({
     responseSchema: 'interactive-worksheet-response',
@@ -1566,9 +1630,16 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }), [definition.id, definition.version, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
-    if (!onlineWorksheetId || !isSessionHydrated || status === 'Complete' || status === 'Submitting…') return
+    if (!onlineWorksheetId || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
     const timeoutId = window.setTimeout(() => {
-      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then(() => {
+      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then((savedResponse) => {
+        if (savedResponse.status === 'submitted') {
+          setSubmittedOnlineResponse(savedResponse)
+          setResponses(savedResponse.answers.responses || {})
+          setStatus('Submitted')
+          setExportError('')
+          return
+        }
         setStatus('Saved online')
       }).catch(() => {
         setStatus('Saved on this device')
@@ -1576,7 +1647,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }, 900)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildDocument, isSessionHydrated, onlineWorksheetId, responses, status])
+  }, [buildDocument, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -1592,9 +1663,33 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     return false
   }
 
+  const tryCompleteWorksheet = () => {
+    const firstMissingLocation = missingRequiredBlockLocations[0]
+    if (!firstMissingLocation) return true
+
+    const pageMissingBlocks = missingRequiredBlockLocations
+      .filter((location) => location.pageIndex === firstMissingLocation.pageIndex)
+      .map((location) => location.block)
+    setPageIndex(firstMissingLocation.pageIndex)
+    setValidationAttempted(true)
+    setNavigationWarning(buildRequiredBlocksWarning(pageMissingBlocks))
+    setStatus('Required responses missing')
+    focusMissingBlock(firstMissingLocation.block.id)
+    return false
+  }
+
   const goToPage = (index: number) => {
-    if (!visiblePageIndexes.includes(index)) return
-    if (index > pageIndex && !tryLeaveCurrentPage()) return
+    const targetVisiblePageIndex = visiblePageIndexes.indexOf(index)
+    if (targetVisiblePageIndex < 0) return
+    if (targetVisiblePageIndex > currentVisiblePageIndex && !tryLeaveCurrentPage()) return
+    if (!canNavigateToVisiblePage(definition.settings, currentVisiblePageIndex, targetVisiblePageIndex)) {
+      setNavigationWarning(buildPageJumpingWarning())
+      setStatus('Page jumping disabled')
+      return
+    }
+    if (status === 'Page jumping disabled') {
+      setStatus('In progress')
+    }
     setPageIndex(index)
   }
 
@@ -1605,12 +1700,26 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       setPageIndex(visiblePageIndexes[currentVisiblePageIndex + 1])
       return
     }
+    if (!tryCompleteWorksheet()) return
     if (onlineWorksheetId) {
+      if (hasSubmittedOnlineResponse) {
+        setExportError('This response has already been submitted. It is now read-only.')
+        setStatus('Submitted')
+        return
+      }
       setStatus('Submitting…')
       setExportError('')
       try {
         const saved = await saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || ''))
-        await submitOnlineResponse(saved.id)
+        if (saved.status === 'submitted') {
+          setSubmittedOnlineResponse(saved)
+          setResponses(saved.answers.responses || {})
+          setExportError('This response has already been submitted. It is now read-only.')
+          setStatus('Submitted')
+          return
+        }
+        const submitted = await submitOnlineResponse(saved.id)
+        setSubmittedOnlineResponse(submitted)
         setStatus('Complete')
         setShowCompletionDialog(true)
       } catch {
@@ -1648,7 +1757,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     setResponses({})
     setPageIndex(0)
     setStatus('New response started')
-    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, nextId)
+    localStorage.setItem(responseIdStorageKey, nextId)
   }
 
   const handleExportJson = () => {
@@ -1671,33 +1780,42 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       y = 52
     }
 
-    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
-      const lines = pdf.splitTextToSize(text, width)
-      pdf.text(lines, x, top)
-      return lines.length * lineHeight
-    }
-
     const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
       const innerWidth = pageWidth - 104
       const lineHeight = 12
       const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
-      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
-      ensurePdfSpace(cardHeight + 10)
-      if (tone === 'section') {
-        pdf.setFillColor(248, 250, 252)
-        pdf.setDrawColor(203, 213, 225)
-      } else {
-        pdf.setFillColor(255, 255, 255)
-        pdf.setDrawColor(226, 232, 240)
+      let remainingLines = wrappedLines.length ? wrappedLines : ['']
+      let continued = false
+
+      while (remainingLines.length > 0) {
+        const fixedHeight = 34 + 14 + 10
+        let capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        if (capacity < 1) {
+          pdf.addPage()
+          y = 52
+          capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        }
+
+        const pageLines = remainingLines.slice(0, Math.max(1, capacity))
+        remainingLines = remainingLines.slice(pageLines.length)
+        const cardHeight = 34 + pageLines.length * lineHeight + 14
+        if (tone === 'section') {
+          pdf.setFillColor(248, 250, 252)
+          pdf.setDrawColor(203, 213, 225)
+        } else {
+          pdf.setFillColor(255, 255, 255)
+          pdf.setDrawColor(226, 232, 240)
+        }
+        pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+        pdf.setTextColor(15, 23, 42)
+        pdf.setFontSize(11)
+        pdf.text(continued ? `${title} (continued)` : title, 64, y + 18)
+        pdf.setTextColor(71, 85, 105)
+        pdf.setFontSize(9)
+        pdf.text(pageLines, 64, y + 34)
+        y += cardHeight + 10
+        continued = true
       }
-      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
-      pdf.setTextColor(15, 23, 42)
-      pdf.setFontSize(11)
-      pdf.text(title, 64, y + 18)
-      pdf.setTextColor(71, 85, 105)
-      pdf.setFontSize(9)
-      pdf.text(wrappedLines, 64, y + 34)
-      y += cardHeight + 10
     }
 
     pdf.setFillColor(15, 23, 42)
@@ -1743,19 +1861,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
       if (answeredBlocks.length === 0 && !contextText) return
 
-      ensurePdfSpace(80)
-      pdf.setFillColor(248, 250, 252)
-      pdf.setDrawColor(203, 213, 225)
-      pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
-      pdf.setTextColor(15, 23, 42)
-      pdf.setFontSize(13)
-      pdf.text(page.title, 64, y + 20)
-      if (contextText) {
-        pdf.setFontSize(9)
-        pdf.setTextColor(71, 85, 105)
-        drawWrappedText(contextText, 64, y + 36, pageWidth - 136)
-      }
-      y += 72
+      drawPdfCard(page.title, contextText ? [contextText] : [], 'section')
 
       if (answeredBlocks.length === 0) {
         drawPdfCard('Responses', ['No recorded responses on this page.'])
@@ -1769,10 +1875,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           const scores = value as Record<string, number>
           const scoreEntries = Object.entries(scores).filter(([, score]) => Number.isFinite(Number(score)))
           if (!scoreEntries.length) return
-          ensurePdfSpace(132)
+          const radarHeight = Math.max(122, 46 + scoreEntries.length * 12)
+          ensurePdfSpace(radarHeight + 10)
           pdf.setFillColor(255, 255, 255)
           pdf.setDrawColor(226, 232, 240)
-          pdf.roundedRect(52, y, pageWidth - 104, 122, 10, 10, 'FD')
+          pdf.roundedRect(52, y, pageWidth - 104, radarHeight, 10, 10, 'FD')
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -1782,17 +1889,22 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           scoreEntries.forEach(([label, score], index) => {
             pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
           })
-          y += 134
+          y += radarHeight + 12
           return
         }
 
         if (block.type === 'quadrant' && value && typeof value === 'object') {
           const point = value as Record<string, unknown>
           const rationale = typeof point.rationale === 'string' && point.rationale.trim() ? String(point.rationale).trim() : 'No rationale recorded.'
-          ensurePdfSpace(144)
+          const rationaleLines = pdf.splitTextToSize(rationale, pageWidth - 292)
+          const firstPageLineLimit = getPdfLineCapacity(pageHeight - 42 - y - 88 - 10, 12)
+          const firstPageLines = rationaleLines.slice(0, Math.max(1, firstPageLineLimit))
+          const remainingRationaleLines = rationaleLines.slice(firstPageLines.length)
+          const quadrantHeight = Math.max(134, 88 + firstPageLines.length * 12)
+          ensurePdfSpace(quadrantHeight + 10)
           pdf.setFillColor(255, 255, 255)
           pdf.setDrawColor(226, 232, 240)
-          pdf.roundedRect(52, y, pageWidth - 104, 134, 10, 10, 'FD')
+          pdf.roundedRect(52, y, pageWidth - 104, quadrantHeight, 10, 10, 'FD')
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -1801,8 +1913,11 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           pdf.setTextColor(71, 85, 105)
           pdf.text(`x: ${(Number(point.x) || 0).toFixed(1)}`, 172, y + 42)
           pdf.text(`y: ${(Number(point.y) || 0).toFixed(1)}`, 172, y + 56)
-          drawWrappedText(rationale, 172, y + 74, pageWidth - 292)
-          y += 146
+          pdf.text(firstPageLines, 172, y + 74)
+          y += quadrantHeight + 12
+          if (remainingRationaleLines.length) {
+            drawPdfCard(`${getBlockDisplayLabel(block)} rationale`, remainingRationaleLines)
+          }
           return
         }
 
@@ -1932,13 +2047,18 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(260px,1fr)]">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-2xl font-semibold text-slate-900">{currentPage.title}</h2>
-          <div className="space-y-6">
+          {hasSubmittedOnlineResponse && (
+            <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              This response has already been submitted and is now read-only.
+            </div>
+          )}
+          <fieldset disabled={hasSubmittedOnlineResponse} className="space-y-6 disabled:opacity-75">
             {visibleBlocks.map((block) => (
               <div key={block.id} id={getBlockWrapperId(block.id)}>{renderBlock(block, responses, updateResponse, {
                 showRequiredError: validationAttempted && missingRequiredBlockIds.has(block.id),
               })}</div>
             ))}
-          </div>
+          </fieldset>
 
           {navigationWarning && (
             <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1949,8 +2069,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={currentVisiblePageIndex <= 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
-            <button onClick={() => void handleNext()} disabled={status === 'Submitting…'} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
-              {status === 'Submitting…' ? 'Submitting…' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
+            <button onClick={() => void handleNext()} disabled={status === 'Submitting…' || hasSubmittedOnlineResponse} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
+              {status === 'Submitting…' ? 'Submitting…' : hasSubmittedOnlineResponse ? 'Submitted' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
             </button>
           </div>
         </section>
@@ -1969,12 +2089,16 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
             <ul className="space-y-2 text-sm text-slate-700">
               {visiblePages.map((page, visibleIndex) => {
                 const index = definition.pages.indexOf(page)
+                const isFutureJumpDisabled = isRestrictedNavigation && visibleIndex > currentVisiblePageIndex + 1
                 return (
                 <li key={page.id}>
                   <button
                     type="button"
                     onClick={() => goToPage(index)}
-                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
+                    disabled={isFutureJumpDisabled}
+                    aria-current={index === pageIndex ? 'page' : undefined}
+                    title={isFutureJumpDisabled ? buildPageJumpingWarning() : undefined}
+                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100 disabled:hover:bg-white'}`}
                   >
                     <span className="inline-flex items-center gap-2">
                       <FileText className="h-4 w-4" />
@@ -2643,7 +2767,11 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
 }
 
 function RandomizerBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const items = Array.isArray(block.config?.items) ? block.config.items.filter((item: unknown) => typeof item === 'string' && item.trim()) : []
+  const configuredItems = block.config?.items
+  const items = useMemo(
+    () => Array.isArray(configuredItems) ? configuredItems.filter((item: unknown) => typeof item === 'string' && item.trim()) : [],
+    [configuredItems],
+  )
   const prompt = block.config?.prompt || 'Generate a random item from this list.'
   const currentValue = responses[block.id]
   const requireFirstGeneration = Boolean(block.config?.requireFirstGeneration)
@@ -3625,6 +3753,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
 
 function formatBlockValue(block: WorksheetBlock, value: any) {
   if (value === undefined || value === null || value === '') return ''
+  if (block.type === 'richText') return stripHtml(sanitizeRichTextHtml(String(value)))
   if (typeof value === 'string') return value
   if (typeof value === 'number') return String(value)
   if (block.type === 'wordCloud') return value.filter(Boolean).join(', ')
@@ -3781,7 +3910,7 @@ function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x:
   pdf.circle(pointX, pointY, 4, 'FD')
 }
 
-function SynthesisViewer({ definition, initialMode = 'student', initialResponses, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; backTo?: string }) {
+function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
   const [responses, setResponses] = useState<WorksheetResponse[]>(initialResponses || [])
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
@@ -3920,7 +4049,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
 
   const renderResponseValue = (block: WorksheetBlock, value: any) => {
     if (block.type === 'richText') {
-      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: String(value) }} />
+      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: sanitizeRichTextHtml(String(value)) }} />
     }
 
     if (block.type === 'checklist') {
@@ -4364,8 +4493,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
   useEffect(() => {
     if (!initialResponses) return
     setResponses(initialResponses)
-    setImportInfo(`Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
-  }, [initialResponses])
+    setImportInfo(initialNotice || `Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
+  }, [initialNotice, initialResponses])
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
@@ -4395,15 +4524,17 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     }
 
     if (parsed.length > 0) {
+      const sanitised = sanitiseWorksheetResponses(definition, parsed)
       setResponses((current) => {
-        const combined = [...current, ...parsed]
+        const combined = [...current, ...sanitised.responses]
         const uniqueByResponseId = new Map<string, WorksheetResponse>()
         combined.forEach((response) => {
           uniqueByResponseId.set(response.responseId, response)
         })
         return Array.from(uniqueByResponseId.values())
       })
-      setImportInfo(`Imported ${parsed.length} response file(s) for ${definition.title}.${rejected ? ` ${rejected} rejected.` : ''}`)
+      const totalRejected = rejected + sanitised.rejectedResponses
+      setImportInfo(`Imported ${sanitised.responses.length} response file(s) for ${definition.title}.${totalRejected ? ` ${totalRejected} rejected.` : ''}${sanitised.rejectedValues ? ` ${sanitised.rejectedValues} malformed answer value(s) ignored.` : ''}`)
     } else if (files.length > 0) {
       setImportInfo(`No files imported.${rejected ? ` ${rejected} rejected.` : ''}`)
     }
@@ -4424,33 +4555,42 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       y = 52
     }
 
-    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
-      const lines = pdf.splitTextToSize(text, width)
-      pdf.text(lines, x, top)
-      return lines.length * lineHeight
-    }
-
     const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
       const innerWidth = pageWidth - 104
       const lineHeight = 12
       const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
-      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
-      ensurePdfSpace(cardHeight + 10)
-      if (tone === 'section') {
-        pdf.setFillColor(248, 250, 252)
-        pdf.setDrawColor(203, 213, 225)
-      } else {
-        pdf.setFillColor(255, 255, 255)
-        pdf.setDrawColor(226, 232, 240)
+      let remainingLines = wrappedLines.length ? wrappedLines : ['']
+      let continued = false
+
+      while (remainingLines.length > 0) {
+        const fixedHeight = 34 + 14 + 10
+        let capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        if (capacity < 1) {
+          pdf.addPage()
+          y = 52
+          capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
+        }
+
+        const pageLines = remainingLines.slice(0, Math.max(1, capacity))
+        remainingLines = remainingLines.slice(pageLines.length)
+        const cardHeight = 34 + pageLines.length * lineHeight + 14
+        if (tone === 'section') {
+          pdf.setFillColor(248, 250, 252)
+          pdf.setDrawColor(203, 213, 225)
+        } else {
+          pdf.setFillColor(255, 255, 255)
+          pdf.setDrawColor(226, 232, 240)
+        }
+        pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+        pdf.setTextColor(15, 23, 42)
+        pdf.setFontSize(11)
+        pdf.text(continued ? `${title} (continued)` : title, 64, y + 18)
+        pdf.setTextColor(71, 85, 105)
+        pdf.setFontSize(9)
+        pdf.text(pageLines, 64, y + 34)
+        y += cardHeight + 10
+        continued = true
       }
-      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
-      pdf.setTextColor(15, 23, 42)
-      pdf.setFontSize(11)
-      pdf.text(title, 64, y + 18)
-      pdf.setTextColor(71, 85, 105)
-      pdf.setFontSize(9)
-      pdf.text(wrappedLines, 64, y + 34)
-      y += cardHeight + 10
     }
 
     pdf.setFillColor(15, 23, 42)
@@ -4484,10 +4624,14 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
     y += 66
 
     filteredGroupings.forEach((grouping) => {
-      ensurePdfSpace(126)
+      const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
+      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
+      const metrics = Object.entries(avgRadar)
+      const radarCardHeight = Math.max(120, 64 + metrics.length * 12)
+      ensurePdfSpace(radarCardHeight + 6)
       pdf.setFillColor(255, 255, 255)
       pdf.setDrawColor(226, 232, 240)
-      pdf.roundedRect(52, y, 500, 120, 12, 12, 'FD')
+      pdf.roundedRect(52, y, 500, radarCardHeight, 12, 12, 'FD')
       pdf.setTextColor(15, 23, 42)
       pdf.setFontSize(15)
       pdf.text(grouping.label, 68, y + 24)
@@ -4495,13 +4639,10 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
       pdf.setTextColor(100, 116, 139)
       pdf.text(`${formatCountLabel(grouping.responses.length, 'evaluation')} in this ${synthesisConfig.groupLabel.toLowerCase()}`, 68, y + 38)
 
-      const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
       drawPdfRadar(pdf, 190, y + 80, 46, avgRadar)
 
       pdf.setTextColor(51, 65, 85)
       pdf.setFontSize(9)
-      const metrics = Object.entries(avgRadar)
       metrics.forEach(([label, value], idx) => {
         const rowY = y + 52 + idx * 12
         pdf.text(label, 325, rowY)
@@ -4510,23 +4651,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         pdf.line(325, rowY + 3, 470, rowY + 3)
       })
 
-      y += 132
+      y += radarCardHeight + 12
 
       const visibleSections = getVisiblePageSections(grouping.responses)
       visibleSections.forEach((section) => {
-        ensurePdfSpace(78)
-        pdf.setFillColor(248, 250, 252)
-        pdf.setDrawColor(203, 213, 225)
-        pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
-        pdf.setTextColor(15, 23, 42)
-        pdf.setFontSize(13)
-        pdf.text(section.page.title, 64, y + 20)
-        if (section.contextText) {
-          pdf.setFontSize(9)
-          pdf.setTextColor(71, 85, 105)
-          drawWrappedText(section.contextText, 64, y + 36, pageWidth - 136)
-        }
-        y += 72
+        drawPdfCard(section.page.title, section.contextText ? [section.contextText] : [], 'section')
 
         section.visibleBlocks.forEach((block) => {
           const entries = getBlockEntries(block, grouping.responses)
@@ -4539,10 +4668,11 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
             const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
             const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
             const averages = aggregateRadarValues(grouping.responses, dimensions, block.id)
-            ensurePdfSpace(128)
+            const radarHeight = Math.max(118, 46 + Object.keys(averages).length * 12)
+            ensurePdfSpace(radarHeight + 10)
             pdf.setFillColor(255, 255, 255)
             pdf.setDrawColor(226, 232, 240)
-            pdf.roundedRect(52, y, pageWidth - 104, 118, 10, 10, 'FD')
+            pdf.roundedRect(52, y, pageWidth - 104, radarHeight, 10, 10, 'FD')
             pdf.setTextColor(15, 23, 42)
             pdf.setFontSize(11)
             pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -4552,7 +4682,7 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
             Object.entries(averages).forEach(([label, score], index) => {
               pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
             })
-            y += 130
+            y += radarHeight + 12
             return
           }
 

@@ -36,7 +36,12 @@ function createPublicCode(length = 8) {
 export async function ensureAnonymousLearnerSession() {
   const client = requireSupabase()
   const { data: sessionData } = await client.auth.getSession()
-  if (sessionData.session) return sessionData.session
+  if (sessionData.session?.user.is_anonymous) return sessionData.session
+
+  if (sessionData.session) {
+    const { error } = await client.auth.signOut({ scope: 'local' })
+    if (error) throw error
+  }
 
   const { data, error } = await client.auth.signInAnonymously()
   if (error) throw error
@@ -116,19 +121,37 @@ export async function loadPublishedWorksheet(publicCode: string) {
   const client = requireSupabase()
   await ensureAnonymousLearnerSession()
   const { data, error } = await client
-    .from('worksheets')
-    .select('*')
-    .eq('public_code', publicCode.trim().toUpperCase())
-    .eq('status', 'published')
+    .rpc('get_published_worksheet_by_code', { lookup_public_code: publicCode.trim().toUpperCase() })
     .single<OnlineWorksheetRow>()
 
   if (error) throw error
   return data
 }
 
+async function loadParticipantResponseForSession(worksheetId: string, participantId: string) {
+  const client = requireSupabase()
+  const { data, error } = await client
+    .from('responses')
+    .select('*')
+    .eq('worksheet_id', worksheetId)
+    .eq('participant_id', participantId)
+    .maybeSingle<OnlineResponseRow>()
+
+  if (error) throw error
+  return data
+}
+
+export async function loadParticipantResponse(worksheetId: string) {
+  const session = await ensureAnonymousLearnerSession()
+  return loadParticipantResponseForSession(worksheetId, session.user.id)
+}
+
 export async function saveOnlineResponse(worksheetId: string, response: WorksheetResponse, participantLabel?: string) {
   const client = requireSupabase()
   const session = await ensureAnonymousLearnerSession()
+  const existingResponse = await loadParticipantResponseForSession(worksheetId, session.user.id)
+  if (existingResponse?.status === 'submitted') return existingResponse
+
   const { data, error } = await client
     .from('responses')
     .upsert({
@@ -137,7 +160,6 @@ export async function saveOnlineResponse(worksheetId: string, response: Workshee
       participant_label: participantLabel?.trim() || null,
       answers: response,
       status: 'draft',
-      updated_at: new Date().toISOString(),
     }, { onConflict: 'worksheet_id,participant_id' })
     .select()
     .single<OnlineResponseRow>()
@@ -148,10 +170,9 @@ export async function saveOnlineResponse(worksheetId: string, response: Workshee
 
 export async function submitOnlineResponse(responseId: string) {
   const client = requireSupabase()
-  const submittedAt = new Date().toISOString()
   const { data, error } = await client
     .from('responses')
-    .update({ status: 'submitted', submitted_at: submittedAt, updated_at: submittedAt })
+    .update({ status: 'submitted' })
     .eq('id', responseId)
     .select()
     .single<OnlineResponseRow>()
@@ -160,7 +181,7 @@ export async function submitOnlineResponse(responseId: string) {
   return data
 }
 
-export async function listSubmittedResponses(worksheetId: string) {
+export async function listSubmittedResponses(worksheetId: string): Promise<unknown[]> {
   const rows = await listSubmittedResponseRows(worksheetId)
   return rows.slice().reverse().map((row) => row.answers)
 }

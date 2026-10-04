@@ -1,4 +1,4 @@
-import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage } from './types'
+import type { WorksheetBlock, WorksheetCondition, WorksheetDefinition, WorksheetPage, WorksheetSettings } from './types'
 
 const NON_RESPONSE_BLOCK_TYPES = new Set(['content', 'section', 'url'])
 
@@ -59,6 +59,12 @@ export function getAdjacentVisiblePageIndex(definition: WorksheetDefinition, res
   const visibleIndexes = getVisiblePages(definition, responses).map((page) => definition.pages.indexOf(page))
   const position = visibleIndexes.indexOf(currentIndex)
   return position < 0 ? undefined : visibleIndexes[position + direction]
+}
+
+export function canNavigateToVisiblePage(settings: Pick<WorksheetSettings, 'navigation' | 'allowPageJumping'>, currentVisibleIndex: number, targetVisibleIndex: number) {
+  if (targetVisibleIndex < 0 || currentVisibleIndex < 0) return false
+  if (targetVisibleIndex <= currentVisibleIndex + 1) return true
+  return settings.navigation === 'free' && Boolean(settings.allowPageJumping)
 }
 
 export function getImageDisplayConfig(block: WorksheetBlock) {
@@ -201,6 +207,13 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
 
 export function getMissingRequiredBlocks(page: WorksheetPage, responses: Record<string, unknown>) {
   return getVisibleBlocks(page, responses).filter((block) => isResponseProducingBlock(block) && block.required && !isRequiredBlockSatisfied(block, responses))
+}
+
+export function getMissingRequiredBlockLocations(definition: WorksheetDefinition, responses: Record<string, unknown>) {
+  return getVisiblePages(definition, responses).flatMap((page) => {
+    const pageIndex = definition.pages.indexOf(page)
+    return getMissingRequiredBlocks(page, responses).map((block) => ({ page, pageIndex, block }))
+  })
 }
 
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, unknown>) {

@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
-import { getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, getAdjacentVisiblePageIndex, getBoardPresetColumns, getDefaultBlockConfig, getDefaultPageTimer, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, isConditionMet, isRequiredBlockSatisfied } from './lib/worksheetLogic'
 
 describe('worksheet block defaults', () => {
   it('includes the media and analysis block types with sensible defaults', () => {
@@ -122,6 +122,15 @@ describe('conditional visibility', () => {
     expect(getAdjacentVisiblePageIndex(definition, { lms: 'Moodle' }, 0, 1)).toBe(2)
     expect(getAdjacentVisiblePageIndex(definition, { lms: 'Moodle' }, 2, -1)).toBe(0)
     expect(getVisiblePages(definition, { lms: 'Moodle' })).toHaveLength(2)
+  })
+
+  it('only allows skipping ahead when free navigation and page jumping are both enabled', () => {
+    expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 0, 2)).toBe(false)
+    expect(canNavigateToVisiblePage({ navigation: 'free', allowPageJumping: false }, 0, 2)).toBe(false)
+    expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: true }, 0, 2)).toBe(false)
+    expect(canNavigateToVisiblePage({ navigation: 'free', allowPageJumping: true }, 0, 2)).toBe(true)
+    expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 2, 0)).toBe(true)
+    expect(canNavigateToVisiblePage({ navigation: 'sequential', allowPageJumping: false }, 0, 1)).toBe(true)
   })
 
   it('preserves conditions through JSON serialization', () => {
@@ -308,6 +317,68 @@ describe('worksheet quiz summary', () => {
 })
 
 describe('required page completion', () => {
+  it('finds missing required blocks across every visible page before completion', () => {
+    const definition = {
+      id: 'multi-page-required',
+      version: 1,
+      title: 'Multi-page required',
+      description: '',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [
+        {
+          id: 'page-1',
+          title: 'Page 1',
+          blocks: [{ id: 'name', type: 'shortText', label: 'Name', required: true }],
+        },
+        {
+          id: 'page-2',
+          title: 'Page 2',
+          blocks: [{ id: 'reflection', type: 'longText', label: 'Reflection', required: true }],
+        },
+        {
+          id: 'page-3',
+          title: 'Page 3',
+          blocks: [{ id: 'confirm', type: 'singleSelect', label: 'Confirm', required: true, config: { options: ['Yes'] } }],
+        },
+        {
+          id: 'hidden',
+          title: 'Hidden',
+          condition: { blockId: 'confirm', operator: 'equals', value: 'No' },
+          blocks: [{ id: 'hidden-required', type: 'shortText', label: 'Hidden', required: true }],
+        },
+      ],
+    } as any
+
+    expect(getMissingRequiredBlockLocations(definition, { name: 'Learner', confirm: 'Yes' }).map((location) => ({
+      pageIndex: location.pageIndex,
+      blockId: location.block.id,
+    }))).toEqual([{ pageIndex: 1, blockId: 'reflection' }])
+  })
+
+  it('renders an idle randomizer without triggering a nested update loop', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      render(renderBlock({
+        id: 'tool-spin',
+        type: 'randomizer',
+        label: 'Spin for a tool',
+        config: { items: ['Diffit', 'NotebookLM'], displayStyle: 'word-flicker' },
+      } as any, {}, vi.fn()))
+
+      expect(screen.getByText('Click Generate to start')).toBeTruthy()
+      expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('Maximum update depth exceeded'))
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
   it('treats required response blocks as incomplete until they have meaningful values', () => {
     const page = {
       id: 'page-1',
