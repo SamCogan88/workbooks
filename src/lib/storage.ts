@@ -1,22 +1,29 @@
 import type { StoredSession, WorksheetResponse } from './types'
 
-const STORAGE_PREFIX = 'worksheet-app' 
+const STORAGE_PREFIX = 'worksheet-app'
+const RESPONSE_ID_STORAGE_PREFIX = 'worksheet-session-id'
 
-export function buildStorageKey(worksheetId: string, worksheetVersion: number, responseId: string) {
+export function buildStorageKey(worksheetId: string, worksheetVersion: number, responseId: string, onlineWorksheetId?: string) {
+  if (onlineWorksheetId) return `${STORAGE_PREFIX}:online:${onlineWorksheetId}:${responseId}`
   return `${STORAGE_PREFIX}:${worksheetId}:${worksheetVersion}:${responseId}`
 }
 
-export function saveSession(session: StoredSession, worksheetId: string, worksheetVersion: number, responseId: string) {
+export function buildResponseIdStorageKey(worksheetId: string, worksheetVersion: number, onlineWorksheetId?: string) {
+  if (onlineWorksheetId) return `${RESPONSE_ID_STORAGE_PREFIX}:online:${onlineWorksheetId}`
+  return `${RESPONSE_ID_STORAGE_PREFIX}:${worksheetId}:${worksheetVersion}`
+}
+
+export function saveSession(session: StoredSession, worksheetId: string, worksheetVersion: number, responseId: string, onlineWorksheetId?: string) {
   try {
-    localStorage.setItem(buildStorageKey(worksheetId, worksheetVersion, responseId), JSON.stringify(session))
+    localStorage.setItem(buildStorageKey(worksheetId, worksheetVersion, responseId, onlineWorksheetId), JSON.stringify(session))
   } catch (error) {
     console.error('Autosave failed', error)
   }
 }
 
-export function loadSession(worksheetId: string, worksheetVersion: number, responseId: string): StoredSession | null {
+export function loadSession(worksheetId: string, worksheetVersion: number, responseId: string, onlineWorksheetId?: string): StoredSession | null {
   try {
-    const raw = localStorage.getItem(buildStorageKey(worksheetId, worksheetVersion, responseId))
+    const raw = localStorage.getItem(buildStorageKey(worksheetId, worksheetVersion, responseId, onlineWorksheetId))
     if (!raw) return null
     return JSON.parse(raw) as StoredSession
   } catch (error) {

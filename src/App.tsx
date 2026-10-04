@@ -61,7 +61,7 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
-import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
@@ -83,7 +83,6 @@ import {
 import { sanitiseWorksheetResponses } from './lib/responseValidation'
 import { getPdfLineCapacity } from './lib/pdfLayout'
 
-const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
 const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating', 'categorize', 'hotspot', 'numeric', 'wordCloud', 'confidence'])
@@ -1386,9 +1385,10 @@ function formatTimerValue(seconds: number) {
 
 function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, publicCode }: { definition: WorksheetDefinition; previewMode?: boolean; onlineWorksheetId?: string; publicCode?: string }) {
   const navigate = useNavigate()
+  const responseIdStorageKey = buildResponseIdStorageKey(definition.id, definition.version, onlineWorksheetId)
   const [pageIndex, setPageIndex] = useState(0)
   const [responseId, setResponseId] = useState(() => {
-    const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
+    const saved = localStorage.getItem(responseIdStorageKey)
     return saved || getDefaultResponseId()
   })
   const [responses, setResponses] = useState<Record<string, any>>({})
@@ -1404,20 +1404,20 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
 
   useEffect(() => {
     setIsSessionHydrated(false)
-    const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
+    const saved = localStorage.getItem(responseIdStorageKey)
     if (saved) {
       setResponseId(saved)
       return
     }
     const next = getDefaultResponseId()
-    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, next)
+    localStorage.setItem(responseIdStorageKey, next)
     setResponseId(next)
-  }, [definition.id, definition.version])
+  }, [responseIdStorageKey])
 
   useEffect(() => {
     if (!responseId) return
-    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, responseId)
-    const saved = loadSession(definition.id, definition.version, responseId)
+    localStorage.setItem(responseIdStorageKey, responseId)
+    const saved = loadSession(definition.id, definition.version, responseId, onlineWorksheetId)
     if (saved) {
       setResponses(saved.responses || {})
       setPageIndex(saved.pageIndex || 0)
@@ -1429,7 +1429,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     }
     setSubmittedOnlineResponse(null)
     setIsSessionHydrated(true)
-  }, [definition.id, definition.version, responseId])
+  }, [definition.id, definition.version, onlineWorksheetId, responseId, responseIdStorageKey])
 
   useEffect(() => {
     if (!onlineWorksheetId || !isSessionHydrated) return
@@ -1457,9 +1457,10 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
         definition.id,
         definition.version,
         responseId,
+        onlineWorksheetId,
       )
     }
-  }, [definition, isSessionHydrated, pageIndex, responseId, responses])
+  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseId, responses])
 
   const visiblePages = useMemo(() => getVisiblePages(definition, responses), [definition, responses])
   const visiblePageIndexes = useMemo(() => visiblePages.map((page) => definition.pages.indexOf(page)), [definition.pages, visiblePages])
@@ -1756,7 +1757,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     setResponses({})
     setPageIndex(0)
     setStatus('New response started')
-    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, nextId)
+    localStorage.setItem(responseIdStorageKey, nextId)
   }
 
   const handleExportJson = () => {
