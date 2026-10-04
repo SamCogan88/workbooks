@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { createElement, Fragment } from 'react'
+import { createElement, Fragment, useState } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
+import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { createBuilderId } from './lib/builderIds'
@@ -76,6 +76,45 @@ describe('online workbook join routing', () => {
     expect(screen.queryByRole('heading', { name: 'First workbook' })).toBeNull()
 
     await waitFor(() => expect(mockedLoadPublishedWorksheet).toHaveBeenLastCalledWith('CODE2'))
+  })
+})
+
+describe('modal overlay accessibility', () => {
+  it('traps focus, makes siblings inert, closes with Escape and restores focus', () => {
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return createElement('div', null,
+        createElement('button', { type: 'button', onClick: () => setOpen(true) }, 'Open dialog'),
+        createElement(ModalOverlay, { isOpen: open, onClose: () => setOpen(false), labelledBy: 'test-dialog-title' },
+          createElement('div', null,
+            createElement('h2', { id: 'test-dialog-title' }, 'Test dialog'),
+            createElement('button', { type: 'button' }, 'First action'),
+            createElement('button', { type: 'button', 'data-modal-initial-focus': true }, 'Close dialog'),
+          ),
+        ),
+      )
+    }
+
+    render(createElement(Harness))
+    const trigger = screen.getByRole('button', { name: 'Open dialog' })
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    expect(screen.getByRole('dialog', { name: 'Test dialog' })).toBeTruthy()
+    expect(trigger.getAttribute('inert')).toBe('')
+    expect(trigger.getAttribute('aria-hidden')).toBe('true')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close dialog' }))
+
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'First action' }))
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close dialog' }))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Test dialog' })).toBeNull()
+    expect(trigger.getAttribute('inert')).toBeNull()
+    expect(trigger.getAttribute('aria-hidden')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
   })
 })
 

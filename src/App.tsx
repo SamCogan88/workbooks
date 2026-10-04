@@ -1,6 +1,6 @@
 import { HashRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent, type ReactNode } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import LinkExtension from '@tiptap/extension-link'
@@ -300,6 +300,100 @@ function getBlockErrorId(blockId: string) {
 
 function getBlockWrapperId(blockId: string) {
   return `worksheet-block-${blockId}`
+}
+
+const MODAL_FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'textarea:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+function getModalFocusableElements(container: HTMLElement) {
+  return Array.from(container.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE_SELECTOR))
+    .filter((element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true')
+}
+
+function useModalBehavior(isOpen: boolean, dialogRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
+  const previousActiveElementRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!isOpen) return undefined
+
+    const dialog = dialogRef.current
+    if (!dialog) return undefined
+
+    previousActiveElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const siblingStates = Array.from(dialog.parentElement?.children || [])
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialog)
+      .map((element) => ({
+        element,
+        inert: element.getAttribute('inert'),
+        ariaHidden: element.getAttribute('aria-hidden'),
+      }))
+
+    siblingStates.forEach(({ element }) => {
+      element.setAttribute('inert', '')
+      element.setAttribute('aria-hidden', 'true')
+    })
+
+    const focusTarget = dialog.querySelector<HTMLElement>('[data-modal-initial-focus]') ?? getModalFocusableElements(dialog)[0] ?? dialog
+    focusTarget.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusableElements = getModalFocusableElements(dialog)
+      if (focusableElements.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const firstElement = focusableElements[0]
+      const lastElement = focusableElements[focusableElements.length - 1]
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault()
+        lastElement.focus()
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault()
+        firstElement.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      siblingStates.forEach(({ element, inert, ariaHidden }) => {
+        if (inert === null) element.removeAttribute('inert')
+        else element.setAttribute('inert', inert)
+        if (ariaHidden === null) element.removeAttribute('aria-hidden')
+        else element.setAttribute('aria-hidden', ariaHidden)
+      })
+      previousActiveElementRef.current?.focus()
+    }
+  }, [dialogRef, isOpen, onClose])
+}
+
+export function ModalOverlay({ isOpen, onClose, labelledBy, className, children }: { isOpen: boolean; onClose: () => void; labelledBy: string; className?: string; children?: ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalBehavior(isOpen, dialogRef, onClose)
+
+  if (!isOpen) return null
+
+  return (
+    <div ref={dialogRef} tabIndex={-1} className={className || 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4'} role="dialog" aria-modal="true" aria-labelledby={labelledBy}>
+      {children}
+    </div>
+  )
 }
 
 function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
@@ -2027,6 +2121,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     navigate('/builder')
   }
 
+  const closeCompletionDialog = useCallback(() => {
+    setShowCompletionDialog(false)
+  }, [])
+
   const handleReturnToStart = () => {
     setShowCompletionDialog(false)
     navigate('/')
@@ -2170,11 +2268,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         </aside>
       </div>
 
-      {showCompletionDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+      <ModalOverlay isOpen={showCompletionDialog} onClose={closeCompletionDialog} labelledBy="completion-dialog-title">
           <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Worksheet complete</p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
+            <h2 id="completion-dialog-title" className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
             <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{completionMessage}</p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -2186,15 +2283,15 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
               </button>
               <button
                 type="button"
-                onClick={() => setShowCompletionDialog(false)}
+                data-modal-initial-focus
+                onClick={closeCompletionDialog}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
               >
                 Close
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
     </main>
   )
 }
@@ -5200,6 +5297,9 @@ function BuilderPage({
   const [pastedJson, setPastedJson] = useState('')
   const [pastedJsonError, setPastedJsonError] = useState('')
   const [importFileError, setImportFileError] = useState('')
+  const closeImportDialog = useCallback(() => {
+    setShowImportDialog(false)
+  }, [])
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -5902,8 +6002,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </section>
       )}
 
-      {showImportDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8" role="dialog" aria-modal="true" aria-labelledby="import-json-title">
+      <ModalOverlay isOpen={showImportDialog} onClose={closeImportDialog} labelledBy="import-json-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
           <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -5911,7 +6010,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                 <h2 id="import-json-title" className="mt-1 text-2xl font-bold text-slate-900">Load JSON</h2>
                 <p className="mt-2 text-sm text-slate-600">Upload a JSON file or paste the full workbook definition below.</p>
               </div>
-              <button type="button" aria-label="Close JSON import" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
+              <button type="button" data-modal-initial-focus aria-label="Close JSON import" onClick={closeImportDialog} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
             </div>
 
             <label className="mt-6 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50">
@@ -5949,12 +6048,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
             {pastedJsonError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{pastedJsonError}</p>}
 
             <div className="mt-5 flex justify-end gap-3">
-              <button type="button" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
+              <button type="button" onClick={closeImportDialog} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
               <button type="button" onClick={importPastedJson} disabled={!pastedJson.trim()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">Import pasted JSON</button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
         <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
