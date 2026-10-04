@@ -27,9 +27,17 @@ export function stripHtml(value: string) {
   return value.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim()
 }
 
+export function hasMeaningfulRichTextValue(value: string) {
+  return stripHtml(value).length > 0
+}
+
+export function normalizeRichTextResponse(value: string) {
+  return hasMeaningfulRichTextValue(value) ? value : ''
+}
+
 export function hasMeaningfulResponseValue(value: unknown): boolean {
   if (value === undefined || value === null) return false
-  if (typeof value === 'string') return stripHtml(value).length > 0
+  if (typeof value === 'string') return value.trim().length > 0
   if (typeof value === 'number') return Number.isFinite(value)
   if (typeof value === 'boolean') return true
   if (Array.isArray(value)) return value.some(hasMeaningfulResponseValue)
@@ -304,8 +312,9 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
     case 'randomizer':
     case 'shortAnswer':
     case 'fillBlank':
+      return typeof value === 'string' && value.trim().length > 0
     case 'richText':
-      return typeof value === 'string' && stripHtml(value).length > 0
+      return typeof value === 'string' && hasMeaningfulRichTextValue(value)
     case 'singleSelect':
     case 'verdict':
       return typeof value === 'string' && value.trim().length > 0

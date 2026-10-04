@@ -92,6 +92,7 @@ import {
   hasMeaningfulResponseValue,
   isConditionSourceBlock,
   isResponseProducingBlock,
+  normalizeRichTextResponse,
   normalizeWorksheetDefinitionStableIds,
   stripHtml,
 } from './lib/worksheetLogic'
@@ -2596,7 +2597,7 @@ function RichTextSurface({
     editable,
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
-      onChange(editor.getHTML())
+      onChange(normalizeRichTextResponse(editor.getHTML()))
     },
   })
 
@@ -2788,7 +2789,7 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
     )
   }
 
-  const currentValue = typeof responses[block.id] === 'string' ? responses[block.id] : ''
+  const currentValue = typeof responses[block.id] === 'string' ? normalizeRichTextResponse(responses[block.id]) : ''
 
   return (
     <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-slate-50'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>

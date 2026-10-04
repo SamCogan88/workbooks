@@ -7,7 +7,7 @@ import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -686,6 +686,18 @@ describe('required page completion', () => {
     } finally {
       consoleError.mockRestore()
     }
+  })
+
+  it('treats angle-bracket plain text as meaningful but empty rich text as blank', () => {
+    const shortText = { id: 'plain', type: 'shortText', required: true } as any
+    const richText = { id: 'rich', type: 'richText', required: true } as any
+
+    expect(hasMeaningfulResponseValue('<3>')).toBe(true)
+    expect(isRequiredBlockSatisfied(shortText, { plain: '<x>' })).toBe(true)
+    expect(isRequiredBlockSatisfied(richText, { rich: '<p></p>' })).toBe(false)
+    expect(isRequiredBlockSatisfied(richText, { rich: '<p>&nbsp;</p>' })).toBe(false)
+    expect(isRequiredBlockSatisfied(richText, { rich: '<p><strong>Done</strong></p>' })).toBe(true)
+    expect(normalizeRichTextResponse('<p></p>')).toBe('')
   })
 
   it('treats required response blocks as incomplete until they have meaningful values', () => {
