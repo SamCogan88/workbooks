@@ -1,4 +1,4 @@
-import type { GroupedResponseSet, WorksheetDefinition, WorksheetResponse, WorksheetSynthesisSettings } from './types'
+import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetResponse, WorksheetSynthesisSettings } from './types'
 import { getLabeledConfigItems, getNumericRange, numberInRange } from './worksheetLogic'
 
 export interface ResolvedSynthesisConfig {
@@ -11,6 +11,7 @@ export interface ResolvedSynthesisConfig {
 
 const DEFAULT_GROUP_LABEL = 'Response group'
 const DEFAULT_UNGROUPED_LABEL = 'All responses'
+const MISSING_GROUP_KEY = '\u0000missing-group-value'
 const UNSPECIFIED_GROUP_LABEL = 'Unspecified'
 
 export function normaliseGroupingValue(value: string = '') {
@@ -19,6 +20,11 @@ export function normaliseGroupingValue(value: string = '') {
 
 function getWorksheetBlocks(definition: WorksheetDefinition) {
   return definition.pages.flatMap((page) => page.blocks)
+}
+
+function getWorksheetBlock(definition: WorksheetDefinition, blockId?: string) {
+  if (!blockId) return undefined
+  return getWorksheetBlocks(definition).find((block) => block.id === blockId)
 }
 
 function hasBlock(definition: WorksheetDefinition, blockId?: string) {
@@ -47,13 +53,33 @@ function toDisplayGroupingValue(value: unknown): string {
   return ''
 }
 
-function getConfiguredGroupingValue(response: WorksheetResponse, groupByBlockId?: string) {
+function matchesOptionValue(value: unknown, option: { id: string; label: string }) {
+  return value === option.id || value === option.label
+}
+
+function toConfiguredGroupingValue(value: unknown, block?: WorksheetBlock): string {
+  if (block?.type !== 'checklist' || !Array.isArray(value)) return toDisplayGroupingValue(value)
+
+  const options = getLabeledConfigItems(block.config?.options, 'option')
+  const orderedValues = options
+    .filter((option) => value.some((entry) => matchesOptionValue(entry, option)))
+    .map((option) => option.label)
+  const extraValues = value
+    .filter((entry) => !options.some((option) => matchesOptionValue(entry, option)))
+    .map((entry) => toDisplayGroupingValue(entry))
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
+
+  return [...orderedValues, ...extraValues].join(', ')
+}
+
+function getConfiguredGroupingValue(response: WorksheetResponse, definition: WorksheetDefinition, groupByBlockId?: string) {
   if (!groupByBlockId) return ''
-  return toDisplayGroupingValue(response.responses?.[groupByBlockId])
+  return toConfiguredGroupingValue(response.responses?.[groupByBlockId], getWorksheetBlock(definition, groupByBlockId))
 }
 
 function getCompatibilityGroupingValue(response: WorksheetResponse, definition: WorksheetDefinition) {
-  const fromResponse = getConfiguredGroupingValue(response, getCompatibilityGroupByBlockId(definition))
+  const fromResponse = getConfiguredGroupingValue(response, definition, getCompatibilityGroupByBlockId(definition))
   if (fromResponse) return fromResponse
   return toDisplayGroupingValue(response.subject)
 }
@@ -106,7 +132,7 @@ export function resolveSynthesisConfig(definition: WorksheetDefinition): Resolve
 
 export function getResponseLabel(response: WorksheetResponse, definition: WorksheetDefinition) {
   const config = resolveSynthesisConfig(definition)
-  const configuredLabel = getConfiguredGroupingValue(response, config.responseLabelBlockId)
+  const configuredLabel = getConfiguredGroupingValue(response, definition, config.responseLabelBlockId)
   if (configuredLabel) return configuredLabel
   if (typeof response.group === 'string' && response.group.trim()) return response.group.trim()
   if (typeof response.subject === 'string' && response.subject.trim()) return response.subject.trim()
@@ -133,11 +159,11 @@ export function groupResponsesByKey(definition: WorksheetDefinition, responses: 
 
   for (const response of responses) {
     const rawValue = config.groupByBlockId
-      ? getConfiguredGroupingValue(response, config.groupByBlockId)
+      ? getConfiguredGroupingValue(response, definition, config.groupByBlockId)
       : getCompatibilityGroupingValue(response, definition)
 
     const displayLabel = rawValue || UNSPECIFIED_GROUP_LABEL
-    const key = rawValue ? normaliseGroupingValue(rawValue) : 'unspecified'
+    const key = rawValue ? normaliseGroupingValue(rawValue) : MISSING_GROUP_KEY
 
     if (!groups.has(key)) {
       groups.set(key, {

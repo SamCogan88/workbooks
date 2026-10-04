@@ -35,6 +35,7 @@ const synthesisDefinition = {
       blocks: [
         { id: 'group-name', type: 'shortText', label: 'Group name' },
         { id: 'tool-name', type: 'randomizer', label: 'Tool' },
+        { id: 'features', type: 'checklist', label: 'Features', config: { options: [{ id: 'a', label: 'Alpha' }, { id: 'b', label: 'Beta' }, { id: 'c', label: 'Gamma' }] } },
         { id: 'radar-eval', type: 'radar', label: 'Radar' },
         { id: 'quadrant-map', type: 'quadrant', label: 'Quadrant' },
       ],
@@ -103,6 +104,16 @@ describe('worksheet engine core logic', () => {
     expect(aggregateRadarValues(responses, ['Ease'])).toEqual({ Ease: 8 })
   })
 
+  it('excludes missing radar values from averages', () => {
+    const responses = [
+      createResponse('response-1', { 'radar-eval': { Ease: 8 } }),
+      createResponse('response-2', {}),
+      createResponse('response-3', { 'radar-eval': {} }),
+    ]
+
+    expect(aggregateRadarValues(responses, ['Ease'])).toEqual({ Ease: 8 })
+  })
+
   it('creates separate groups for different grouping values', () => {
     const responses = [
       createResponse('response-1', { 'tool-name': 'Diffit', 'group-name': 'Group 1' }),
@@ -142,6 +153,36 @@ describe('worksheet engine core logic', () => {
     const grouped = groupResponsesByKey(synthesisDefinition as any, [response]).groups
 
     expect(grouped[0]).toMatchObject({ label: 'Unspecified', isMissingValue: true })
+  })
+
+  it('keeps real Unspecified answers separate from missing grouping values', () => {
+    const responses = [
+      createResponse('response-1', { 'tool-name': 'Unspecified' }),
+      createResponse('response-2', {}),
+    ]
+
+    const grouped = groupResponsesByKey(synthesisDefinition as any, responses).groups
+
+    expect(grouped).toHaveLength(2)
+    expect(grouped.filter((group) => group.label === 'Unspecified')).toHaveLength(2)
+    expect(grouped.map((group) => group.isMissingValue)).toEqual([false, true])
+  })
+
+  it('groups checklist values by configured option order', () => {
+    const definition = {
+      ...synthesisDefinition,
+      synthesis: { ...synthesisDefinition.synthesis, groupByBlockId: 'features', groupLabel: 'Features' },
+    }
+    const responses = [
+      createResponse('response-1', { features: ['b', 'a'] }),
+      createResponse('response-2', { features: ['a', 'b'] }),
+    ]
+
+    const grouped = groupResponsesByKey(definition as any, responses).groups
+
+    expect(grouped).toHaveLength(1)
+    expect(grouped[0].label).toBe('Alpha, Beta')
+    expect(grouped[0].responses).toHaveLength(2)
   })
 
   it('falls back to a neutral group when no grouping is configured', () => {
@@ -232,6 +273,16 @@ describe('worksheet engine core logic', () => {
     const aggregate = aggregateQuadrantMean(responses)
     expect(aggregate.x).toBe(70)
     expect(aggregate.y).toBe(30)
+  })
+
+  it('excludes missing quadrant coordinates from means', () => {
+    const responses = [
+      { responses: { 'quadrant-map': { x: 80, y: 20 } } },
+      { responses: {} },
+      { responses: { 'quadrant-map': { x: '', y: undefined } } },
+    ] as any
+
+    expect(aggregateQuadrantMean(responses)).toEqual({ x: 80, y: 20 })
   })
 
   it('maps a top-click to a high-risk y coordinate instead of inverting it', () => {
