@@ -116,10 +116,7 @@ export async function loadPublishedWorksheet(publicCode: string) {
   const client = requireSupabase()
   await ensureAnonymousLearnerSession()
   const { data, error } = await client
-    .from('worksheets')
-    .select('*')
-    .eq('public_code', publicCode.trim().toUpperCase())
-    .eq('status', 'published')
+    .rpc('get_published_worksheet_by_code', { lookup_public_code: publicCode.trim().toUpperCase() })
     .single<OnlineWorksheetRow>()
 
   if (error) throw error
