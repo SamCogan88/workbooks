@@ -25,6 +25,10 @@ function comparableValue(value: unknown) {
   return typeof value === 'string' ? value.trim().toLocaleLowerCase() : value
 }
 
+export function getMatchingPairKey(pair: { id?: unknown; prompt?: unknown }, index: number) {
+  return String(pair.id ?? `${pair.prompt}-${index}`)
+}
+
 export function isConditionMet(condition: WorksheetCondition | undefined, responses: Record<string, unknown>) {
   if (!condition) return true
   const response = responses[condition.blockId]
@@ -195,7 +199,7 @@ export function isRequiredBlockSatisfied(block: WorksheetBlock, responses: Recor
       if (!value || typeof value !== 'object') return false
       const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
       return pairs.length > 0 && pairs.every((pair: { id?: unknown; prompt?: unknown }, index: number) => {
-        const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
+        const pairKey = getMatchingPairKey(pair, index)
         const selected = (value as Record<string, unknown>)[pairKey]
         return typeof selected === 'string' && selected.trim().length > 0
       })
@@ -239,8 +243,8 @@ export function getQuizSummary(definition: WorksheetDefinition, responses: Recor
       } else if (block.type === 'matching') {
         const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
         const selections = answer && typeof answer === 'object' ? answer as Record<string, unknown> : {}
-        isCorrect = pairs.length > 0 && pairs.every((pair: { id: string; prompt: string; answer: string }) =>
-          String(selections[pair.id] ?? selections[pair.prompt] ?? '').trim().toLowerCase() === String(pair.answer ?? '').trim().toLowerCase())
+        isCorrect = pairs.length > 0 && pairs.every((pair: { id?: unknown; prompt?: unknown; answer?: unknown }, index: number) =>
+          String(selections[getMatchingPairKey(pair, index)] ?? '').trim().toLowerCase() === String(pair.answer ?? '').trim().toLowerCase())
       } else if (block.type === 'fillBlank') {
         const acceptedAnswers = Array.isArray(block.config?.answers)
           ? block.config.answers

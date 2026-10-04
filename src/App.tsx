@@ -70,6 +70,7 @@ import {
   getBoardPresetColumns,
   canNavigateToVisiblePage,
   getImageDisplayConfig,
+  getMatchingPairKey,
   getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
   getQuizSummary,
@@ -3312,12 +3313,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
       const options = Array.isArray(block.config?.options) ? block.config.options : []
       const currentSelection = (responses[block.id] && typeof responses[block.id] === 'object') ? responses[block.id] : {}
-      const correctAnswerMap = Object.fromEntries(pairs.map((pair: any) => [String(pair.id ?? pair.prompt), String(pair.answer ?? '')]))
+      const correctAnswerMap = Object.fromEntries(pairs.map((pair: any, index: number) => [getMatchingPairKey(pair, index), String(pair.answer ?? '')]))
       return (
         <div className="space-y-3">
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
           {pairs.map((pair: any, index: number) => {
-            const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
+            const pairKey = getMatchingPairKey(pair, index)
             const selected = currentSelection[pairKey] ?? ''
             return (
               <div key={pairKey} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_210px]">

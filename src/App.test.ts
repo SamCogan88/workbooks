@@ -315,6 +315,54 @@ describe('worksheet quiz summary', () => {
     expect(summary.items[0].isCorrect).toBe(true)
     expect(summary.items[1].isCorrect).toBe(false)
   })
+
+  it('scores matching pairs without ids using the rendered pair keys', () => {
+    const definition = {
+      id: 'matching-test',
+      version: 1,
+      title: 'Matching test',
+      description: 'A matching quiz',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [
+        {
+          id: 'page-1',
+          title: 'Quiz page',
+          blocks: [
+            {
+              id: 'matching-1',
+              type: 'matching',
+              label: 'Match the terms',
+              config: {
+                pairs: [
+                  { prompt: 'Photosynthesis', answer: 'Light energy' },
+                  { prompt: 'Mitochondria', answer: 'Cellular respiration' },
+                ],
+                options: ['Light energy', 'Cellular respiration'],
+                points: 4,
+              },
+            },
+          ],
+        },
+      ],
+    } as any
+
+    const summary = getQuizSummary(definition, {
+      'matching-1': {
+        'Photosynthesis-0': 'Light energy',
+        'Mitochondria-1': 'Cellular respiration',
+      },
+    })
+
+    expect(summary.totalScore).toBe(4)
+    expect(summary.percent).toBe(100)
+    expect(summary.items[0].isCorrect).toBe(true)
+  })
 })
 
 describe('stored worksheet sessions', () => {
