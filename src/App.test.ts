@@ -1,18 +1,19 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { createElement, Fragment } from 'react'
+import { createElement, Fragment, useState } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
-import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, SynthesisViewer, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { createBuilderId } from './lib/builderIds'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { formatDocumentTitle, getRouteDocumentTitle } from './lib/documentTitle'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
+import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, reorderBlocks, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -76,6 +77,65 @@ describe('online workbook join routing', () => {
     expect(screen.queryByRole('heading', { name: 'First workbook' })).toBeNull()
 
     await waitFor(() => expect(mockedLoadPublishedWorksheet).toHaveBeenLastCalledWith('CODE2'))
+  })
+})
+
+afterEach(cleanup)
+
+describe('document titles', () => {
+  it('uses the app name for the shell title', () => {
+    expect(formatDocumentTitle()).toBe('Workbooks')
+  })
+
+  it('names static routes descriptively', () => {
+    expect(getRouteDocumentTitle('/builder', 'Climate reflection')).toBe('Worksheet Builder – Workbooks')
+    expect(getRouteDocumentTitle('/join/ABC123')).toBe('Join Workbook – Workbooks')
+    expect(getRouteDocumentTitle('/teacher/workbooks/workbook-1/report')).toBe('Workbook Responses – Workbooks')
+  })
+
+  it('includes the active worksheet title on worksheet routes', () => {
+    expect(getRouteDocumentTitle('/worksheet', 'Climate reflection')).toBe('Climate reflection – Workbooks')
+    expect(getRouteDocumentTitle('/preview', 'Climate reflection')).toBe('Preview Climate reflection – Workbooks')
+    expect(getRouteDocumentTitle('/report', 'Climate reflection')).toBe('Report for Climate reflection – Workbooks')
+  })
+})
+
+describe('modal overlay accessibility', () => {
+  it('traps focus, makes siblings inert, closes with Escape and restores focus', () => {
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return createElement('div', null,
+        createElement('button', { type: 'button', onClick: () => setOpen(true) }, 'Open dialog'),
+        createElement(ModalOverlay, { isOpen: open, onClose: () => setOpen(false), labelledBy: 'test-dialog-title' },
+          createElement('div', null,
+            createElement('h2', { id: 'test-dialog-title' }, 'Test dialog'),
+            createElement('button', { type: 'button' }, 'First action'),
+            createElement('button', { type: 'button', 'data-modal-initial-focus': true }, 'Close dialog'),
+          ),
+        ),
+      )
+    }
+
+    render(createElement(Harness))
+    const trigger = screen.getByRole('button', { name: 'Open dialog' })
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    expect(screen.getByRole('dialog', { name: 'Test dialog' })).toBeTruthy()
+    expect(trigger.getAttribute('inert')).toBe('')
+    expect(trigger.getAttribute('aria-hidden')).toBe('true')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close dialog' }))
+
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'First action' }))
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close dialog' }))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Test dialog' })).toBeNull()
+    expect(trigger.getAttribute('inert')).toBeNull()
+    expect(trigger.getAttribute('aria-hidden')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
   })
 })
 
@@ -476,6 +536,27 @@ describe('builder option reference integrity', () => {
   })
 })
 
+describe('builder block ordering', () => {
+  const blocks = [
+    { id: 'intro', type: 'content', title: 'Intro' },
+    { id: 'question', type: 'shortText', label: 'Question' },
+    { id: 'follow-up', type: 'longText', label: 'Follow up' },
+  ] as any
+
+  it('moves a block up using the shared insert-index reorder helper', () => {
+    expect(reorderBlocks(blocks, 'question', 0).map((block) => block.id)).toEqual(['question', 'intro', 'follow-up'])
+  })
+
+  it('moves a block down using the same insert-index semantics as drag-and-drop', () => {
+    expect(reorderBlocks(blocks, 'question', 3).map((block) => block.id)).toEqual(['intro', 'follow-up', 'question'])
+  })
+
+  it('returns the same list when a move would not change order', () => {
+    expect(reorderBlocks(blocks, 'intro', 0)).toBe(blocks)
+    expect(reorderBlocks(blocks, 'missing', 1)).toBe(blocks)
+  })
+})
+
 describe('image prompt display configuration', () => {
   it('defaults existing image prompts safely to contain and large', () => {
     expect(getImageDisplayConfig({ id: 'image', type: 'imagePrompt', config: { imageUrl: '/diagram.png' } })).toEqual({ imageFit: 'contain', imageSize: 'large' })
@@ -489,6 +570,32 @@ describe('image prompt display configuration', () => {
 })
 
 describe('visual thinking blocks', () => {
+  it('names learner-facing sliders and matching controls from their prompts', () => {
+    const update = vi.fn()
+
+    render(createElement('div', null,
+      renderBlock({ id: 'matrix', type: 'matrix', label: 'Evaluate criteria', config: { rows: ['Clarity', 'Accuracy'], min: 1, max: 5 } }, {}, update),
+      renderBlock({ id: 'rating', type: 'rating', label: 'Overall confidence', config: { min: 0, max: 10, defaultValue: 5 } }, {}, update),
+      renderBlock({ id: 'radar', type: 'radar', label: 'Tool profile', config: { dimensions: ['Ease', 'Impact'] } }, {}, update),
+      renderBlock({ id: 'matching', type: 'matching', label: 'Match terms', config: { pairs: [{ id: 'term-a', prompt: 'Photosynthesis' }], options: ['Plants make food'] } }, {}, update),
+    ))
+
+    expect(screen.getByRole('slider', { name: 'Evaluate criteria: Clarity' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Evaluate criteria: Accuracy' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Overall confidence' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Tool profile: Ease' })).toBeTruthy()
+    expect(screen.getByRole('slider', { name: 'Tool profile: Impact' })).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Match terms: Photosynthesis' })).toBeTruthy()
+  })
+
+  it('names rich text response editors from the block prompt', async () => {
+    const update = vi.fn()
+
+    render(renderBlock({ id: 'reflection', type: 'richText', label: 'Reflection', config: { mode: 'response' } }, {}, update))
+
+    expect(await screen.findByRole('textbox', { name: 'Reflection' })).toBeTruthy()
+  })
+
   it('creates continuum defaults and requires intentional completion plus configured rationale', () => {
     const config = getDefaultBlockConfig('continuum', 10)
     expect(config).toMatchObject({ leftLabel: 'Low', rightLabel: 'High', defaultValue: 50 })
@@ -507,6 +614,40 @@ describe('visual thinking blocks', () => {
     expect(range.getAttribute('max')).toBe('100')
     fireEvent.change(range, { target: { value: '72' } })
     expect(update).toHaveBeenCalledWith('continuum', { position: 72 })
+  })
+
+  it('places hotspot answers with the keyboard', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'hotspot', type: 'hotspot', label: 'Find the valve', config: { imageUrl: '/diagram.png' } }, {}, update))
+
+    const target = screen.getByRole('button', { name: 'Find the valve hotspot image' })
+    target.focus()
+    fireEvent.keyDown(target, { key: 'ArrowRight' })
+    fireEvent.keyDown(target, { key: 'ArrowDown', shiftKey: true })
+    fireEvent.keyDown(target, { key: 'Enter' })
+
+    expect(update).toHaveBeenCalledWith('hotspot', [{ x: 51, y: 60 }])
+  })
+
+  it('associates required errors with quiz, confidence and image controls', () => {
+    const update = vi.fn()
+    const { container, unmount } = render(createElement('div', null,
+      renderBlock({ id: 'choice', type: 'multipleChoice', required: true, label: 'Pick one', config: { options: ['A', 'B'], correctAnswer: 'A' } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'tf', type: 'trueFalse', required: true, label: 'True statement', config: { correctAnswer: true } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'short', type: 'shortAnswer', required: true, label: 'Term', config: { correctAnswer: 'Answer' } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'confidence', type: 'confidence', required: true, label: 'Confidence', config: { options: ['Low', 'High'] } }, {}, update, { showRequiredError: true }),
+      renderBlock({ id: 'image', type: 'imagePrompt', required: true, label: 'Annotate image', config: { imageUrl: '/diagram.png' } }, {}, update, { showRequiredError: true }),
+    ))
+
+    expect(screen.getByRole('group', { name: 'Pick one' }).getAttribute('aria-describedby')).toBe('worksheet-block-error-choice')
+    expect(screen.getByText('Choose one answer to continue.').id).toBe('worksheet-block-error-choice')
+    expect(screen.getByRole('group', { name: 'True statement' }).getAttribute('aria-describedby')).toBe('worksheet-block-error-tf')
+    expect(screen.getByRole('textbox', { name: 'Term' }).closest('label')?.getAttribute('aria-describedby')).toBe('worksheet-block-error-short')
+    expect(screen.getByRole('button', { name: /Low/ }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('group', { name: /Confidence/ }).getAttribute('aria-describedby')).toBe('worksheet-block-error-confidence')
+    expect(screen.getByRole('textbox', { name: 'Annotate image' }).getAttribute('aria-required')).toBe('true')
+    expect(container.querySelector('[aria-describedby="worksheet-block-error-image"]')).toBeTruthy()
+    unmount()
   })
 
   it('requires every stable-ID decision matrix cell and aggregates valid ratings', () => {
@@ -642,6 +783,33 @@ describe('worksheet page timer defaults', () => {
 })
 
 describe('student synthesis summary', () => {
+  it('exposes the active report mode on the segmented toggle', () => {
+    const definition = {
+      id: 'toggle-test',
+      version: 1,
+      title: 'Toggle test',
+      description: 'Checks report mode state',
+      settings: {
+        navigation: 'sequential',
+        allowPageJumping: false,
+        autosave: true,
+        showProgress: true,
+        exports: { json: true, pdf: true },
+      },
+      pages: [],
+    } as any
+
+    render(createElement(MemoryRouter, null, createElement(SynthesisViewer, { definition, initialMode: 'teacher' })))
+
+    expect(screen.getByRole('button', { name: 'Teacher report', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Student synthesis', pressed: false })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Student synthesis' }))
+
+    expect(screen.getByRole('button', { name: 'Student synthesis', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Teacher report', pressed: false })).toBeTruthy()
+  })
+
   it('creates an evidence-based synthesis without claiming a lone group is strongest', () => {
     const synthesis = buildStudentSynthesis([
       { key: 'diffit', label: 'Diffit', responses: [

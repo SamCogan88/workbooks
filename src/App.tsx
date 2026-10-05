@@ -1,6 +1,6 @@
-import { HashRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent, type ReactNode } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import LinkExtension from '@tiptap/extension-link'
@@ -64,6 +64,7 @@ import {
 import { createBuilderId } from './lib/builderIds'
 import { getPublishCardState } from './lib/builderPublishState'
 import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { formatDocumentTitle, getRouteDocumentTitle } from './lib/documentTitle'
 import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
 import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
@@ -101,6 +102,7 @@ import {
   isResponseProducingBlock,
   normalizeRichTextResponse,
   normalizeWorksheetDefinitionStableIds,
+  reorderBlocks,
   sanitizeWorksheetDefinition,
   stripHtml,
 } from './lib/worksheetLogic'
@@ -159,6 +161,18 @@ const BLOCK_TYPE_ICONS: Record<string, typeof FileText> = {
 function BlockTypeIcon({ type, className = 'h-4 w-4' }: { type: string; className?: string }) {
   const Icon = BLOCK_TYPE_ICONS[type] || FileText
   return <Icon aria-hidden="true" className={className} />
+}
+
+function useDocumentTitle(title: string) {
+  useEffect(() => {
+    document.title = title
+  }, [title])
+}
+
+function RouteDocumentTitle({ definition }: { definition: WorksheetDefinition }) {
+  const location = useLocation()
+  useDocumentTitle(getRouteDocumentTitle(location.pathname, definition.title))
+  return null
 }
 
 function getBlockDisplayLabel(block: WorksheetBlock) {
@@ -302,6 +316,100 @@ function getBlockWrapperId(blockId: string) {
   return `worksheet-block-${blockId}`
 }
 
+const MODAL_FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'textarea:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+function getModalFocusableElements(container: HTMLElement) {
+  return Array.from(container.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE_SELECTOR))
+    .filter((element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true')
+}
+
+function useModalBehavior(isOpen: boolean, dialogRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
+  const previousActiveElementRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!isOpen) return undefined
+
+    const dialog = dialogRef.current
+    if (!dialog) return undefined
+
+    previousActiveElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const siblingStates = Array.from(dialog.parentElement?.children || [])
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialog)
+      .map((element) => ({
+        element,
+        inert: element.getAttribute('inert'),
+        ariaHidden: element.getAttribute('aria-hidden'),
+      }))
+
+    siblingStates.forEach(({ element }) => {
+      element.setAttribute('inert', '')
+      element.setAttribute('aria-hidden', 'true')
+    })
+
+    const focusTarget = dialog.querySelector<HTMLElement>('[data-modal-initial-focus]') ?? getModalFocusableElements(dialog)[0] ?? dialog
+    focusTarget.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusableElements = getModalFocusableElements(dialog)
+      if (focusableElements.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const firstElement = focusableElements[0]
+      const lastElement = focusableElements[focusableElements.length - 1]
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault()
+        lastElement.focus()
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault()
+        firstElement.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      siblingStates.forEach(({ element, inert, ariaHidden }) => {
+        if (inert === null) element.removeAttribute('inert')
+        else element.setAttribute('inert', inert)
+        if (ariaHidden === null) element.removeAttribute('aria-hidden')
+        else element.setAttribute('aria-hidden', ariaHidden)
+      })
+      previousActiveElementRef.current?.focus()
+    }
+  }, [dialogRef, isOpen, onClose])
+}
+
+export function ModalOverlay({ isOpen, onClose, labelledBy, className, children }: { isOpen: boolean; onClose: () => void; labelledBy: string; className?: string; children?: ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalBehavior(isOpen, dialogRef, onClose)
+
+  if (!isOpen) return null
+
+  return (
+    <div ref={dialogRef} tabIndex={-1} className={className || 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4'} role="dialog" aria-modal="true" aria-labelledby={labelledBy}>
+      {children}
+    </div>
+  )
+}
+
 function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
   const requiredLabel = getRequiredLabel(block)
 
@@ -373,6 +481,7 @@ function App() {
 
   return (
     <HashRouter>
+      <RouteDocumentTitle definition={activeDefinition} />
       <TeacherAuthProvider>
         <div className="min-h-screen bg-slate-100 text-slate-900">
           <GlobalBreadcrumb />
@@ -427,6 +536,8 @@ function OnlineJoinPage() {
   const [workbook, setWorkbook] = useState<OnlineWorksheetRow | null>(null)
   const [loading, setLoading] = useState(Boolean(publicCode))
   const [error, setError] = useState('')
+
+  useDocumentTitle(workbook ? formatDocumentTitle(workbook.definition.title) : getRouteDocumentTitle('/join'))
 
   useEffect(() => {
     if (!publicCode) return
@@ -641,6 +752,8 @@ function OnlineTeacherReportPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reportNotice, setReportNotice] = useState('')
+
+  useDocumentTitle(workbook ? formatDocumentTitle(`${workbook.definition.title} Responses`) : getRouteDocumentTitle(`/teacher/workbooks/${workbookId}/report`))
 
   useEffect(() => {
     if (authLoading) return
@@ -2027,6 +2140,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     navigate('/builder')
   }
 
+  const closeCompletionDialog = useCallback(() => {
+    setShowCompletionDialog(false)
+  }, [])
+
   const handleReturnToStart = () => {
     setShowCompletionDialog(false)
     navigate('/')
@@ -2070,7 +2187,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         <div className="mb-6">
           <div className="mb-2 flex justify-between text-sm text-slate-600">
             <span>Page {currentVisiblePageIndex + 1} of {totalPages}</span>
-            <span>{status}</span>
+            <span role="status">{status}</span>
           </div>
           {currentTimer?.enabled && (
             <div className="mb-3 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -2081,20 +2198,21 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
               <span>{formatTimerValue(pageRemainingSeconds ?? currentTimer.durationSeconds)}</span>
             </div>
           )}
-          {navigationWarning && (
-            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              <p className="font-medium">Required responses are still missing.</p>
-              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
-            </div>
-          )}
-          {exportError && (
-            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {exportError}
-            </div>
-          )}
           <div className="h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
           </div>
+        </div>
+      )}
+
+      {navigationWarning && (
+        <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="font-medium">Required responses are still missing.</p>
+          <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
+        </div>
+      )}
+      {exportError && (
+        <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {exportError}
         </div>
       )}
 
@@ -2113,13 +2231,6 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
               })}</div>
             ))}
           </fieldset>
-
-          {navigationWarning && (
-            <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              <p className="font-medium">Please complete the required items before continuing.</p>
-              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
-            </div>
-          )}
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={currentVisiblePageIndex <= 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
@@ -2170,11 +2281,10 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
         </aside>
       </div>
 
-      {showCompletionDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+      <ModalOverlay isOpen={showCompletionDialog} onClose={closeCompletionDialog} labelledBy="completion-dialog-title">
           <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Worksheet complete</p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
+            <h2 id="completion-dialog-title" className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
             <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{completionMessage}</p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -2186,15 +2296,15 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
               </button>
               <button
                 type="button"
-                onClick={() => setShowCompletionDialog(false)}
+                data-modal-initial-focus
+                onClick={closeCompletionDialog}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
               >
                 Close
               </button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
     </main>
   )
 }
@@ -2255,6 +2365,7 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
                 min={1}
                 max={10}
                 value={value}
+                aria-label={`${block.label || 'Radar score'}: ${dimension.label}`}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => {
                   const next = { ...(responses[block.id] || {}), [dimension.id]: Number(event.target.value) }
@@ -2578,11 +2689,13 @@ function RichTextSurface({
   onChange,
   placeholder,
   editable = true,
+  ariaLabel,
 }: {
   value: string
   onChange: (value: string) => void
   placeholder: string
   editable?: boolean
+  ariaLabel?: string
 }) {
   const editor = useEditor({
     extensions: [
@@ -2603,6 +2716,9 @@ function RichTextSurface({
     ],
     content: value || '',
     editable,
+    editorProps: {
+      attributes: ariaLabel ? { 'aria-label': ariaLabel } : {},
+    },
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
       onChange(normalizeRichTextResponse(editor.getHTML()))
@@ -2809,6 +2925,7 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
         value={currentValue}
         onChange={(value) => updateResponse(block.id, value)}
         placeholder={block.config?.placeholder || 'Write and format your response here.'}
+        ariaLabel={block.label || 'Rich text response'}
         editable
       />
       {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
@@ -3199,6 +3316,74 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   )
 }
 
+function clampHotspotPercent(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value * 10) / 10))
+}
+
+function HotspotBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
+  const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
+  const lastPoint = points[points.length - 1]
+  const [keyboardPoint, setKeyboardPoint] = useState(() => ({
+    x: clampHotspotPercent(Number(lastPoint?.x ?? 50)),
+    y: clampHotspotPercent(Number(lastPoint?.y ?? 50)),
+  }))
+  const [showKeyboardPoint, setShowKeyboardPoint] = useState(false)
+  const statusId = `${block.id}-hotspot-status`
+  const instructionId = `${block.id}-hotspot-instructions`
+
+  const placePoint = (point: { x: number; y: number }) => {
+    updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
+      {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-describedby={`${instructionId} ${statusId}`}
+        aria-label={`${getBlockDisplayLabel(block)} hotspot image`}
+        className={`relative overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
+        onFocus={() => setShowKeyboardPoint(true)}
+        onBlur={() => setShowKeyboardPoint(false)}
+        onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect()
+          const point = { x: clampHotspotPercent(((event.clientX - rect.left) / rect.width) * 100), y: clampHotspotPercent(((event.clientY - rect.top) / rect.height) * 100) }
+          setKeyboardPoint(point)
+          placePoint(point)
+        }}
+        onKeyDown={(event) => {
+          const step = event.shiftKey ? 10 : 1
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            placePoint(keyboardPoint)
+            return
+          }
+          const deltas: Record<string, { x: number; y: number }> = {
+            ArrowUp: { x: 0, y: -step },
+            ArrowDown: { x: 0, y: step },
+            ArrowLeft: { x: -step, y: 0 },
+            ArrowRight: { x: step, y: 0 },
+          }
+          const delta = deltas[event.key]
+          if (!delta) return
+          event.preventDefault()
+          setShowKeyboardPoint(true)
+          setKeyboardPoint((current) => ({ x: clampHotspotPercent(current.x + delta.x), y: clampHotspotPercent(current.y + delta.y) }))
+        }}
+      >
+        <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
+        {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
+        {showKeyboardPoint && <span className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-blue-700 bg-white/70 shadow" style={{ left: `${keyboardPoint.x}%`, top: `${keyboardPoint.y}%` }} />}
+      </div>
+      <p id={instructionId} className="text-xs text-slate-500">Click the image, or focus it and use arrow keys to move the target then Enter or Space to place a hotspot.</p>
+      <div id={statusId} className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'No hotspots placed.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
+      {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
+    </div>
+  )
+}
+
 export function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void, options?: { showRequiredError?: boolean }) {
   const showRequiredError = options?.showRequiredError ?? false
 
@@ -3292,7 +3477,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const correctIds = options.filter(isCorrectOption).map((option) => option.id)
 
       return (
-        <fieldset className="space-y-3">
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Quiz question'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {allowMultiple ? (
@@ -3305,6 +3490,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                 <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
                   <input
                     type="checkbox"
+                    aria-required={block.required ? true : undefined}
                     checked={checked}
                     onChange={() => {
                       const nextValues = Array.isArray(selectedValues) ? [...selectedValues] : []
@@ -3325,12 +3511,13 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
               const showState = selectedValues !== undefined && isSelected
               return (
                 <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                  <input type="radio" name={block.id} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
+                  <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
                   <span>{option.label}</span>
                 </label>
               )
             })
           )}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">{allowMultiple ? 'Select at least one answer to continue.' : 'Choose one answer to continue.'}</p>}
           {selectedValues !== undefined && showFeedback && (
             <div className={`rounded-xl border px-3 py-2 text-sm ${JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String(options.filter(isCorrectOption).map((option) => option.label).join(', ') || 'Not set')}.`}
@@ -3345,7 +3532,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const correctAnswer = block.config?.correctAnswer
       const showFeedback = block.config?.showFeedback !== false
       return (
-        <fieldset className="space-y-3">
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'True or false'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {['True', 'False'].map((option) => {
@@ -3355,11 +3542,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             const showState = selectedAnswer !== undefined && isSelected
             return (
               <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                <input type="radio" name={block.id} checked={selectedAnswer === boolValue} onChange={() => updateResponse(block.id, boolValue)} />
+                <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={selectedAnswer === boolValue} onChange={() => updateResponse(block.id, boolValue)} />
                 <span>{option}</span>
               </label>
             )
           })}
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose true or false to continue.</p>}
           {selectedAnswer !== undefined && showFeedback && (
             <div className={`rounded-xl border px-3 py-2 text-sm ${selectedAnswer === correctAnswer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {selectedAnswer === correctAnswer ? 'Correct.' : `Incorrect. Correct answer: ${String(correctAnswer === true ? 'True' : 'False')}.`}
@@ -3376,15 +3564,18 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const normalizedSelected = selectedAnswer.trim().toLowerCase()
       const normalizedCorrect = correctAnswer.trim().toLowerCase()
       return (
-        <label className="block">
+        <label className="block" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <span className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Short answer'}</span>
           {block.config?.question && <p className="mb-2 text-xs text-slate-500">{block.config.question}</p>}
           <input
             value={selectedAnswer}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
+            aria-label={block.label || block.config?.question || 'Short answer'}
+            aria-required={block.required ? true : undefined}
+            className={`w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
             placeholder={block.config?.placeholder || 'Type your answer'}
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="mt-2 text-sm font-medium text-red-700">This response is required.</p>}
           {selectedAnswer && showFeedback && (
             <div className={`mt-3 rounded-xl border px-3 py-2 text-sm ${normalizedSelected === normalizedCorrect ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {normalizedSelected === normalizedCorrect ? 'Correct.' : `Incorrect. Correct answer: ${correctAnswer || 'Not set'}.`}
@@ -3410,6 +3601,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                 <div className="text-sm font-medium text-slate-700">{pair.prompt || pair.left || `Item ${index + 1}`}</div>
                 <select
                   value={selected}
+                  aria-label={`${block.label || 'Matching'}: ${pair.prompt || pair.left || `Item ${index + 1}`}`}
                   onChange={(event) => {
                     const next = { ...(responses[block.id] || {}), [pairKey]: event.target.value }
                     updateResponse(block.id, next)
@@ -3502,7 +3694,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         updateResponse(block.id, next)
       }
       return (
-        <div className="space-y-2">
+        <div className="space-y-2" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
           {currentOrder.map((option, index: number) => (
             <div key={`${block.id}-${option.id}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -3543,26 +3735,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'hotspot': {
-      const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
-      return (
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
-          {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
-          <div
-            className={`relative overflow-hidden rounded-xl border bg-slate-100 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect()
-              const point = { x: Math.round(((event.clientX - rect.left) / rect.width) * 1000) / 10, y: Math.round(((event.clientY - rect.top) / rect.height) * 1000) / 10 }
-              updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
-            }}
-          >
-            <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
-            {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
-          </div>
-          <div className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'Click the image to place a hotspot.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
-          {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
-        </div>
-      )
+      return <HotspotBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     }
     case 'numeric': {
       const value = responses[block.id] ?? ''
@@ -3595,10 +3768,10 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     case 'confidence': {
       const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
-        <fieldset className="space-y-3">
+        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
-          {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
+          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} aria-pressed={matchesOptionValue(responses[block.id], option)} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
         </fieldset>
       )
     }
@@ -3622,6 +3795,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                 max={max}
                 step={1}
                 value={Number(values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min)}
+                aria-label={`${block.label || 'Matrix rating'}: ${row.label}`}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => updateResponse(block.id, { ...values, [row.id]: Number(event.target.value) })}
                 className="w-full"
@@ -3638,7 +3812,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const containSizeClass = imageSize === 'small' ? 'max-h-48' : imageSize === 'medium' ? 'max-h-72' : imageSize === 'full' ? 'max-h-none' : 'max-h-[32rem]'
       const coverSizeClass = imageSize === 'small' ? 'h-48' : imageSize === 'medium' ? 'h-72' : imageSize === 'full' ? 'aspect-video' : 'h-[32rem]'
       return (
-        <div className="space-y-3">
+        <div className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           {block.config?.imageUrl && (
             <div className={`flex w-full justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 ${imageFit === 'cover' ? coverSizeClass : ''}`}>
               <img
@@ -3653,9 +3827,12 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
           <textarea
             value={responses[block.id] || ''}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            className="min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
+            aria-label={block.label || 'Image response'}
+            aria-required={block.required ? true : undefined}
+            className={`min-h-24 w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
             placeholder={block.config?.placeholder || 'Add your notes here'}
           />
+          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
         </div>
       )
       }
@@ -3718,6 +3895,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             max={block.config?.max ?? 10}
             step={block.config?.step ?? 1}
             value={responses[block.id] ?? block.config?.defaultValue ?? 5}
+            aria-label={block.label || 'Rating'}
             aria-required={block.required ? true : undefined}
             onChange={(event) => updateResponse(block.id, Number(event.target.value))}
             className="w-full"
@@ -4033,7 +4211,7 @@ function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x:
   pdf.circle(pointX, pointY, 4, 'FD')
 }
 
-function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
+export function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
   const [responses, setResponses] = useState<WorksheetResponse[]>(initialResponses || [])
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
@@ -4891,8 +5069,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
-            <button type="button" onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
+            <button type="button" aria-pressed={mode === 'student'} onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
+            <button type="button" aria-pressed={mode === 'teacher'} onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
           </div>
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800">
             <Upload className="h-4 w-4" />
@@ -4992,8 +5170,8 @@ function SynthesisViewer({ definition, initialMode = 'student', initialResponses
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
-            <button type="button" onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
+            <button type="button" aria-pressed={mode === 'student'} onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
+            <button type="button" aria-pressed={mode === 'teacher'} onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
           </div>
           <div className="flex gap-3">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800">
@@ -5200,6 +5378,9 @@ function BuilderPage({
   const [pastedJson, setPastedJson] = useState('')
   const [pastedJsonError, setPastedJsonError] = useState('')
   const [importFileError, setImportFileError] = useState('')
+  const closeImportDialog = useCallback(() => {
+    setShowImportDialog(false)
+  }, [])
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -5443,22 +5624,15 @@ function BuilderPage({
   }
 
   const moveBlockWithinPage = (blockId: string, insertIndex: number) => {
-    if (!selectedPage) return
-    const fromIndex = selectedPage.blocks.findIndex((block) => block.id === blockId)
-    if (fromIndex < 0) return
+    if (!selectedPage || !selectedPage.blocks.some((block) => block.id === blockId)) return
 
     setDefinition((previous) => {
       const nextDefinition = {
         ...previous,
         pages: previous.pages.map((page) => {
           if (page.id !== selectedPage.id) return page
-          const nextBlocks = [...page.blocks]
-          const [moved] = nextBlocks.splice(fromIndex, 1)
-          if (!moved) return page
-          const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
-          const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
-          nextBlocks.splice(boundedIndex, 0, moved)
-          return { ...page, blocks: nextBlocks }
+          const nextBlocks = reorderBlocks(page.blocks, blockId, insertIndex)
+          return nextBlocks === page.blocks ? page : { ...page, blocks: nextBlocks }
         }),
       }
       if (getFirstConditionOrderViolation(nextDefinition)) {
@@ -5871,7 +6045,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
       </div>
 
       {publishCardState !== 'hidden' && (
-        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+        <section role={publishCardState === 'error' ? 'alert' : 'status'} className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
           {publishCardState === 'published' && publishedWorkbook ? (
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
@@ -5902,8 +6076,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </section>
       )}
 
-      {showImportDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8" role="dialog" aria-modal="true" aria-labelledby="import-json-title">
+      <ModalOverlay isOpen={showImportDialog} onClose={closeImportDialog} labelledBy="import-json-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
           <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -5911,7 +6084,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                 <h2 id="import-json-title" className="mt-1 text-2xl font-bold text-slate-900">Load JSON</h2>
                 <p className="mt-2 text-sm text-slate-600">Upload a JSON file or paste the full workbook definition below.</p>
               </div>
-              <button type="button" aria-label="Close JSON import" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
+              <button type="button" data-modal-initial-focus aria-label="Close JSON import" onClick={closeImportDialog} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
             </div>
 
             <label className="mt-6 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50">
@@ -5949,12 +6122,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
             {pastedJsonError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{pastedJsonError}</p>}
 
             <div className="mt-5 flex justify-end gap-3">
-              <button type="button" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
+              <button type="button" onClick={closeImportDialog} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
               <button type="button" onClick={importPastedJson} disabled={!pastedJson.trim()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">Import pasted JSON</button>
             </div>
           </div>
-        </div>
-      )}
+      </ModalOverlay>
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
         <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -6431,6 +6603,32 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
                         Drag block to reorder
                       </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            moveBlockWithinPage(block.id, index - 1)
+                          }}
+                          disabled={index === 0}
+                          aria-label={`Move ${block.label || block.title || block.type} up`}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Move up
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            moveBlockWithinPage(block.id, index + 2)
+                          }}
+                          disabled={index === selectedPage.blocks.length - 1}
+                          aria-label={`Move ${block.label || block.title || block.type} down`}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Move down
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
