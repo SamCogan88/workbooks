@@ -4,10 +4,15 @@ import { createElement, Fragment } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { OnlineJoinPageRoute, QuadrantMiniChart, renderBlock } from './App'
+import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
+import { createBuilderId } from './lib/builderIds'
+import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
+import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { loadPublishedWorksheet } from './lib/onlineRepository'
 import { getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses } from './lib/worksheetLogic'
+import { addMatchingPairConfig, canNavigateToVisiblePage, formatQuizPercent, getAdjacentVisiblePageIndex, getBoardPresetColumns, getConditionOptions, getDefaultBlockConfig, getDefaultPageTimer, getFillBlankCorrectAnswerPatch, getImageDisplayConfig, getMissingRequiredBlockLocations, getMissingRequiredBlocks, getQuizSummary, getUnanswerableRequiredBlocks, getVisibleBlocks, getVisiblePages, getVisiblePagesWithBlocks, getWorksheetResponseImportError, hasMeaningfulResponseValue, isConditionMet, isConditionSourceBlock, isRequiredBlockSatisfied, isWorksheetDefinition, normalizeRichTextResponse, reconcileCategorizeResponse, reconcileRankingResponse, reconcileWorksheetResponses, sanitizeWorksheetDefinition } from './lib/worksheetLogic'
 
 vi.mock('./lib/onlineRepository', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/onlineRepository')>()
@@ -140,6 +145,9 @@ describe('worksheet block defaults', () => {
       showFeedback: true,
       points: 1,
     })
+    expect(getDefaultBlockConfig('verdict', 1)).toMatchObject({
+      options: ['Recommend', 'Use with caution', 'Do not recommend'],
+    })
     expect(getDefaultBlockConfig('fillBlank', 1)).toMatchObject({
       question: 'The capital of France is ______.',
       correctAnswer: 'Paris',
@@ -167,6 +175,14 @@ describe('worksheet block defaults', () => {
       buttonText: 'Open link',
       audience: 'student',
     })
+    expect((getDefaultBlockConfig('radar', 1).dimensions as unknown[])).toHaveLength(3)
+  })
+
+  it('keeps new matching pairs answerable from the choices list', () => {
+    expect(addMatchingPairConfig({ pairs: [], options: ['Existing'] }, 42)).toMatchObject({
+      pairs: [{ id: 'pair-42', prompt: 'New prompt', answer: 'Match 1' }],
+      options: ['Existing', 'Match 1'],
+    })
   })
 })
 
@@ -185,6 +201,83 @@ describe('quadrant summary chart', () => {
     expect(screen.getByText('Impact')).toBeTruthy()
     expect(screen.getByText('Lower confidence')).toBeTruthy()
     expect(screen.getByText('Higher confidence')).toBeTruthy()
+  })
+})
+
+describe('builder ids', () => {
+  it('uses crypto UUIDs for new page and block identifiers', () => {
+    const randomUUID = vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValueOnce('22222222-2222-4222-8222-222222222222')
+
+    expect(createBuilderId('page')).toBe('page-11111111-1111-4111-8111-111111111111')
+    expect(createBuilderId('block')).toBe('block-22222222-2222-4222-8222-222222222222')
+    expect(randomUUID).toHaveBeenCalledTimes(2)
+
+    randomUUID.mockRestore()
+  })
+})
+
+describe('builder publish card state', () => {
+  const workbook = { id: 'online-1', title: 'Published title', public_code: 'ABC123' } as any
+
+  it('marks a published workbook stale after definition edits', () => {
+    const publishedDefinition = JSON.stringify({ title: 'Published title', pages: [{ id: 'page-1' }] })
+    const editedDefinition = JSON.stringify({ title: 'Edited title', pages: [{ id: 'page-1' }] })
+
+    expect(getPublishCardState('', workbook, publishedDefinition, publishedDefinition)).toBe('published')
+    expect(getPublishCardState('', workbook, publishedDefinition, editedDefinition)).toBe('unpublished')
+  })
+
+  it('shows current publish errors once the previous result is cleared', () => {
+    const currentDefinition = JSON.stringify({ title: '', pages: [{ id: 'page-1' }] })
+    expect(getPublishCardState('Add a title and at least one page before publishing.', null, null, currentDefinition)).toBe('error')
+  })
+})
+
+describe('worksheet settings', () => {
+  const baseDefinition = {
+    id: 'settings-test',
+    version: 1,
+    title: 'Settings test',
+    description: '',
+    settings: {
+      navigation: 'sequential',
+      allowPageJumping: false,
+      autosave: true,
+      showProgress: true,
+      exports: { json: true, pdf: true },
+    },
+    pages: [],
+  } as any
+
+  it('honours disabled response export formats', () => {
+    const definition = {
+      ...baseDefinition,
+      settings: { ...baseDefinition.settings, exports: { json: false, pdf: false } },
+    }
+
+    expect(isResponseJsonExportEnabled(definition)).toBe(false)
+    expect(isResponsePdfExportEnabled(definition)).toBe(false)
+  })
+
+  it('keeps legacy response exports enabled when omitted', () => {
+    const definition = {
+      ...baseDefinition,
+      settings: { ...baseDefinition.settings, exports: undefined },
+    }
+
+    expect(isResponseJsonExportEnabled(definition)).toBe(true)
+    expect(isResponsePdfExportEnabled(definition)).toBe(true)
+  })
+
+  it('uses the worksheet autosave setting for online responses', () => {
+    const definition = {
+      ...baseDefinition,
+      settings: { ...baseDefinition.settings, autosave: false },
+    }
+
+    expect(shouldAutosaveOnlineResponse(definition)).toBe(false)
   })
 })
 
@@ -263,6 +356,123 @@ describe('conditional visibility', () => {
     const restored = JSON.parse(JSON.stringify(definition))
     expect(restored.pages[1].condition).toEqual({ blockId: 'lms', operator: 'equals', value: 'Teams' })
     expect(restored.pages[1].blocks[0].condition).toEqual({ blockId: 'lms', operator: 'equals', value: 'Teams' })
+  })
+
+  it('clears page and block conditions that reference deleted blocks', () => {
+    const cleaned = clearConditionsReferencingBlocks(definition, ['lms'])
+
+    expect(cleaned.pages[1].condition).toBeUndefined()
+    expect(cleaned.pages[1].blocks[0].condition).toBeUndefined()
+    expect(cleaned.pages[1].blocks[1].condition).toBeUndefined()
+  })
+
+  it('remaps duplicated page block conditions to duplicated source blocks', () => {
+    const blocks = remapBlockConditions([
+      { id: 'copy-source', type: 'singleSelect' },
+      { id: 'copy-dependent', type: 'content', condition: { blockId: 'source', operator: 'equals', value: 'Yes' } },
+    ], { source: 'copy-source', dependent: 'copy-dependent' })
+
+    expect(blocks[1].condition).toEqual({ blockId: 'copy-source', operator: 'equals', value: 'Yes' })
+  })
+
+  it('detects conditions moved before their source question', () => {
+    const reordered = {
+      ...definition,
+      pages: [definition.pages[1], definition.pages[0], definition.pages[2]],
+    }
+
+    expect(getFirstConditionOrderViolation(reordered)).toMatchObject({
+      kind: 'page',
+      ownerId: 'teams',
+      sourceBlockId: 'lms',
+    })
+  })
+})
+
+describe('builder option reference integrity', () => {
+  const definition = {
+    id: 'options-test',
+    version: 1,
+    title: 'Options test',
+    description: '',
+    settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+    pages: [
+      {
+        id: 'quiz',
+        title: 'Quiz',
+        blocks: [
+          {
+            id: 'question',
+            type: 'multipleChoice',
+            config: {
+              options: ['Option A', 'Option B', 'Option C'],
+              correctAnswer: 'Option A',
+              multipleAnswers: false,
+            },
+          },
+        ],
+      },
+      {
+        id: 'branch',
+        title: 'Branch',
+        condition: { blockId: 'question', operator: 'equals', value: 'Option A' },
+        blocks: [
+          { id: 'follow-up', type: 'content', condition: { blockId: 'question', operator: 'equals', value: 'Option B' } },
+        ],
+      },
+    ],
+  } as any
+
+  it('renames option references in answers and dependent conditions', () => {
+    const updated = updateBlockConfigWithOptionReferences(definition, 'question', {
+      options: ['Renamed A', 'Renamed B', 'Option C'],
+    })
+
+    expect(updated.pages[0]?.blocks[0]?.config?.correctAnswer).toBe('Renamed A')
+    expect(updated.pages[1].condition?.value).toBe('Renamed A')
+    expect(updated.pages[1]?.blocks[0]?.condition?.value).toBe('Renamed B')
+  })
+
+  it('clears references to removed options', () => {
+    const updated = updateBlockConfigWithOptionReferences(definition, 'question', {
+      options: ['Option B', 'Option C'],
+    })
+
+    expect(updated.pages[0]?.blocks[0]?.config?.correctAnswer).toBe('')
+    expect(updated.pages[1].condition).toBeUndefined()
+    expect(updated.pages[1]?.blocks[0]?.condition?.value).toBe('Option B')
+  })
+
+  it('keeps correct answer shape aligned with multiple answer mode', () => {
+    const multiple = updateBlockConfigWithOptionReferences(definition, 'question', { multipleAnswers: true })
+    expect(multiple.pages[0]?.blocks[0]?.config?.correctAnswer).toEqual(['Option A'])
+
+    const single = updateBlockConfigWithOptionReferences(multiple, 'question', { multipleAnswers: false })
+    expect(single.pages[0]?.blocks[0]?.config?.correctAnswer).toBe('Option A')
+  })
+
+  it('renames matching pair answers when choices change', () => {
+    const matchingDefinition = {
+      ...definition,
+      pages: [{
+        id: 'matching',
+        title: 'Matching',
+        blocks: [{
+          id: 'match',
+          type: 'matching',
+          config: {
+            options: ['Light energy', 'Cellular respiration'],
+            pairs: [{ id: 'pair-1', prompt: 'Photosynthesis', answer: 'Light energy' }],
+          },
+        }],
+      }],
+    } as any
+
+    const updated = updateBlockConfigWithOptionReferences(matchingDefinition, 'match', {
+      options: ['Sunlight', 'Cellular respiration'],
+    })
+
+    expect(updated.pages[0]?.blocks[0]?.config?.pairs[0]?.answer).toBe('Sunlight')
   })
 })
 
@@ -625,6 +835,97 @@ describe('stored worksheet sessions', () => {
   })
 })
 
+describe('worksheet quiz summary numeric sanitization', () => {
+  it('ignores invalid numeric answers and clamps quiz point values', () => {
+    const definition = {
+      pages: [{
+        blocks: [
+          { id: 'numeric', type: 'numeric', label: 'Estimate', config: { correctAnswer: '', points: -4 } },
+          { id: 'quiz', type: 'quiz', label: 'Choice', config: { options: ['A'], correctAnswer: 'A', points: 'bad' } },
+        ],
+      }],
+    } as any
+
+    const sanitized = sanitizeWorksheetDefinition(definition)
+    const summary = getQuizSummary(sanitized, { numeric: 0, quiz: 'A' })
+    const numericConfig = sanitized.pages[0]?.blocks[0]?.config || {}
+
+    expect(numericConfig.correctAnswer).toBeUndefined()
+    expect(summary.items[0]).toMatchObject({ isCorrect: false, points: 0, achievedPoints: 0 })
+    expect(summary.items[1]).toMatchObject({ isCorrect: true, points: 1, achievedPoints: 1 })
+    expect(summary.totalMax).toBe(1)
+  })
+})
+
+describe('builder numeric config sanitization', () => {
+  it('rejects imported pages and blocks that would crash the builder', () => {
+    expect(isWorksheetDefinition({
+      id: 'missing-blocks',
+      version: 1,
+      title: 'Missing blocks',
+      pages: [{ id: 'page-1', title: 'Page 1' }],
+    })).toBe(false)
+
+    expect(isWorksheetDefinition({
+      id: 'bad-block',
+      version: 1,
+      title: 'Bad block',
+      pages: [{ id: 'page-1', title: 'Page 1', blocks: [{ id: 'block-1', config: {} }] }],
+    })).toBe(false)
+  })
+
+  it('normalizes imported option and true false config shapes', () => {
+    const definition = {
+      id: 'bad-config',
+      version: 1,
+      title: 'Bad config',
+      description: '',
+      settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+      pages: [{
+        id: 'page',
+        title: 'Page',
+        blocks: [
+          { id: 'choice', type: 'multipleChoice', config: { options: { a: 'A' }, correctAnswer: ['A'] } },
+          { id: 'tf', type: 'trueFalse', config: { correctAnswer: 'true' } },
+          { id: 'match', type: 'matching', config: { options: ['A'], pairs: [{ answer: 'A' }] } },
+        ],
+      }],
+    } as any
+
+    const blocks = sanitizeWorksheetDefinition(definition).pages[0].blocks
+
+    expect(blocks[0].config).toMatchObject({ options: [], correctAnswer: '' })
+    expect(blocks[1].config?.correctAnswer).toBe(true)
+    expect(blocks[2].config?.pairs).toEqual([{ id: 'pair-1', prompt: '', answer: 'A' }])
+  })
+
+  it('clamps bounded numeric block settings imported from JSON', () => {
+    const definition = {
+      id: 'bad-numbers',
+      version: 1,
+      title: 'Bad numbers',
+      description: '',
+      settings: { navigation: 'sequential', allowPageJumping: false, autosave: true, showProgress: true, exports: { json: true, pdf: true } },
+      pages: [{
+        id: 'page',
+        title: 'Page',
+        blocks: [
+          { id: 'cloud', type: 'wordCloud', config: { maxEntries: 1_000_000_000 } },
+          { id: 'rating', type: 'rating', config: { min: 1, max: 5, defaultValue: 99 } },
+          { id: 'matrix', type: 'matrix', config: { min: 5, max: 1, defaultValue: -10 } },
+          { id: 'decision', type: 'decisionMatrix', config: { min: '', max: 0 } },
+        ],
+      }],
+    } as any
+
+    const blocks = sanitizeWorksheetDefinition(definition).pages[0].blocks
+    expect(blocks[0].config).toMatchObject({ maxEntries: 10 })
+    expect(blocks[1].config).toMatchObject({ min: 1, max: 5, defaultValue: 5 })
+    expect(blocks[2].config).toMatchObject({ min: 5, max: 5, defaultValue: 5 })
+    expect(blocks[3].config).toMatchObject({ min: 1, max: 1 })
+  })
+})
+
 describe('required page completion', () => {
   it('finds missing required blocks across every visible page before completion', () => {
     const definition = {
@@ -698,6 +999,22 @@ describe('required page completion', () => {
     expect(isRequiredBlockSatisfied(richText, { rich: '<p>&nbsp;</p>' })).toBe(false)
     expect(isRequiredBlockSatisfied(richText, { rich: '<p><strong>Done</strong></p>' })).toBe(true)
     expect(normalizeRichTextResponse('<p></p>')).toBe('')
+  })
+
+  it('flags required blocks that learners cannot answer before publishing', () => {
+    const definition = {
+      pages: [{
+        blocks: [
+          { id: 'empty-verdict', type: 'verdict', label: 'Verdict', required: true, config: { options: [] } },
+          { id: 'bad-match', type: 'matching', label: 'Match', required: true, config: { options: ['Choice'], pairs: [{ id: 'pair-1', answer: 'Missing choice' }] } },
+          { id: 'flat-radar', type: 'radar', label: 'Radar', required: true, config: { dimensions: ['Ease', 'Impact'] } },
+          { id: 'optional-empty', type: 'singleSelect', required: false, config: { options: [] } },
+          { id: 'usable-board', type: 'board', required: true, config: { columns: [{ id: 'column-1', label: 'Column' }] } },
+        ],
+      }],
+    } as any
+    expect(getUnanswerableRequiredBlocks(definition).map((block) => block.id)).toEqual(['empty-verdict', 'bad-match', 'flat-radar'])
+    expect(getUnanswerableRequiredBlocks(definition).map((block) => block.id)).toEqual(['empty-verdict', 'bad-match', 'flat-radar'])
   })
 
   it('treats required response blocks as incomplete until they have meaningful values', () => {

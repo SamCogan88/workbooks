@@ -61,11 +61,17 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
+import { createBuilderId } from './lib/builderIds'
+import { getPublishCardState } from './lib/builderPublishState'
+import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
+import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
+import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
 import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
 import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
 import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
 import {
+  addMatchingPairConfig,
   getDefaultBlockConfig,
   getDefaultPageTimer,
   getFillBlankCorrectAnswerPatch,
@@ -85,15 +91,17 @@ import {
   reconcileCategorizeResponse,
   reconcileRankingResponse,
   reconcileWorksheetResponses,
-  getStructuredDefaultResponse,
+  getUnanswerableRequiredBlocks,
   getVisibleBlocks,
   getVisiblePages,
   getVisiblePagesWithBlocks,
   hasMeaningfulResponseValue,
   isConditionSourceBlock,
+  isWorksheetDefinition,
   isResponseProducingBlock,
   normalizeRichTextResponse,
   normalizeWorksheetDefinitionStableIds,
+  sanitizeWorksheetDefinition,
   stripHtml,
 } from './lib/worksheetLogic'
 import { sanitiseWorksheetResponses } from './lib/responseValidation'
@@ -195,6 +203,15 @@ function clearRemovedBlockReferences(
   return isSynthesisSettingsEmpty(next) ? undefined : next
 }
 
+function getConditionReferenceCount(definition: WorksheetDefinition, blockIds: string[]) {
+  const targets = new Set(blockIds)
+  return definition.pages.reduce((count, page) => {
+    const pageConditionCount = page.condition && targets.has(page.condition.blockId) ? 1 : 0
+    const blockConditionCount = page.blocks.filter((block) => block.condition && targets.has(block.condition.blockId)).length
+    return count + pageConditionCount + blockConditionCount
+  }, 0)
+}
+
 function buildResponseSearchText(response: WorksheetResponse) {
   const values = Object.values(response.responses || {})
   const flattened = values.map((value) => {
@@ -225,15 +242,6 @@ const EMPTY_WORKSHEET_DEFINITION: WorksheetDefinition = {
 }
 
 type WorksheetBuilderSetter = (value: WorksheetDefinition | ((previous: WorksheetDefinition) => WorksheetDefinition)) => void
-
-function isWorksheetDefinition(value: unknown): value is WorksheetDefinition {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<WorksheetDefinition>
-  return typeof candidate.id === 'string'
-    && typeof candidate.version === 'number'
-    && typeof candidate.title === 'string'
-    && Array.isArray(candidate.pages)
-}
 
 function getWorksheetStructure(definition: WorksheetDefinition) {
   const blocks = definition.pages.flatMap((page) => page.blocks)
@@ -320,11 +328,18 @@ function App() {
 
     try {
       const parsed = JSON.parse(raw) as unknown
-      return isWorksheetDefinition(parsed) ? normalizeWorksheetDefinitionStableIds(parsed) : EMPTY_WORKSHEET_DEFINITION
+      return isWorksheetDefinition(parsed)
+        ? sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
+        : EMPTY_WORKSHEET_DEFINITION
     } catch {
       return EMPTY_WORKSHEET_DEFINITION
     }
   })
+  const setSanitizedActiveDefinition: WorksheetBuilderSetter = useCallback((value) => {
+    setActiveDefinition((previous) => sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(
+      typeof value === 'function' ? value(previous) : value,
+    )))
+  }, [])
   const [, setDefinitionStatus] = useState('Import a worksheet JSON to replace the current active definition.')
 
   useEffect(() => {
@@ -333,19 +348,24 @@ function App() {
 
   const importWorksheetDefinition = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
-    if (!file) return
+    if (!file) return null
 
     try {
       const text = await file.text()
       const parsed = JSON.parse(text) as unknown
       if (!isWorksheetDefinition(parsed)) {
-        setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
-        return
+        const error = 'Import failed: every page needs id, title, and blocks; every block needs id and type.'
+        setDefinitionStatus(error)
+        return error
       }
-      setActiveDefinition(normalizeWorksheetDefinitionStableIds(parsed))
-      setDefinitionStatus(`Loaded ${parsed.title} (${parsed.id} v${parsed.version}) from ${file.name}.`)
+      const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
+      setActiveDefinition(sanitized)
+      setDefinitionStatus(`Loaded ${sanitized.title} (${sanitized.id} v${sanitized.version}) from ${file.name}.`)
+      return null
     } catch {
-      setDefinitionStatus('Import failed: malformed JSON file.')
+      const error = 'Import failed: malformed JSON file.'
+      setDefinitionStatus(error)
+      return error
     } finally {
       event.target.value = ''
     }
@@ -373,7 +393,7 @@ function App() {
           <Route path="/report/ai-tool-lab" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/system-guide" element={<SystemGuidePage />} />
           <Route path="/account" element={<TeacherAccountPage />} />
-          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setActiveDefinition} />} />
+          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setSanitizedActiveDefinition} />} />
           <Route path="/teacher/workbooks/:workbookId/report" element={<OnlineTeacherReportPage />} />
           <Route path="/join" element={<OnlineJoinPageRoute />} />
           <Route path="/join/:publicCode" element={<OnlineJoinPageRoute />} />
@@ -382,7 +402,7 @@ function App() {
             element={(
               <BuilderPage
                 definition={activeDefinition}
-                setDefinition={setActiveDefinition}
+                setDefinition={setSanitizedActiveDefinition}
                 importWorksheetDefinition={importWorksheetDefinition}
               />
             )}
@@ -430,7 +450,7 @@ function OnlineJoinPage() {
   }, [publicCode])
 
   if (workbook) {
-    return <WorksheetPlayer definition={workbook.definition} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
+    return <WorksheetPlayer definition={sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(workbook.definition))} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
   }
 
   const handleJoin = (event: FormEvent<HTMLFormElement>) => {
@@ -1512,8 +1532,11 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
         ? configured
         : 'Your response has been sent to your teacher. You can now close this page.'
     }
-    return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
-  }, [definition.settings.completionMessage, onlineWorksheetId])
+    if (configured) return configured
+    return isResponseJsonExportEnabled(definition)
+      ? 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
+      : 'Your response is complete. You can now close this page.'
+  }, [definition, onlineWorksheetId])
   const missingRequiredBlocks = useMemo(
     () => (currentPage ? getMissingRequiredBlocks(currentPage, responses, definition) : []),
     [currentPage, definition, responses],
@@ -1555,25 +1578,6 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     setNavigationWarning('')
     setValidationAttempted(false)
   }, [isSessionHydrated, pageIndex, visiblePageIndexes])
-
-  useEffect(() => {
-    const nextDefaults = currentPage?.blocks.reduce<Record<string, any>>((accumulator, block) => {
-      if (responses[block.id] !== undefined) return accumulator
-      const defaultValue = getStructuredDefaultResponse(block)
-      if (defaultValue !== undefined) {
-        accumulator[block.id] = defaultValue
-      }
-      return accumulator
-    }, {}) || {}
-
-    if (Object.keys(nextDefaults).length === 0) return
-    setResponses((previous) => {
-      const missingDefaults = Object.fromEntries(
-        Object.entries(nextDefaults).filter(([blockId]) => previous[blockId] === undefined),
-      )
-      return Object.keys(missingDefaults).length > 0 ? { ...previous, ...missingDefaults } : previous
-    })
-  }, [currentPage, responses])
 
   useEffect(() => {
     if (!currentTimer?.enabled) {
@@ -1661,7 +1665,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }), [definition, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
-    if (!onlineWorksheetId || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
+    if (!onlineWorksheetId || !shouldAutosaveOnlineResponse(definition) || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
     const timeoutId = window.setTimeout(() => {
       void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then((savedResponse) => {
         if (savedResponse.status === 'submitted') {
@@ -1678,7 +1682,7 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }, 900)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildDocument, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
+  }, [buildDocument, definition, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -1760,12 +1764,14 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
       return
     }
 
-    try {
-      exportResponseJson(buildDocument())
-    } catch {
-      setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
-      setStatus('Download failed')
-      return
+    if (isResponseJsonExportEnabled(definition)) {
+      try {
+        exportResponseJson(buildDocument())
+      } catch {
+        setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
+        setStatus('Download failed')
+        return
+      }
     }
     setStatus('Complete')
     setShowCompletionDialog(true)
@@ -1794,10 +1800,12 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
   }
 
   const handleExportJson = () => {
+    if (!isResponseJsonExportEnabled(definition)) return
     exportResponseJson(buildDocument())
   }
 
   const handleExportPdf = () => {
+    if (!isResponsePdfExportEnabled(definition)) return
     const document = buildDocument()
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
@@ -2049,8 +2057,8 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
           {!previewMode && !onlineWorksheetId && (
             <>
               <button onClick={handleStartNew} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><Play className="h-4 w-4" />Start New</button>
-              <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>
-              <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>
+              {isResponseJsonExportEnabled(definition) && <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>}
+              {isResponsePdfExportEnabled(definition) && <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>}
             </>
           )}
           {onlineWorksheetId && <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800"><CloudUpload className="h-4 w-4" />Online workbook{publicCode ? ` · ${publicCode}` : ''}</span>}
@@ -3572,7 +3580,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'wordCloud': {
-      const maxEntries = Math.max(1, Number(block.config?.maxEntries || 3))
+      const maxEntries = Math.min(10, Math.max(1, Number(block.config?.maxEntries || 3)))
       const values = Array.isArray(responses[block.id]) ? responses[block.id] : []
       return (
         <fieldset className="space-y-2">
@@ -5123,7 +5131,7 @@ function BuilderPage({
 }: {
   definition: WorksheetDefinition
   setDefinition: WorksheetBuilderSetter
-  importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
+  importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<string | null>
 }) {
   const { user, loading: authLoading } = useTeacherAuth()
   const blockLibrary: Array<{ type: string; label?: string; description: string }> = [
@@ -5186,10 +5194,12 @@ function BuilderPage({
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState('')
   const [publishedWorkbook, setPublishedWorkbook] = useState<OnlineWorksheetRow | null>(null)
+  const [publishedDefinitionJson, setPublishedDefinitionJson] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [pastedJson, setPastedJson] = useState('')
   const [pastedJsonError, setPastedJsonError] = useState('')
+  const [importFileError, setImportFileError] = useState('')
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -5223,12 +5233,11 @@ function BuilderPage({
     : priorPageResponseBlocks
 
   const addPage = () => {
-    const timestamp = Date.now()
     const nextPage: WorksheetPage = {
-      id: `page-${timestamp}`,
+      id: createBuilderId('page'),
       title: `Page ${definition.pages.length + 1}`,
       timer: getDefaultPageTimer(),
-      blocks: [{ id: `block-${timestamp}`, type: 'content', title: 'New content block' }],
+      blocks: [{ id: createBuilderId('block'), type: 'content', title: 'New content block' }],
     }
     setDefinition((previous) => ({ ...previous, pages: [...previous.pages, nextPage] }))
     setSelectedPageId(nextPage.id)
@@ -5241,13 +5250,13 @@ function BuilderPage({
     const templateBlocks: WorksheetBlock[] = template === 'quiz'
       ? [
           {
-            id: `block-${timestamp}-1`,
+            id: createBuilderId('block'),
             type: 'content',
             title: 'Quiz introduction',
             description: 'Add instructions for learners before they begin.',
           },
           {
-            id: `block-${timestamp}-2`,
+            id: createBuilderId('block'),
             type: 'multipleChoice',
             label: 'Question 1',
             required: true,
@@ -5257,13 +5266,13 @@ function BuilderPage({
       : template === 'reflection'
         ? [
             {
-              id: `block-${timestamp}-1`,
+              id: createBuilderId('block'),
               type: 'content',
               title: 'Reflection',
               description: 'Introduce the activity and explain what learners should reflect on.',
             },
             {
-              id: `block-${timestamp}-2`,
+              id: createBuilderId('block'),
               type: 'longText',
               label: 'What did you learn?',
               required: true,
@@ -5273,7 +5282,7 @@ function BuilderPage({
         : []
 
     const page: WorksheetPage = {
-      id: `page-${timestamp}`,
+      id: createBuilderId('page'),
       title: template === 'quiz' ? 'Quiz' : template === 'reflection' ? 'Reflection' : 'Page 1',
       timer: getDefaultPageTimer(),
       blocks: templateBlocks,
@@ -5295,7 +5304,12 @@ function BuilderPage({
       const nextPages = [...previous.pages]
       const [moved] = nextPages.splice(currentIndex, 1)
       nextPages.splice(targetIndex, 0, moved)
-      return { ...previous, pages: nextPages }
+      const nextDefinition = { ...previous, pages: nextPages }
+      if (getFirstConditionOrderViolation(nextDefinition)) {
+        window.alert('This move would put conditional content before the question it depends on. Remove or update the condition first.')
+        return previous
+      }
+      return nextDefinition
     })
   }
 
@@ -5304,17 +5318,21 @@ function BuilderPage({
     const pageIndex = definition.pages.findIndex((page) => page.id === selectedPage.id)
     if (pageIndex < 0) return
 
-    const baseTime = Date.now()
-    const duplicatedBlocks = selectedPage.blocks.map((block, blockIndex) => ({
-      ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
-      id: `block-${baseTime}-${blockIndex + 1}`,
-    }))
+    const blockIdMap: Record<string, string> = {}
+    const duplicatedBlocks = selectedPage.blocks.map((block) => {
+      const id = createBuilderId('block')
+      blockIdMap[block.id] = id
+      return {
+        ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
+        id,
+      }
+    })
 
     const duplicatePage: WorksheetPage = {
       ...JSON.parse(JSON.stringify(selectedPage)) as WorksheetPage,
-      id: `page-${baseTime}`,
+      id: createBuilderId('page'),
       title: `${selectedPage.title} (Copy)`,
-      blocks: duplicatedBlocks,
+      blocks: remapBlockConditions(duplicatedBlocks, blockIdMap),
     }
 
     setDefinition((previous) => {
@@ -5332,30 +5350,41 @@ function BuilderPage({
     if (definition.pages.length === 1) {
       if (!window.confirm('Delete the only page? This will create a new blank page.')) return
       const replacementPage: WorksheetPage = {
-        id: `page-${Date.now()}`,
+        id: createBuilderId('page'),
         title: 'Page 1',
         timer: getDefaultPageTimer(),
         blocks: [],
       }
-      setDefinition((previous) => ({
-        ...previous,
-        synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
-        pages: [replacementPage],
-      }))
+      setDefinition((previous) => {
+        const removedBlockIds = selectedPage.blocks.map((block) => block.id)
+        return {
+          ...clearConditionsReferencingBlocks(previous, removedBlockIds),
+          synthesis: clearRemovedBlockReferences(previous.synthesis, removedBlockIds),
+          pages: [replacementPage],
+        }
+      })
       setSelectedPageId(replacementPage.id)
       setSelectedBlockId('')
       return
     }
 
-    if (!window.confirm('Delete this page and all of its blocks?')) return
+    const dependentConditions = getConditionReferenceCount(definition, selectedPage.blocks.map((block) => block.id))
+    const deleteMessage = dependentConditions > 0
+      ? `Delete this page and all of its blocks? This will also remove ${formatCountLabel(dependentConditions, 'condition')} that depends on its blocks.`
+      : 'Delete this page and all of its blocks?'
+    if (!window.confirm(deleteMessage)) return
     const currentIndex = definition.pages.findIndex((page) => page.id === selectedPage.id)
     const fallbackPage = definition.pages[Math.max(0, currentIndex - 1)]
 
-    setDefinition((previous) => ({
-      ...previous,
-      synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
-      pages: previous.pages.filter((page) => page.id !== selectedPage.id),
-    }))
+    setDefinition((previous) => {
+      const removedBlockIds = selectedPage.blocks.map((block) => block.id)
+      const nextDefinition = clearConditionsReferencingBlocks(previous, removedBlockIds)
+      return {
+        ...nextDefinition,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, removedBlockIds),
+        pages: nextDefinition.pages.filter((page) => page.id !== selectedPage.id),
+      }
+    })
     if (fallbackPage) {
       setSelectedPageId(fallbackPage.id)
       setSelectedBlockId(fallbackPage.blocks[0]?.id || '')
@@ -5379,7 +5408,7 @@ function BuilderPage({
         : `New ${type} block`
 
     return {
-      id: `block-${timestamp}`,
+      id: createBuilderId('block'),
       type,
       label,
       title: type === 'content' ? 'New content block' : type === 'section' ? 'Section heading' : undefined,
@@ -5418,19 +5447,26 @@ function BuilderPage({
     const fromIndex = selectedPage.blocks.findIndex((block) => block.id === blockId)
     if (fromIndex < 0) return
 
-    setDefinition((previous) => ({
-      ...previous,
-      pages: previous.pages.map((page) => {
-        if (page.id !== selectedPage.id) return page
-        const nextBlocks = [...page.blocks]
-        const [moved] = nextBlocks.splice(fromIndex, 1)
-        if (!moved) return page
-        const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
-        const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
-        nextBlocks.splice(boundedIndex, 0, moved)
-        return { ...page, blocks: nextBlocks }
-      }),
-    }))
+    setDefinition((previous) => {
+      const nextDefinition = {
+        ...previous,
+        pages: previous.pages.map((page) => {
+          if (page.id !== selectedPage.id) return page
+          const nextBlocks = [...page.blocks]
+          const [moved] = nextBlocks.splice(fromIndex, 1)
+          if (!moved) return page
+          const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
+          const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
+          nextBlocks.splice(boundedIndex, 0, moved)
+          return { ...page, blocks: nextBlocks }
+        }),
+      }
+      if (getFirstConditionOrderViolation(nextDefinition)) {
+        window.alert('This move would put conditional content before the question it depends on. Remove or update the condition first.')
+        return previous
+      }
+      return nextDefinition
+    })
     setSelectedBlockId(blockId)
   }
 
@@ -5525,20 +5561,28 @@ function BuilderPage({
       definition.synthesis?.responseLabelBlockId === selectedBlock.id ? 'label individual responses in synthesis' : '',
     ].filter(Boolean)
 
-    if (synthesisEffects.length > 0) {
-      const warningText = `This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`
+    const dependentConditions = getConditionReferenceCount(definition, [selectedBlock.id])
+    if (synthesisEffects.length > 0 || dependentConditions > 0) {
+      const effects = [
+        synthesisEffects.length > 0 ? `remove the ${synthesisEffects.join(' and ')} synthesis setting` : '',
+        dependentConditions > 0 ? `remove ${formatCountLabel(dependentConditions, 'condition')} that depends on it` : '',
+      ].filter(Boolean)
+      const warningText = `This block is currently used elsewhere. Deleting it will ${effects.join(' and ')}.`
       if (!window.confirm(warningText)) return
     }
 
-    setDefinition((previous) => ({
-      ...previous,
-      synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
-      pages: previous.pages.map((page) => (
-        page.id === selectedPage.id
-          ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
-          : page
-      )),
-    }))
+    setDefinition((previous) => {
+      const nextDefinition = clearConditionsReferencingBlocks(previous, [selectedBlock.id])
+      return {
+        ...nextDefinition,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
+        pages: nextDefinition.pages.map((page) => (
+          page.id === selectedPage.id
+            ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
+            : page
+        )),
+      }
+    })
   }
 
   const duplicateBlockAtIndex = (pageId: string, blockId: string, index: number) => {
@@ -5549,7 +5593,7 @@ function BuilderPage({
 
     const duplicateBlock: WorksheetBlock = {
       ...JSON.parse(JSON.stringify(blockToDuplicate)) as WorksheetBlock,
-      id: `block-${Date.now()}`,
+      id: createBuilderId('block'),
     }
 
     setDefinition((previous) => ({
@@ -5579,15 +5623,25 @@ function BuilderPage({
       definition.synthesis?.groupByBlockId === blockId ? 'group synthesis results' : '',
       definition.synthesis?.responseLabelBlockId === blockId ? 'label individual responses in synthesis' : '',
     ].filter(Boolean)
-    if (synthesisEffects.length > 0 && !window.confirm(`This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`)) return
+    const dependentConditions = getConditionReferenceCount(definition, [blockId])
+    if (synthesisEffects.length > 0 || dependentConditions > 0) {
+      const effects = [
+        synthesisEffects.length > 0 ? `remove the ${synthesisEffects.join(' and ')} synthesis setting` : '',
+        dependentConditions > 0 ? `remove ${formatCountLabel(dependentConditions, 'condition')} that depends on it` : '',
+      ].filter(Boolean)
+      if (!window.confirm(`This block is currently used elsewhere. Deleting it will ${effects.join(' and ')}.`)) return
+    }
 
-    setDefinition((previous) => ({
-      ...previous,
-      synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
-      pages: previous.pages.map((page) => page.id === pageId
-        ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
-        : page),
-    }))
+    setDefinition((previous) => {
+      const nextDefinition = clearConditionsReferencingBlocks(previous, [blockId])
+      return {
+        ...nextDefinition,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
+        pages: nextDefinition.pages.map((page) => page.id === pageId
+          ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
+          : page),
+      }
+    })
     if (selectedBlockId === blockId) setSelectedBlockId('')
     setOpenBlockMenuId(null)
   }
@@ -5619,7 +5673,7 @@ function BuilderPage({
 
   const updateSelectedConfig = (partial: Record<string, any>) => {
     if (!selectedBlock) return
-    updateSelectedBlock({ config: { ...selectedConfig, ...partial } })
+    setDefinition((previous) => sanitizeWorksheetDefinition(updateBlockConfigWithOptionReferences(previous, selectedBlock.id, partial)))
   }
 
   const updateWorksheetDefinition = (partial: Partial<WorksheetDefinition>) => {
@@ -5645,22 +5699,37 @@ function BuilderPage({
   const shareLink = publishedWorkbook
     ? `${window.location.origin}${window.location.pathname}#/join/${publishedWorkbook.public_code}`
     : ''
+  const currentDefinitionJson = useMemo(() => JSON.stringify(definition), [definition])
+  const publishCardState = getPublishCardState(publishError, publishedWorkbook, publishedDefinitionJson, currentDefinitionJson)
 
   const handlePublish = async () => {
+    const definitionToPublish = definition
+    const definitionToPublishJson = JSON.stringify(definitionToPublish)
     setPublishError('')
+    setPublishedWorkbook(null)
+    setPublishedDefinitionJson(null)
+    setShareCopied(false)
     if (!user) {
       setPublishError('Sign in with a teacher account before publishing.')
       return
     }
-    if (!definition.title.trim() || definition.pages.length === 0) {
+    if (!definitionToPublish.title.trim() || definitionToPublish.pages.length === 0) {
       setPublishError('Add a title and at least one page before publishing.')
+      return
+    }
+    const unanswerableBlocks = getUnanswerableRequiredBlocks(definitionToPublish)
+    if (unanswerableBlocks.length > 0) {
+      const labels = unanswerableBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
+      const remainingCount = unanswerableBlocks.length - labels.length
+      setPublishError(`Required blocks need answerable choices before publishing: ${labels.join(', ')}${remainingCount > 0 ? ` and ${remainingCount} more` : ''}.`)
       return
     }
 
     setPublishing(true)
     try {
-      const workbook = await publishWorksheet(definition)
+      const workbook = await publishWorksheet(definitionToPublish)
       setPublishedWorkbook(workbook)
+      setPublishedDefinitionJson(definitionToPublishJson)
     } catch (error) {
       setPublishError(error instanceof Error ? error.message : 'The workbook could not be published. Please try again.')
     } finally {
@@ -5681,17 +5750,18 @@ function BuilderPage({
 
   const importPastedJson = () => {
     setPastedJsonError('')
+    setImportFileError('')
     try {
       const parsed = JSON.parse(pastedJson) as unknown
       if (!isWorksheetDefinition(parsed)) {
-        setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
+        setPastedJsonError('This is valid JSON, but every page needs id, title, and blocks, and every block needs id and type.')
         return
       }
-      const normalized = normalizeWorksheetDefinitionStableIds(parsed)
-      setDefinition(normalized)
-      setSelectedPageId(normalized.pages[0]?.id || '')
-      setSelectedBlockId(normalized.pages[0]?.blocks[0]?.id || '')
-      setBuilderMode(normalized.pages.length > 0 ? 'pages' : 'setup')
+      const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
+      setDefinition(sanitized)
+      setSelectedPageId(sanitized.pages[0]?.id || '')
+      setSelectedBlockId(sanitized.pages[0]?.blocks[0]?.id || '')
+      setBuilderMode(sanitized.pages.length > 0 ? 'pages' : 'setup')
       setPastedJson('')
       setShowImportDialog(false)
     } catch {
@@ -5776,7 +5846,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <Link to="/" title="Back to start" aria-label="Back to start" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><ArrowLeft className="h-3.5 w-3.5" />Back</Link>
-          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
+          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setImportFileError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
             <Upload className="h-4 w-4" />
             Load JSON
           </button>
@@ -5800,9 +5870,9 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
       </div>
 
-      {(publishError || publishedWorkbook) && (
-        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishedWorkbook ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
-          {publishedWorkbook ? (
+      {publishCardState !== 'hidden' && (
+        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+          {publishCardState === 'published' && publishedWorkbook ? (
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">Published and ready to share</p>
@@ -5813,6 +5883,15 @@ Make the language concise and appropriate for the learners. Do not include Markd
                 </div>
               </div>
               <button type="button" onClick={() => void copyShareLink()} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"><Copy className="h-4 w-4" />{shareCopied ? 'Link copied' : 'Copy invite link'}</button>
+            </div>
+          ) : publishCardState === 'unpublished' && publishedWorkbook ? (
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="text-amber-900">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em]">Unpublished changes</p>
+                <h2 className="mt-1 text-xl font-bold">Republish to update learners</h2>
+                <p className="mt-2 text-sm">Learners still see the last published version of {publishedWorkbook.title}.</p>
+              </div>
+              <button type="button" onClick={() => void handlePublish()} disabled={publishing || authLoading} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-60"><CloudUpload className="h-4 w-4" />{publishing ? 'Publishing…' : 'Republish'}</button>
             </div>
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-amber-900">
@@ -5837,8 +5916,23 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
             <label className="mt-6 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50">
               <Upload className="h-4 w-4" />Choose a JSON file
-              <input type="file" accept="application/json" className="hidden" onChange={async (event) => { await importWorksheetDefinition(event); setShowImportDialog(false) }} />
+              <input
+                type="file"
+                accept="application/json"
+                className="hidden"
+                onChange={async (event) => {
+                  setImportFileError('')
+                  setPastedJsonError('')
+                  const error = await importWorksheetDefinition(event)
+                  if (error) {
+                    setImportFileError(error)
+                    return
+                  }
+                  setShowImportDialog(false)
+                }}
+              />
             </label>
+            {importFileError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{importFileError}</p>}
 
             <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-400"><span className="h-px flex-1 bg-slate-200" />or paste JSON<span className="h-px flex-1 bg-slate-200" /></div>
 
@@ -5846,7 +5940,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
               Workbook JSON
               <textarea
                 value={pastedJson}
-                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError('') }}
+                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError(''); setImportFileError('') }}
                 placeholder={'{\n  "id": "my-workbook",\n  "version": 1,\n  ...\n}'}
                 spellCheck={false}
                 className="mt-2 min-h-64 w-full resize-y rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
@@ -6639,9 +6733,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
                             type="button"
                             onClick={() => {
                               const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
+                              if (selectedBlock.type === 'trueFalse' || current.length <= 1) return
                               const next = current.filter((_, optionIndex) => optionIndex !== index)
                               updateSelectedConfig({ options: next })
                             }}
+                            disabled={selectedBlock.type === 'trueFalse' || (selectedBlock.type === 'ranking' ? rankingOptions : optionList).length <= 1}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
@@ -6680,7 +6776,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
                   {selectedBlock.type === 'numeric' && (
                     <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={Number(selectedConfig.correctAnswer ?? 0)} onChange={(event) => updateSelectedConfig({ correctAnswer: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={selectedConfig.correctAnswer ?? ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value === '' ? undefined : Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Tolerance<input type="number" min={0} step="any" value={Number(selectedConfig.tolerance || 0)} onChange={(event) => updateSelectedConfig({ tolerance: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Unit<input value={selectedConfig.unit || ''} onChange={(event) => updateSelectedConfig({ unit: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Points<input type="number" min={0} value={Number(selectedConfig.points ?? 1)} onChange={(event) => updateSelectedConfig({ points: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
@@ -6742,11 +6838,14 @@ Make the language concise and appropriate for the learners. Do not include Markd
                                   nextPairs[index] = { ...nextPairs[index], answer: event.target.value }
                                   updateSelectedConfig({ pairs: nextPairs })
                                 }} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Match" />
-                                <button type="button" onClick={() => updateSelectedConfig({ pairs: (selectedConfig.pairs || []).filter((_: any, itemIndex: number) => itemIndex !== index) })} className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Remove</button>
+                                <button type="button" disabled={(selectedConfig.pairs || []).length <= 1} onClick={() => {
+                                  if ((selectedConfig.pairs || []).length <= 1) return
+                                  updateSelectedConfig({ pairs: (selectedConfig.pairs || []).filter((_: any, itemIndex: number) => itemIndex !== index) })
+                                }} className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Remove</button>
                               </div>
                             </div>
                           ))}
-                          <button type="button" onClick={() => updateSelectedConfig({ pairs: [...(selectedConfig.pairs || []), { id: `pair-${Date.now()}`, prompt: 'New prompt', answer: 'New match' }] })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add pair</button>
+                          <button type="button" onClick={() => updateSelectedConfig(addMatchingPairConfig(selectedConfig))} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add pair</button>
                         </div>
                       ) : (
                         <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -6796,7 +6895,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   {selectedBlock.type === 'board' && (
                     <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Start from a preset<select defaultValue="" onChange={(event) => { const preset = event.target.value as Parameters<typeof getBoardPresetColumns>[0]; if (!preset) return; const isBlank = boardColumns.map((column) => column.label).join('|') === 'Column 1|Column 2|Column 3'; if (!isBlank && !window.confirm('Replace the current board columns with this preset?')) { event.target.value = ''; return } updateSelectedConfig({ columns: getBoardPresetColumns(preset) }); event.target.value = '' }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case"><option value="">Choose preset…</option><option value="blank">Blank board</option><option value="pmi">PMI</option><option value="kwl">KWL</option><option value="start-stop-continue">Start / Stop / Continue</option><option value="pros-cons">Pros / Cons</option><option value="rose-bud-thorn">Rose / Bud / Thorn</option><option value="what-so-what-now-what">What? / So What? / Now What?</option></select></label>
-                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" onClick={() => updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) })} className="rounded border border-red-200 px-2 text-xs text-red-700">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
+                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" disabled={boardColumns.length <= 1} onClick={() => { if (boardColumns.length <= 1) return; updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) }) }} className="rounded border border-red-200 px-2 text-xs text-red-700 disabled:opacity-40">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Entry placeholder<input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={selectedConfig.allowMultipleEntries !== false} onChange={(event) => updateSelectedConfig({ allowMultipleEntries: event.target.checked })} />Allow multiple entries</label>
                       {selectedConfig.allowMultipleEntries !== false && <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Maximum per column (0 = unlimited)<input type="number" min={0} value={Number(selectedConfig.maxEntriesPerColumn || 0)} onChange={(event) => updateSelectedConfig({ maxEntriesPerColumn: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>}
@@ -6932,9 +7031,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           <button
                             type="button"
                             onClick={() => {
+                              if (radarDimensions.length <= 3) return
                               const next = radarDimensions.filter((_, dimensionIndex) => dimensionIndex !== index)
                               updateSelectedConfig({ dimensions: next })
                             }}
+                            disabled={radarDimensions.length <= 3}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
@@ -6999,9 +7100,11 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           <button
                             type="button"
                             onClick={() => {
+                              if (swotCategories.length <= 1) return
                               const next = swotCategories.filter((_, categoryIndex) => categoryIndex !== index)
                               updateSelectedConfig({ categories: next })
                             }}
+                            disabled={swotCategories.length <= 1}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove

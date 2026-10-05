@@ -252,6 +252,166 @@ export function getMatrixRows(block: WorksheetBlock) {
   return getLabeledConfigItems(block.config?.rows, 'row')
 }
 
+const WORD_CLOUD_MAX_ENTRIES = 10
+
+function boundedNumber(value: unknown, fallback: number, min = Number.NEGATIVE_INFINITY, max = Number.POSITIVE_INFINITY) {
+  if (value === '') return fallback
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, number))
+}
+
+function unsettableNumber(value: unknown) {
+  if (value === '') return undefined
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
+}
+
+function sanitizeIntegerRange(config: Record<string, any>, fallbackMin: number, fallbackMax: number) {
+  const min = Math.round(boundedNumber(config.min, fallbackMin))
+  const max = Math.max(min, Math.round(boundedNumber(config.max, fallbackMax)))
+  return { min, max }
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value
+    .filter((item) => item !== undefined && item !== null)
+    .map((item) => String(item).trim())
+    .filter(Boolean) : []
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isWorksheetBlock(value: unknown): value is WorksheetBlock {
+  if (!isRecord(value)) return false
+  if (typeof value.id !== 'string' || typeof value.type !== 'string') return false
+  return value.config === undefined || isRecord(value.config)
+}
+
+function isWorksheetPage(value: unknown): value is WorksheetPage {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.title === 'string'
+    && Array.isArray(value.blocks)
+    && value.blocks.every(isWorksheetBlock)
+}
+
+export function isWorksheetDefinition(value: unknown): value is WorksheetDefinition {
+  if (!isRecord(value)) return false
+  return typeof value.id === 'string'
+    && typeof value.version === 'number'
+    && typeof value.title === 'string'
+    && Array.isArray(value.pages)
+    && value.pages.every(isWorksheetPage)
+}
+
+const STRING_OPTION_BLOCK_TYPES = new Set(['singleSelect', 'multipleChoice', 'quiz', 'checklist', 'ranking', 'matching', 'verdict', 'confidence'])
+
+export function sanitizeBlockConfig(block: WorksheetBlock): WorksheetBlock {
+  const config = isRecord(block.config) ? { ...block.config } : {}
+
+  if (STRING_OPTION_BLOCK_TYPES.has(block.type)) {
+    config.options = Array.isArray(config.options) ? getLabeledConfigItems(config.options, 'option') : []
+  }
+
+  if ('points' in config) {
+    config.points = boundedNumber(config.points, 1, 0)
+  }
+
+  switch (block.type) {
+    case 'trueFalse':
+      if (typeof config.correctAnswer === 'string') {
+        const normalized = config.correctAnswer.trim().toLowerCase()
+        if (normalized === 'true' || normalized === 'false') {
+          config.correctAnswer = normalized === 'true'
+        }
+      }
+      break
+    case 'multipleChoice':
+    case 'quiz': {
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
+      if (config.multipleAnswers) {
+        config.correctAnswer = stringList(config.correctAnswer).filter((answer) => optionValues.has(answer))
+      } else if (Array.isArray(config.correctAnswer)) {
+        const answer = stringList(config.correctAnswer)[0] || ''
+        config.correctAnswer = optionValues.has(answer) ? answer : ''
+      } else if (typeof config.correctAnswer === 'string' && !optionValues.has(config.correctAnswer)) {
+        config.correctAnswer = ''
+      }
+      break
+    }
+    case 'matching': {
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
+      config.pairs = Array.isArray(config.pairs)
+        ? config.pairs.filter(isRecord).map((pair, index) => ({
+          ...pair,
+          id: String(pair.id || `pair-${index + 1}`),
+          prompt: String(pair.prompt || ''),
+          answer: optionValues.has(String(pair.answer || '')) ? String(pair.answer || '') : '',
+        }))
+        : []
+      break
+    }
+    case 'numeric': {
+      const correctAnswer = unsettableNumber(config.correctAnswer)
+      if (correctAnswer === undefined) {
+        delete config.correctAnswer
+      } else {
+        config.correctAnswer = correctAnswer
+      }
+      config.tolerance = boundedNumber(config.tolerance, 0, 0)
+      break
+    }
+    case 'wordCloud':
+      config.maxEntries = Math.round(boundedNumber(config.maxEntries, 3, 1, WORD_CLOUD_MAX_ENTRIES))
+      break
+    case 'rating': {
+      const { min, max } = sanitizeIntegerRange(config, 0, 10)
+      config.min = min
+      config.max = max
+      config.defaultValue = Math.round(boundedNumber(config.defaultValue, Math.round((min + max) / 2), min, max))
+      break
+    }
+    case 'matrix': {
+      const { min, max } = sanitizeIntegerRange(config, 1, 5)
+      config.min = min
+      config.max = max
+      config.defaultValue = Math.round(boundedNumber(config.defaultValue, min, min, max))
+      break
+    }
+    case 'decisionMatrix': {
+      const { min, max } = sanitizeIntegerRange(config, 1, 5)
+      config.min = min
+      config.max = max
+      break
+    }
+    default:
+      break
+  }
+
+  return { ...block, config }
+}
+
+export function sanitizeWorksheetDefinition(definition: WorksheetDefinition): WorksheetDefinition {
+  return {
+    ...definition,
+    pages: definition.pages.map((page, pageIndex) => ({
+      ...page,
+      id: page.id || `page-${pageIndex + 1}`,
+      title: page.title || `Page ${pageIndex + 1}`,
+      blocks: page.blocks.map((block, blockIndex) => sanitizeBlockConfig({
+        ...block,
+        id: block.id || `block-${pageIndex + 1}-${blockIndex + 1}`,
+        type: block.type || 'content',
+      })),
+    })),
+  }
+}
+
 export function getRadarDimensions(block: WorksheetBlock) {
   return getLabeledConfigItems(block.config?.dimensions, 'dimension')
 }
@@ -419,13 +579,77 @@ export function getFillBlankCorrectAnswerPatch(correctAnswer: string) {
   return { correctAnswer, answers: undefined }
 }
 
+function matchingPairs(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((pair): pair is { answer?: unknown } => Boolean(pair && typeof pair === 'object'))
+    : []
+}
+
+export function isRequiredBlockAnswerable(block: WorksheetBlock) {
+  if (!block.required || !isResponseProducingBlock(block)) return true
+
+  const config = block.config || {}
+  switch (block.type) {
+    case 'singleSelect':
+    case 'checklist':
+    case 'ranking':
+    case 'confidence':
+    case 'verdict':
+      return getLabeledConfigItems(config.options, 'option').length > 0
+    case 'multipleChoice':
+    case 'quiz': {
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
+      const answers = Array.isArray(config.correctAnswer) ? stringList(config.correctAnswer) : stringList([config.correctAnswer])
+      return options.length > 0 && answers.length > 0 && answers.every((answer) => optionValues.has(answer))
+    }
+    case 'matching': {
+      const options = getLabeledConfigItems(config.options, 'option')
+      const optionValues = new Set(options.flatMap((option) => [option.id, option.label]))
+      const pairs = matchingPairs(config.pairs)
+      return options.length > 0 && pairs.length > 0 && pairs.every((pair) => {
+        const answer = String(pair.answer || '').trim()
+        return answer.length > 0 && optionValues.has(answer)
+      })
+    }
+    case 'radar':
+      return getRadarDimensions(block).length >= 3
+    case 'board':
+      return Array.isArray(config.columns) && config.columns.length > 0
+    case 'swot':
+      return Array.isArray(config.categories) && config.categories.length > 0
+    default:
+      return true
+  }
+}
+
+export function getUnanswerableRequiredBlocks(definition: WorksheetDefinition) {
+  return definition.pages.flatMap((page) => page.blocks.filter((block) => !isRequiredBlockAnswerable(block)))
+}
+
+export function addMatchingPairConfig(config: Record<string, any>, timestamp = Date.now()) {
+  const pairs = Array.isArray(config.pairs) ? config.pairs : []
+  const rawOptions = Array.isArray(config.options) ? config.options : []
+  const stableOptions = getLabeledConfigItems(rawOptions, 'option')
+  const answerLabel = `Match ${pairs.length + 1}`
+  const answerId = `option-${timestamp}`
+  const usesStableOptions = rawOptions.some((option) => isRecord(option))
+  return {
+    ...config,
+    pairs: [...pairs, { id: `pair-${timestamp}`, prompt: 'New prompt', answer: usesStableOptions ? answerId : answerLabel }],
+    options: stableOptions.some((option) => option.label === answerLabel)
+      ? rawOptions
+      : [...rawOptions, usesStableOptions ? { id: answerId, label: answerLabel } : answerLabel],
+  }
+}
+
 export function getQuizSummary(definition: WorksheetDefinition, responses: Record<string, unknown>) {
   const quizTypes = new Set(['quiz', 'multipleChoice', 'trueFalse', 'shortAnswer', 'matching', 'fillBlank', 'numeric'])
   const items = definition.pages.flatMap((page) => page.blocks)
     .filter((block) => quizTypes.has(block.type))
     .map((block) => {
       const answer = responses[block.id]
-      const points = Number(block.config?.points ?? 1)
+      const points = boundedNumber(block.config?.points, 1, 0)
       let isCorrect = false
 
       if (block.type === 'numeric') {
@@ -506,13 +730,14 @@ export function getDefaultBlockConfig(type: string, timestamp: number): Record<s
     case 'numeric': return { correctAnswer: 10, tolerance: 0, unit: '', placeholder: 'Enter a number', showFeedback: true, points: 1 }
     case 'wordCloud': return { maxEntries: 3, placeholder: 'Add a word or short phrase' }
     case 'confidence': return { options: ['Not sure yet', 'Somewhat confident', 'Very confident'] }
+    case 'verdict': return { options: ['Recommend', 'Use with caution', 'Do not recommend'] }
     case 'matrix': return { rows: ['Criteria 1', 'Criteria 2', 'Criteria 3'], min: 1, max: 5, defaultValue: 3 }
     case 'imagePrompt': return { imageUrl: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1200&q=80', altText: 'Worksheet image prompt', imageFit: 'contain', imageSize: 'large' }
     case 'video':
     case 'youtube': return { videoUrl: type === 'youtube' ? 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' : 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4', altText: type === 'youtube' ? 'YouTube video prompt' : 'Video prompt' }
     case 'quiz': return { question: 'Which answer is correct?', options: ['Option A', 'Option B', 'Option C'], correctAnswer: 'Option A', showFeedback: true, points: 1, explanation: 'Explain why the correct answer is right.' }
     case 'section': return { title: 'Section heading' }
-    case 'radar': return { dimensions: [{ id: `radar-dimension-${timestamp}`, label: 'Dimension 1' }, { id: `radar-dimension-${timestamp + 1}`, label: 'Dimension 2' }] }
+    case 'radar': return { dimensions: [{ id: `radar-dimension-${timestamp}`, label: 'Dimension 1' }, { id: `radar-dimension-${timestamp + 1}`, label: 'Dimension 2' }, { id: `radar-dimension-${timestamp + 2}`, label: 'Dimension 3' }] }
     case 'quadrant': return { xLeft: 'Left', xRight: 'Right', yBottom: 'Bottom', yTop: 'Top', rationaleRequired: true }
     case 'swot': return { categories: [{ id: 'strengths', label: 'Strengths' }, { id: 'weaknesses', label: 'Weaknesses' }, { id: 'opportunities', label: 'Opportunities' }, { id: 'threats', label: 'Threats' }] }
     case 'continuum': return { leftLabel: 'Low', rightLabel: 'High', instructions: 'Place your response on the spectrum.', rationaleRequired: false, defaultValue: 50 }
