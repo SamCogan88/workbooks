@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createElement, Fragment, useState } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, SynthesisViewer, renderBlock } from './App'
+import App, { ModalOverlay, OnlineJoinPageRoute, QuadrantMiniChart, SynthesisViewer, renderBlock } from './App'
 import { getPublishCardState } from './lib/builderPublishState'
 import { aggregateContinuum, aggregateDecisionMatrix, buildStudentSynthesis } from './lib/aggregation'
 import { createBuilderId } from './lib/builderIds'
@@ -341,6 +341,62 @@ describe('worksheet settings', () => {
   })
 })
 
+describe('video embeds', () => {
+  it('keeps non-YouTube video hosts on the native video player', () => {
+    const { container } = render(renderBlock({ id: 'video', type: 'video', config: { videoUrl: 'https://notyoutube.com/clip.mp4' } }, {}, vi.fn()))
+
+    expect(container.querySelector('iframe')).toBeNull()
+    expect(container.querySelector('video')?.getAttribute('src')).toBe('https://notyoutube.com/clip.mp4')
+  })
+
+  it.each([
+    ['youtube.com', 'https://youtube.com/watch?v=abc123'],
+    ['www.youtube.com', 'https://www.youtube.com/watch?v=abc123'],
+    ['m.youtube.com', 'https://m.youtube.com/watch?v=abc123'],
+    ['youtu.be', 'https://youtu.be/abc123'],
+  ])('embeds allowed YouTube host %s', (_host, videoUrl) => {
+    const { container } = render(renderBlock({ id: 'video', type: 'video', config: { videoUrl } }, {}, vi.fn()))
+
+    expect(container.querySelector('iframe')?.getAttribute('src')).toBe('https://www.youtube.com/embed/abc123')
+    expect(container.querySelector('video')).toBeNull()
+  })
+})
+
+describe('replacement character regressions', () => {
+  it('labels ranking move buttons with directional names', () => {
+    const update = vi.fn()
+    render(renderBlock({ id: 'ranking', type: 'ranking', label: 'Rank options', config: { options: ['Option 1', 'Option 2'] } }, {}, update))
+
+    expect(screen.getByRole('button', { name: 'Move Option 1 up' }).textContent).toBe('↑')
+    expect(screen.getByRole('button', { name: 'Move Option 2 down' }).textContent).toBe('↓')
+  })
+})
+
+describe('application routes', () => {
+  it('shows a not found page with a link to my workbooks for unknown routes', () => {
+    window.location.hash = '#/missing-workbook'
+
+    render(createElement(App))
+
+    expect(screen.getByRole('heading', { name: 'Page not found' })).toBeTruthy()
+    const myWorkbooksLink = screen.getByRole('link', { name: 'My workbooks' })
+    expect(myWorkbooksLink.getAttribute('href')).toBe('#/teacher')
+  })
+
+  it('places setup before the block library in the narrow builder layout', () => {
+    window.location.hash = '#/builder'
+    localStorage.removeItem('worksheet-active-definition')
+
+    render(createElement(App))
+
+    const setupPanel = screen.getByRole('heading', { name: 'Configure the worksheet and learner completion flow' }).closest('section')
+    const blockLibrary = screen.getByRole('heading', { name: 'Block library' }).closest('aside')
+
+    expect(setupPanel?.className).toContain('order-1')
+    expect(blockLibrary?.className).toContain('order-2')
+  })
+})
+
 describe('conditional visibility', () => {
   const definition = {
     id: 'branching', version: 1, title: 'Branching', description: '',
@@ -566,6 +622,38 @@ describe('image prompt display configuration', () => {
     const block = { id: 'image', type: 'imagePrompt', config: { imageFit: 'cover', imageSize: 'medium' } } as any
     const restored = JSON.parse(JSON.stringify(block))
     expect(getImageDisplayConfig(restored)).toEqual({ imageFit: 'cover', imageSize: 'medium' })
+  })
+})
+
+describe('hotspot image display', () => {
+  it('caps the rendered image height and keeps the full image visible', () => {
+    const { container } = render(renderBlock({ id: 'hotspot', type: 'hotspot', config: { imageUrl: '/large.jpg', altText: 'Large diagram' } }, {}, vi.fn()))
+
+    const image = container.querySelector('img[alt="Large diagram"]') as HTMLImageElement
+    expect(image.className).toContain('max-h-[70vh]')
+    expect(image.className).toContain('object-contain')
+  })
+
+  it('maps clicks against the rendered image bounds', () => {
+    const update = vi.fn()
+    const { container } = render(renderBlock({ id: 'hotspot', type: 'hotspot', config: { imageUrl: '/large.jpg', altText: 'Large diagram' } }, {}, update))
+
+    const image = container.querySelector('img[alt="Large diagram"]') as HTMLImageElement
+    vi.spyOn(image, 'getBoundingClientRect').mockReturnValue({
+      x: 110,
+      y: 220,
+      left: 110,
+      top: 220,
+      right: 510,
+      bottom: 420,
+      width: 400,
+      height: 200,
+      toJSON: () => ({}),
+    })
+
+    fireEvent.click(image, { clientX: 310, clientY: 270 })
+
+    expect(update).toHaveBeenCalledWith('hotspot', [{ x: 50, y: 25 }])
   })
 })
 

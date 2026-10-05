@@ -517,6 +517,7 @@ function App() {
             )}
           />
           <Route path="/preview" element={<WorksheetPlayer definition={activeDefinition} previewMode />} />
+          <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </TeacherAuthProvider>
@@ -527,6 +528,23 @@ function App() {
 export function OnlineJoinPageRoute() {
   const { publicCode = '' } = useParams()
   return <OnlineJoinPage key={publicCode} />
+}
+
+function NotFoundPage() {
+  return (
+    <main className="mx-auto flex min-h-[calc(100vh-49px)] max-w-3xl items-center px-5 py-12">
+      <section className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">404</p>
+        <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">Page not found</h1>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600">
+          This link may be mistyped, expired, or from an older version of Workbooks.
+        </p>
+        <Link to="/teacher" className="mt-6 inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+          My workbooks
+        </Link>
+      </section>
+    </main>
+  )
 }
 
 function OnlineJoinPage() {
@@ -1666,7 +1684,7 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
     const labels = blocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
     const remainingCount = Math.max(0, blocks.length - labels.length)
     return `Please complete the required items before continuing:
-${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
+${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
   }, [])
 
   const buildNavigationWarning = useCallback(() => {
@@ -1683,7 +1701,6 @@ ${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? 
     }
     return 'Page jumping is turned off for this worksheet. Use Next to move through one page at a time.'
   }, [definition.settings.allowPageJumping, definition.settings.navigation])
-
   useEffect(() => {
     if (!isSessionHydrated || visiblePageIndexes.length === 0 || visiblePageIndexes.includes(pageIndex)) return
     const nearest = visiblePageIndexes.find((index) => index > pageIndex) ?? visiblePageIndexes[visiblePageIndexes.length - 1]
@@ -2550,7 +2567,7 @@ function isYouTubeUrl(value: string) {
   if (!value) return false
   try {
     const parsed = new URL(value)
-    return parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')
+    return ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(parsed.hostname)
   } catch {
     return false
   }
@@ -2560,7 +2577,8 @@ function getYouTubeEmbedUrl(value: string) {
   if (!value) return ''
   try {
     const parsed = new URL(value)
-    if (parsed.hostname.includes('youtu.be')) {
+    if (!isYouTubeUrl(value)) return ''
+    if (parsed.hostname === 'youtu.be') {
       const id = parsed.pathname.replace('/', '')
       return `https://www.youtube.com/embed/${id}`
     }
@@ -2762,7 +2780,7 @@ function RichTextSurface({
   ]
 
   const listActions = [
-    { label: 'Bullet list', shortLabel: '��� List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
+    { label: 'Bullet list', shortLabel: '• List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
     { label: 'Numbered list', shortLabel: '1. List', run: () => editor.chain().focus().toggleOrderedList().run(), isActive: editor.isActive('orderedList'), canRun: editor.can().chain().focus().toggleOrderedList().run() },
   ]
 
@@ -3323,6 +3341,7 @@ function clampHotspotPercent(value: number) {
 function HotspotBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
   const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
   const lastPoint = points[points.length - 1]
+  const imageRef = useRef<HTMLImageElement>(null)
   const [keyboardPoint, setKeyboardPoint] = useState(() => ({
     x: clampHotspotPercent(Number(lastPoint?.x ?? 50)),
     y: clampHotspotPercent(Number(lastPoint?.y ?? 50)),
@@ -3344,11 +3363,11 @@ function HotspotBlock({ block, responses, updateResponse, showRequiredError = fa
         tabIndex={0}
         aria-describedby={`${instructionId} ${statusId}`}
         aria-label={`${getBlockDisplayLabel(block)} hotspot image`}
-        className={`relative overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
+        className={`relative w-fit max-w-full overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
         onFocus={() => setShowKeyboardPoint(true)}
         onBlur={() => setShowKeyboardPoint(false)}
         onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect()
+          const rect = imageRef.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect()
           const point = { x: clampHotspotPercent(((event.clientX - rect.left) / rect.width) * 100), y: clampHotspotPercent(((event.clientY - rect.top) / rect.height) * 100) }
           setKeyboardPoint(point)
           placePoint(point)
@@ -3373,7 +3392,7 @@ function HotspotBlock({ block, responses, updateResponse, showRequiredError = fa
           setKeyboardPoint((current) => ({ x: clampHotspotPercent(current.x + delta.x), y: clampHotspotPercent(current.y + delta.y) }))
         }}
       >
-        <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
+        <img ref={imageRef} src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto max-h-[70vh] min-h-48 max-w-full cursor-crosshair object-contain" />
         {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
         {showKeyboardPoint && <span className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-blue-700 bg-white/70 shadow" style={{ left: `${keyboardPoint.x}%`, top: `${keyboardPoint.y}%` }} />}
       </div>
@@ -3701,8 +3720,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
               <span className="flex-1 text-sm text-slate-700">{option.label}</span>
               <div className="flex gap-1">
-                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
-                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
+                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} aria-label={`Move ${option.label} up`} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↑</button>
+                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} aria-label={`Move ${option.label} down`} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↓</button>
               </div>
             </div>
           ))}
@@ -3886,7 +3905,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
-            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '���'}</span>
+            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '–'}</span>
           </div>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <input
@@ -4896,10 +4915,10 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     pdf.rect(0, 0, pageWidth, 78, 'F')
     pdf.setTextColor(255, 255, 255)
     pdf.setFontSize(22)
-    pdf.text(`${definition.title} ��� Class Evaluation Report`, 52, 40)
+    pdf.text(`${definition.title} · Class Evaluation Report`, 52, 40)
     pdf.setFontSize(10)
     pdf.setTextColor(191, 219, 254)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ���   Evaluations: ${filteredResponseCount}   ���   ${groupingLabelPlural}: ${filteredGroupings.length}   ���   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ·   Evaluations: ${filteredResponseCount}   ·   ${groupingLabelPlural}: ${filteredGroupings.length}   ·   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
 
     y = 102
     pdf.setTextColor(15, 23, 42)
@@ -6129,7 +6148,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
       </ModalOverlay>
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
-        <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${builderMode === 'setup' ? 'order-2 xl:order-none' : ''}`}>
           <h2 className="mb-4 inline-flex items-center gap-2 text-lg font-semibold text-slate-900">
             <Wrench className="h-5 w-5" />
             Block library
@@ -6209,7 +6228,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
           </div>
         </aside>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <section className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${builderMode === 'setup' ? 'order-1 xl:order-none' : ''}`}>
           {builderMode === 'pages' && !selectedPage && (
             <div className="mb-4 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-6 text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
