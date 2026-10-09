@@ -1,39 +1,28 @@
 import type { StoredSession, WorksheetResponse } from './types'
 
-const STORAGE_PREFIX = 'worksheet-app'
-const RESPONSE_ID_STORAGE_PREFIX = 'worksheet-session-id'
+const STORAGE_PREFIX = 'worksheet-app' 
 
-export function buildStorageKey(worksheetId: string, worksheetVersion: number, responseId: string, onlineWorksheetId?: string) {
-  if (onlineWorksheetId) return `${STORAGE_PREFIX}:online:${onlineWorksheetId}:${responseId}`
+export function buildStorageKey(worksheetId: string, worksheetVersion: number, responseId: string) {
   return `${STORAGE_PREFIX}:${worksheetId}:${worksheetVersion}:${responseId}`
 }
 
-export function buildResponseIdStorageKey(worksheetId: string, worksheetVersion: number, onlineWorksheetId?: string) {
-  if (onlineWorksheetId) return `${RESPONSE_ID_STORAGE_PREFIX}:online:${onlineWorksheetId}`
-  return `${RESPONSE_ID_STORAGE_PREFIX}:${worksheetId}:${worksheetVersion}`
-}
-
-export function saveSession(session: StoredSession, worksheetId: string, worksheetVersion: number, responseId: string, onlineWorksheetId?: string) {
+export function saveSession(session: StoredSession, worksheetId: string, worksheetVersion: number, responseId: string) {
   try {
-    localStorage.setItem(buildStorageKey(worksheetId, worksheetVersion, responseId, onlineWorksheetId), JSON.stringify(session))
+    localStorage.setItem(buildStorageKey(worksheetId, worksheetVersion, responseId), JSON.stringify(session))
   } catch (error) {
     console.error('Autosave failed', error)
   }
 }
 
-export function loadSession(worksheetId: string, worksheetVersion: number, responseId: string, onlineWorksheetId?: string): StoredSession | null {
+export function loadSession(worksheetId: string, worksheetVersion: number, responseId: string): StoredSession | null {
   try {
-    const raw = localStorage.getItem(buildStorageKey(worksheetId, worksheetVersion, responseId, onlineWorksheetId))
+    const raw = localStorage.getItem(buildStorageKey(worksheetId, worksheetVersion, responseId))
     if (!raw) return null
     return JSON.parse(raw) as StoredSession
   } catch (error) {
     console.error('Could not restore session', error)
     return null
   }
-}
-
-export function getStoredSessionCreatedAt(session: Pick<StoredSession, 'createdAt' | 'updatedAt'> | null | undefined, fallback = new Date().toISOString()) {
-  return session?.createdAt || session?.updatedAt || fallback
 }
 
 export function exportResponseJson(response: WorksheetResponse) {

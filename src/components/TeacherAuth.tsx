@@ -174,8 +174,8 @@ export function TeacherAccountPage() {
           ) : (
             <>
               <div className="flex rounded-lg bg-slate-100 p-1" aria-label="Teacher account action">
-                <button type="button" aria-pressed={mode === 'sign-in'} onClick={() => changeMode('sign-in')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-in' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Sign in</button>
-                <button type="button" aria-pressed={mode === 'sign-up'} onClick={() => changeMode('sign-up')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-up' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Create account</button>
+                <button type="button" onClick={() => changeMode('sign-in')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-in' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Sign in</button>
+                <button type="button" onClick={() => changeMode('sign-up')} className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold ${mode === 'sign-up' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Create account</button>
               </div>
 
               <h2 className="mt-7 text-2xl font-bold text-slate-900">{mode === 'sign-in' ? 'Sign in to Workbooks' : 'Create your teacher account'}</h2>
@@ -200,7 +200,7 @@ export function TeacherAccountPage() {
 
                 <button type="submit" disabled={submitting} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-60">
                   {submitting && <LoaderCircle className="h-4 w-4 animate-spin" />}
-                  {submitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in to Workbooks' : 'Create free account'}
+                  {submitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in' : 'Create free account'}
                 </button>
               </form>
             </>

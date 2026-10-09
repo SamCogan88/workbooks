@@ -45,7 +45,7 @@ export function GlobalBreadcrumb() {
           {location.pathname !== '/' && (
             <>
               <span aria-hidden="true">/</span>
-              <span className="truncate">{location.pathname.startsWith('/join') ? 'Join workbook' : location.pathname.startsWith('/teacher/workbooks/') ? 'Workbook responses' : labels[location.pathname] ?? 'Page not found'}</span>
+              <span className="truncate">{location.pathname.startsWith('/join') ? 'Join workbook' : location.pathname.startsWith('/teacher/workbooks/') ? 'Workbook responses' : labels[location.pathname] ?? 'Start'}</span>
             </>
           )}
         </div>
