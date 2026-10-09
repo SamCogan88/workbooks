@@ -1,5 +1,4 @@
-import type { GroupedResponseSet, WorksheetBlock, WorksheetDefinition, WorksheetResponse, WorksheetSynthesisSettings } from './types'
-import { getLabeledConfigItems, getNumericRange, numberInRange } from './worksheetLogic'
+import type { GroupedResponseSet, WorksheetDefinition, WorksheetResponse, WorksheetSynthesisSettings } from './types'
 
 export interface ResolvedSynthesisConfig {
   groupByBlockId?: string
@@ -11,7 +10,6 @@ export interface ResolvedSynthesisConfig {
 
 const DEFAULT_GROUP_LABEL = 'Response group'
 const DEFAULT_UNGROUPED_LABEL = 'All responses'
-const MISSING_GROUP_KEY = '\u0000missing-group-value'
 const UNSPECIFIED_GROUP_LABEL = 'Unspecified'
 
 export function normaliseGroupingValue(value: string = '') {
@@ -20,11 +18,6 @@ export function normaliseGroupingValue(value: string = '') {
 
 function getWorksheetBlocks(definition: WorksheetDefinition) {
   return definition.pages.flatMap((page) => page.blocks)
-}
-
-function getWorksheetBlock(definition: WorksheetDefinition, blockId?: string) {
-  if (!blockId) return undefined
-  return getWorksheetBlocks(definition).find((block) => block.id === blockId)
 }
 
 function hasBlock(definition: WorksheetDefinition, blockId?: string) {
@@ -53,33 +46,13 @@ function toDisplayGroupingValue(value: unknown): string {
   return ''
 }
 
-function matchesOptionValue(value: unknown, option: { id: string; label: string }) {
-  return value === option.id || value === option.label
-}
-
-function toConfiguredGroupingValue(value: unknown, block?: WorksheetBlock): string {
-  if (block?.type !== 'checklist' || !Array.isArray(value)) return toDisplayGroupingValue(value)
-
-  const options = getLabeledConfigItems(block.config?.options, 'option')
-  const orderedValues = options
-    .filter((option) => value.some((entry) => matchesOptionValue(entry, option)))
-    .map((option) => option.label)
-  const extraValues = value
-    .filter((entry) => !options.some((option) => matchesOptionValue(entry, option)))
-    .map((entry) => toDisplayGroupingValue(entry))
-    .filter(Boolean)
-    .sort((left, right) => left.localeCompare(right))
-
-  return [...orderedValues, ...extraValues].join(', ')
-}
-
-function getConfiguredGroupingValue(response: WorksheetResponse, definition: WorksheetDefinition, groupByBlockId?: string) {
+function getConfiguredGroupingValue(response: WorksheetResponse, groupByBlockId?: string) {
   if (!groupByBlockId) return ''
-  return toConfiguredGroupingValue(response.responses?.[groupByBlockId], getWorksheetBlock(definition, groupByBlockId))
+  return toDisplayGroupingValue(response.responses?.[groupByBlockId])
 }
 
 function getCompatibilityGroupingValue(response: WorksheetResponse, definition: WorksheetDefinition) {
-  const fromResponse = getConfiguredGroupingValue(response, definition, getCompatibilityGroupByBlockId(definition))
+  const fromResponse = getConfiguredGroupingValue(response, getCompatibilityGroupByBlockId(definition))
   if (fromResponse) return fromResponse
   return toDisplayGroupingValue(response.subject)
 }
@@ -132,15 +105,10 @@ export function resolveSynthesisConfig(definition: WorksheetDefinition): Resolve
 
 export function getResponseLabel(response: WorksheetResponse, definition: WorksheetDefinition) {
   const config = resolveSynthesisConfig(definition)
-  const configuredLabel = getConfiguredGroupingValue(response, definition, config.responseLabelBlockId)
+  const configuredLabel = getConfiguredGroupingValue(response, config.responseLabelBlockId)
   if (configuredLabel) return configuredLabel
   if (typeof response.group === 'string' && response.group.trim()) return response.group.trim()
-  if (typeof response.subject === 'string' && response.subject.trim()) return response.subject.trim()
-  if (typeof response.responseId !== 'string' || !response.responseId.trim()) return 'Anonymous response'
-
-  const generatedResponseMatch = response.responseId.match(/^response-\d+-(.+)$/)
-  const fallbackId = generatedResponseMatch?.[1] || response.responseId.slice(0, 8)
-  return `Response ${fallbackId}`
+  return response.responseId.slice(0, 8)
 }
 
 export function groupResponsesByKey(definition: WorksheetDefinition, responses: WorksheetResponse[]) {
@@ -159,11 +127,11 @@ export function groupResponsesByKey(definition: WorksheetDefinition, responses: 
 
   for (const response of responses) {
     const rawValue = config.groupByBlockId
-      ? getConfiguredGroupingValue(response, definition, config.groupByBlockId)
+      ? getConfiguredGroupingValue(response, config.groupByBlockId)
       : getCompatibilityGroupingValue(response, definition)
 
     const displayLabel = rawValue || UNSPECIFIED_GROUP_LABEL
-    const key = rawValue ? normaliseGroupingValue(rawValue) : MISSING_GROUP_KEY
+    const key = rawValue ? normaliseGroupingValue(rawValue) : 'unspecified'
 
     if (!groups.has(key)) {
       groups.set(key, {
@@ -192,7 +160,6 @@ export function aggregateRadarValues(
   responses: WorksheetResponse[],
   dimensions: string[],
   radarBlockId = 'radar-eval',
-  range = { min: 1, max: 10 },
 ) {
   const grouped: Record<string, number[]> = {}
 
@@ -203,8 +170,8 @@ export function aggregateRadarValues(
   responses.forEach((response) => {
     const radar = response.responses?.[radarBlockId] || {}
     dimensions.forEach((dimension) => {
-      const value = numberInRange(radar[dimension], range.min, range.max)
-      if (value !== undefined) grouped[dimension].push(value)
+      const value = Number(radar[dimension]) || 0
+      grouped[dimension].push(value)
     })
   })
 
@@ -226,12 +193,8 @@ export function aggregateQuadrantMean(responses: WorksheetResponse[], quadrantBl
 
   responses.forEach((response) => {
     const point = response.responses?.[quadrantBlockId] || {}
-    const x = numberInRange(point.x, 0, 100)
-    const y = numberInRange(point.y, 0, 100)
-    if (x !== undefined && y !== undefined) {
-      xValues.push(x)
-      yValues.push(y)
-    }
+    xValues.push(Number(point.x) || 0)
+    yValues.push(Number(point.y) || 0)
   })
 
   return {
@@ -255,15 +218,10 @@ export function aggregateDecisionMatrix(
   blockId: string,
   options: Array<{ id: string; label: string }>,
   criteria: Array<{ id: string; label: string }>,
-  range = { min: 1, max: 5 },
 ) {
-  const normalizedOptions = getLabeledConfigItems(options, 'option')
-  const normalizedCriteria = getLabeledConfigItems(criteria, 'criterion')
-  return normalizedOptions.map((option) => {
-    const criterionResults = normalizedCriteria.map((criterion) => {
-      const values = responses
-        .map((response) => numberInRange(response.responses?.[blockId]?.[option.id]?.[criterion.id], range.min, range.max))
-        .filter((value): value is number => value !== undefined)
+  return options.map((option) => {
+    const criterionResults = criteria.map((criterion) => {
+      const values = responses.map((response) => Number(response.responses?.[blockId]?.[option.id]?.[criterion.id])).filter(Number.isFinite)
       return { ...criterion, count: values.length, average: averageArray(values) }
     })
     const populated = criterionResults.filter((criterion) => criterion.count > 0)
@@ -285,8 +243,6 @@ export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBloc
   const allResponses = groupings.flatMap((group) => group.responses)
   const totalResponses = allResponses.length
   const highlights: string[] = []
-  const radarBlock = definition?.pages.flatMap((page) => page.blocks).find((block) => block.id === radarBlockId)
-  const radarRange = getNumericRange(radarBlock?.config, 1, 10)
 
   if (groupings.length > 1) {
     const largest = [...groupings].sort((left, right) => right.responses.length - left.responses.length)[0]
@@ -298,8 +254,8 @@ export function buildStudentSynthesis(groupings: GroupedResponseSet[], radarBloc
     const radar = response.responses?.[radarBlockId]
     if (!radar || typeof radar !== 'object') return
     Object.entries(radar).forEach(([dimension, rawValue]) => {
-      const value = numberInRange(rawValue, radarRange.min, radarRange.max)
-      if (value === undefined) return
+      const value = Number(rawValue)
+      if (!Number.isFinite(value)) return
       radarValues.set(dimension, [...(radarValues.get(dimension) || []), value])
     })
   })

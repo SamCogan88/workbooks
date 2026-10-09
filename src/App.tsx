@@ -1,6 +1,6 @@
-import { HashRouter, Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { HashRouter, Link, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { jsPDF } from 'jspdf'
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import LinkExtension from '@tiptap/extension-link'
@@ -61,54 +61,24 @@ import {
   groupResponsesByKey,
   mapCanvasPointToQuadrant,
 } from './lib/aggregation'
-import { createBuilderId } from './lib/builderIds'
-import { getPublishCardState } from './lib/builderPublishState'
-import { clearConditionsReferencingBlocks, getFirstConditionOrderViolation, remapBlockConditions } from './lib/conditionIntegrity'
-import { formatDocumentTitle, getRouteDocumentTitle } from './lib/documentTitle'
-import { updateBlockConfigWithOptionReferences } from './lib/optionReferenceIntegrity'
-import { isResponseJsonExportEnabled, isResponsePdfExportEnabled, shouldAutosaveOnlineResponse } from './lib/worksheetSettings'
-import { buildResponseIdStorageKey, exportResponseJson, getDefaultResponseId, getStoredSessionCreatedAt, loadSession, saveSession } from './lib/storage'
-import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadParticipantResponse, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
-import { normalizeRandomizerAnimationDuration, selectRandomItem, shuffleRandomizerItems } from './lib/randomizer'
-import { sanitizeRichTextHtml } from './lib/richTextSanitizer'
+import { exportResponseJson, getDefaultResponseId, loadSession, saveSession } from './lib/storage'
+import { listOwnedWorksheets, listSubmittedResponseRows, listSubmittedResponses, loadOwnedWorksheet, loadPublishedWorksheet, publishWorksheet, saveOnlineResponse, submitOnlineResponse, type OnlineResponseRow, type OnlineWorksheetRow } from './lib/onlineRepository'
 import {
-  addMatchingPairConfig,
   getDefaultBlockConfig,
   getDefaultPageTimer,
-  getFillBlankCorrectAnswerPatch,
-  formatQuizPercent,
   getBoardPresetColumns,
-  canNavigateToVisiblePage,
-  getConditionOptions,
   getImageDisplayConfig,
-  getLabeledConfigItems,
-  getMatchingPairKey,
-  getMissingRequiredBlockLocations,
   getMissingRequiredBlocks,
-  getNumericRange,
   getQuizSummary,
-  getWorksheetResponseImportError,
-  numberInRange,
-  reconcileCategorizeResponse,
-  reconcileRankingResponse,
-  reconcileWorksheetResponses,
-  getUnanswerableRequiredBlocks,
+  getStructuredDefaultResponse,
   getVisibleBlocks,
   getVisiblePages,
-  getVisiblePagesWithBlocks,
   hasMeaningfulResponseValue,
-  isConditionSourceBlock,
-  isWorksheetDefinition,
   isResponseProducingBlock,
-  normalizeRichTextResponse,
-  normalizeWorksheetDefinitionStableIds,
-  reorderBlocks,
-  sanitizeWorksheetDefinition,
   stripHtml,
 } from './lib/worksheetLogic'
-import { sanitiseWorksheetResponses } from './lib/responseValidation'
-import { getPdfLineCapacity } from './lib/pdfLayout'
 
+const BASE_RESPONSE_KEY = 'worksheet-session-id'
 const ACTIVE_DEFINITION_KEY = 'worksheet-active-definition'
 const WHEEL_SEGMENT_COLORS = ['#0ea5e9', '#ec4899', '#8b5cf6', '#f59e0b', '#ef4444', '#d946ef', '#22c55e', '#facc15']
 const RESPONSE_SUMMARY_BLOCK_TYPES = new Set(['shortText', 'longText', 'richText', 'singleSelect', 'randomizer', 'multipleChoice', 'trueFalse', 'shortAnswer', 'checklist', 'ranking', 'verdict', 'rating', 'categorize', 'hotspot', 'numeric', 'wordCloud', 'confidence'])
@@ -163,18 +133,6 @@ function BlockTypeIcon({ type, className = 'h-4 w-4' }: { type: string; classNam
   return <Icon aria-hidden="true" className={className} />
 }
 
-function useDocumentTitle(title: string) {
-  useEffect(() => {
-    document.title = title
-  }, [title])
-}
-
-function RouteDocumentTitle({ definition }: { definition: WorksheetDefinition }) {
-  const location = useLocation()
-  useDocumentTitle(getRouteDocumentTitle(location.pathname, definition.title))
-  return null
-}
-
 function getBlockDisplayLabel(block: WorksheetBlock) {
   return block.label || block.title || block.id
 }
@@ -217,15 +175,6 @@ function clearRemovedBlockReferences(
   return isSynthesisSettingsEmpty(next) ? undefined : next
 }
 
-function getConditionReferenceCount(definition: WorksheetDefinition, blockIds: string[]) {
-  const targets = new Set(blockIds)
-  return definition.pages.reduce((count, page) => {
-    const pageConditionCount = page.condition && targets.has(page.condition.blockId) ? 1 : 0
-    const blockConditionCount = page.blocks.filter((block) => block.condition && targets.has(block.condition.blockId)).length
-    return count + pageConditionCount + blockConditionCount
-  }, 0)
-}
-
 function buildResponseSearchText(response: WorksheetResponse) {
   const values = Object.values(response.responses || {})
   const flattened = values.map((value) => {
@@ -256,6 +205,15 @@ const EMPTY_WORKSHEET_DEFINITION: WorksheetDefinition = {
 }
 
 type WorksheetBuilderSetter = (value: WorksheetDefinition | ((previous: WorksheetDefinition) => WorksheetDefinition)) => void
+
+function isWorksheetDefinition(value: unknown): value is WorksheetDefinition {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<WorksheetDefinition>
+  return typeof candidate.id === 'string'
+    && typeof candidate.version === 'number'
+    && typeof candidate.title === 'string'
+    && Array.isArray(candidate.pages)
+}
 
 function getWorksheetStructure(definition: WorksheetDefinition) {
   const blocks = definition.pages.flatMap((page) => page.blocks)
@@ -316,100 +274,6 @@ function getBlockWrapperId(blockId: string) {
   return `worksheet-block-${blockId}`
 }
 
-const MODAL_FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'textarea:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',')
-
-function getModalFocusableElements(container: HTMLElement) {
-  return Array.from(container.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE_SELECTOR))
-    .filter((element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true')
-}
-
-function useModalBehavior(isOpen: boolean, dialogRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
-  const previousActiveElementRef = useRef<HTMLElement | null>(null)
-
-  useEffect(() => {
-    if (!isOpen) return undefined
-
-    const dialog = dialogRef.current
-    if (!dialog) return undefined
-
-    previousActiveElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const siblingStates = Array.from(dialog.parentElement?.children || [])
-      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialog)
-      .map((element) => ({
-        element,
-        inert: element.getAttribute('inert'),
-        ariaHidden: element.getAttribute('aria-hidden'),
-      }))
-
-    siblingStates.forEach(({ element }) => {
-      element.setAttribute('inert', '')
-      element.setAttribute('aria-hidden', 'true')
-    })
-
-    const focusTarget = dialog.querySelector<HTMLElement>('[data-modal-initial-focus]') ?? getModalFocusableElements(dialog)[0] ?? dialog
-    focusTarget.focus()
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-        return
-      }
-      if (event.key !== 'Tab') return
-
-      const focusableElements = getModalFocusableElements(dialog)
-      if (focusableElements.length === 0) {
-        event.preventDefault()
-        dialog.focus()
-        return
-      }
-
-      const firstElement = focusableElements[0]
-      const lastElement = focusableElements[focusableElements.length - 1]
-      if (event.shiftKey && document.activeElement === firstElement) {
-        event.preventDefault()
-        lastElement.focus()
-      } else if (!event.shiftKey && document.activeElement === lastElement) {
-        event.preventDefault()
-        firstElement.focus()
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      siblingStates.forEach(({ element, inert, ariaHidden }) => {
-        if (inert === null) element.removeAttribute('inert')
-        else element.setAttribute('inert', inert)
-        if (ariaHidden === null) element.removeAttribute('aria-hidden')
-        else element.setAttribute('aria-hidden', ariaHidden)
-      })
-      previousActiveElementRef.current?.focus()
-    }
-  }, [dialogRef, isOpen, onClose])
-}
-
-export function ModalOverlay({ isOpen, onClose, labelledBy, className, children }: { isOpen: boolean; onClose: () => void; labelledBy: string; className?: string; children?: ReactNode }) {
-  const dialogRef = useRef<HTMLDivElement>(null)
-  useModalBehavior(isOpen, dialogRef, onClose)
-
-  if (!isOpen) return null
-
-  return (
-    <div ref={dialogRef} tabIndex={-1} className={className || 'fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4'} role="dialog" aria-modal="true" aria-labelledby={labelledBy}>
-      {children}
-    </div>
-  )
-}
-
 function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
   const requiredLabel = getRequiredLabel(block)
 
@@ -421,14 +285,6 @@ function BlockFieldLabel({ block }: { block: WorksheetBlock }) {
   )
 }
 
-function getSelectedOptionValues(value: unknown) {
-  return Array.isArray(value) ? value : [value].filter((entry) => entry !== undefined && entry !== null && entry !== '')
-}
-
-function matchesOptionValue(value: unknown, option: { id: string; label: string }) {
-  return value === option.id || value === option.label
-}
-
 function App() {
   const [activeDefinition, setActiveDefinition] = useState<WorksheetDefinition>(() => {
     const raw = localStorage.getItem(ACTIVE_DEFINITION_KEY)
@@ -436,18 +292,11 @@ function App() {
 
     try {
       const parsed = JSON.parse(raw) as unknown
-      return isWorksheetDefinition(parsed)
-        ? sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
-        : EMPTY_WORKSHEET_DEFINITION
+      return isWorksheetDefinition(parsed) ? parsed : EMPTY_WORKSHEET_DEFINITION
     } catch {
       return EMPTY_WORKSHEET_DEFINITION
     }
   })
-  const setSanitizedActiveDefinition: WorksheetBuilderSetter = useCallback((value) => {
-    setActiveDefinition((previous) => sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(
-      typeof value === 'function' ? value(previous) : value,
-    )))
-  }, [])
   const [, setDefinitionStatus] = useState('Import a worksheet JSON to replace the current active definition.')
 
   useEffect(() => {
@@ -456,24 +305,19 @@ function App() {
 
   const importWorksheetDefinition = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
-    if (!file) return null
+    if (!file) return
 
     try {
       const text = await file.text()
       const parsed = JSON.parse(text) as unknown
       if (!isWorksheetDefinition(parsed)) {
-        const error = 'Import failed: every page needs id, title, and blocks; every block needs id and type.'
-        setDefinitionStatus(error)
-        return error
+        setDefinitionStatus('Import failed: file is not a valid worksheet definition.')
+        return
       }
-      const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
-      setActiveDefinition(sanitized)
-      setDefinitionStatus(`Loaded ${sanitized.title} (${sanitized.id} v${sanitized.version}) from ${file.name}.`)
-      return null
+      setActiveDefinition(parsed)
+      setDefinitionStatus(`Loaded ${parsed.title} (${parsed.id} v${parsed.version}) from ${file.name}.`)
     } catch {
-      const error = 'Import failed: malformed JSON file.'
-      setDefinitionStatus(error)
-      return error
+      setDefinitionStatus('Import failed: malformed JSON file.')
     } finally {
       event.target.value = ''
     }
@@ -481,7 +325,6 @@ function App() {
 
   return (
     <HashRouter>
-      <RouteDocumentTitle definition={activeDefinition} />
       <TeacherAuthProvider>
         <div className="min-h-screen bg-slate-100 text-slate-900">
           <GlobalBreadcrumb />
@@ -502,48 +345,25 @@ function App() {
           <Route path="/report/ai-tool-lab" element={<SynthesisViewer definition={activeDefinition} initialMode="teacher" />} />
           <Route path="/system-guide" element={<SystemGuidePage />} />
           <Route path="/account" element={<TeacherAccountPage />} />
-          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setSanitizedActiveDefinition} />} />
+          <Route path="/teacher" element={<TeacherDashboard onOpenWorkbook={setActiveDefinition} />} />
           <Route path="/teacher/workbooks/:workbookId/report" element={<OnlineTeacherReportPage />} />
-          <Route path="/join" element={<OnlineJoinPageRoute />} />
-          <Route path="/join/:publicCode" element={<OnlineJoinPageRoute />} />
+          <Route path="/join" element={<OnlineJoinPage />} />
+          <Route path="/join/:publicCode" element={<OnlineJoinPage />} />
           <Route
             path="/builder"
             element={(
               <BuilderPage
                 definition={activeDefinition}
-                setDefinition={setSanitizedActiveDefinition}
+                setDefinition={setActiveDefinition}
                 importWorksheetDefinition={importWorksheetDefinition}
               />
             )}
           />
           <Route path="/preview" element={<WorksheetPlayer definition={activeDefinition} previewMode />} />
-          <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </div>
       </TeacherAuthProvider>
     </HashRouter>
-  )
-}
-
-export function OnlineJoinPageRoute() {
-  const { publicCode = '' } = useParams()
-  return <OnlineJoinPage key={publicCode} />
-}
-
-function NotFoundPage() {
-  return (
-    <main className="mx-auto flex min-h-[calc(100vh-49px)] max-w-3xl items-center px-5 py-12">
-      <section className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-blue-600">404</p>
-        <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">Page not found</h1>
-        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-slate-600">
-          This link may be mistyped, expired, or from an older version of Workbooks.
-        </p>
-        <Link to="/teacher" className="mt-6 inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-          My workbooks
-        </Link>
-      </section>
-    </main>
   )
 }
 
@@ -554,8 +374,6 @@ function OnlineJoinPage() {
   const [workbook, setWorkbook] = useState<OnlineWorksheetRow | null>(null)
   const [loading, setLoading] = useState(Boolean(publicCode))
   const [error, setError] = useState('')
-
-  useDocumentTitle(workbook ? formatDocumentTitle(workbook.definition.title) : getRouteDocumentTitle('/join'))
 
   useEffect(() => {
     if (!publicCode) return
@@ -579,7 +397,7 @@ function OnlineJoinPage() {
   }, [publicCode])
 
   if (workbook) {
-    return <WorksheetPlayer definition={sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(workbook.definition))} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
+    return <WorksheetPlayer definition={workbook.definition} onlineWorksheetId={workbook.id} publicCode={workbook.public_code} />
   }
 
   const handleJoin = (event: FormEvent<HTMLFormElement>) => {
@@ -740,7 +558,7 @@ function TeacherDashboard({ onOpenWorkbook }: { onOpenWorkbook: (definition: Wor
                   <div className="mt-4 space-y-2">
                     {responses.slice(0, 3).map((response) => (
                       <div key={response.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm">
-                        <span className="font-medium text-slate-700">{response.participant_label || response.answers?.group || response.answers?.subject || 'Anonymous learner'}</span>
+                        <span className="font-medium text-slate-700">{response.participant_label || response.answers.group || response.answers.subject || 'Anonymous learner'}</span>
                         <span className="text-xs text-slate-500">{response.submitted_at ? new Date(response.submitted_at).toLocaleString() : 'Submitted'}</span>
                       </div>
                     ))}
@@ -769,9 +587,6 @@ function OnlineTeacherReportPage() {
   const [responses, setResponses] = useState<WorksheetResponse[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [reportNotice, setReportNotice] = useState('')
-
-  useDocumentTitle(workbook ? formatDocumentTitle(`${workbook.definition.title} Responses`) : getRouteDocumentTitle(`/teacher/workbooks/${workbookId}/report`))
 
   useEffect(() => {
     if (authLoading) return
@@ -783,15 +598,10 @@ function OnlineTeacherReportPage() {
     let active = true
     setLoading(true)
     setError('')
-    setReportNotice('')
     void Promise.all([loadOwnedWorksheet(workbookId), listSubmittedResponses(workbookId)]).then(([loadedWorkbook, loadedResponses]) => {
       if (!active) return
-      const sanitised = sanitiseWorksheetResponses(loadedWorkbook.definition, loadedResponses)
       setWorkbook(loadedWorkbook)
-      setResponses(sanitised.responses)
-      if (sanitised.rejectedResponses || sanitised.rejectedValues) {
-        setReportNotice(`Loaded ${sanitised.responses.length} response(s). Skipped ${sanitised.rejectedResponses} malformed response(s) and ${sanitised.rejectedValues} malformed answer value(s).`)
-      }
+      setResponses(loadedResponses)
       setLoading(false)
     }).catch((loadError) => {
       if (!active) return
@@ -808,7 +618,7 @@ function OnlineTeacherReportPage() {
   if (!user) return <main className="mx-auto max-w-3xl px-5 py-12 text-center"><h1 className="text-2xl font-bold">Teacher sign-in required</h1><Link to="/account" className="mt-5 inline-flex rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white">Teacher sign in</Link></main>
   if (error || !workbook) return <main className="mx-auto max-w-3xl px-5 py-12"><p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || 'Workbook not found.'}</p><Link to="/teacher" className="mt-4 inline-flex text-sm font-semibold text-blue-700">Back to my workbooks</Link></main>
 
-  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} initialNotice={reportNotice} backTo="/teacher" />
+  return <SynthesisViewer definition={workbook.definition} initialMode="teacher" initialResponses={responses} backTo="/teacher" />
 }
 
 function SystemGuidePage() {
@@ -1565,10 +1375,9 @@ function formatTimerValue(seconds: number) {
 
 function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, publicCode }: { definition: WorksheetDefinition; previewMode?: boolean; onlineWorksheetId?: string; publicCode?: string }) {
   const navigate = useNavigate()
-  const responseIdStorageKey = buildResponseIdStorageKey(definition.id, definition.version, onlineWorksheetId)
   const [pageIndex, setPageIndex] = useState(0)
   const [responseId, setResponseId] = useState(() => {
-    const saved = localStorage.getItem(responseIdStorageKey)
+    const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
     return saved || getDefaultResponseId()
   })
   const [responses, setResponses] = useState<Record<string, any>>({})
@@ -1578,80 +1387,54 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
   const [showCompletionDialog, setShowCompletionDialog] = useState(false)
   const [validationAttempted, setValidationAttempted] = useState(false)
   const [exportError, setExportError] = useState('')
-  const [submittedOnlineResponse, setSubmittedOnlineResponse] = useState<OnlineResponseRow | null>(null)
-  const [responseCreatedAt, setResponseCreatedAt] = useState(() => new Date().toISOString())
-  const hasSubmittedOnlineResponse = Boolean(onlineWorksheetId && submittedOnlineResponse)
+  const [responseCreatedAt] = useState(() => new Date().toISOString())
 
   useEffect(() => {
     setIsSessionHydrated(false)
-    const saved = localStorage.getItem(responseIdStorageKey)
+    const saved = localStorage.getItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`)
     if (saved) {
       setResponseId(saved)
       return
     }
     const next = getDefaultResponseId()
-    localStorage.setItem(responseIdStorageKey, next)
+    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, next)
     setResponseId(next)
-  }, [responseIdStorageKey])
+  }, [definition.id, definition.version])
 
   useEffect(() => {
     if (!responseId) return
-    localStorage.setItem(responseIdStorageKey, responseId)
-    const saved = loadSession(definition.id, definition.version, responseId, onlineWorksheetId)
+    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, responseId)
+    const saved = loadSession(definition.id, definition.version, responseId)
     if (saved) {
       setResponses(saved.responses || {})
       setPageIndex(saved.pageIndex || 0)
-      setResponseCreatedAt(getStoredSessionCreatedAt(saved))
       setStatus('In progress')
     } else {
       setResponses({})
       setPageIndex(0)
-      setResponseCreatedAt(new Date().toISOString())
       setStatus('In progress')
     }
-    setSubmittedOnlineResponse(null)
     setIsSessionHydrated(true)
-  }, [definition.id, definition.version, onlineWorksheetId, responseId, responseIdStorageKey])
-
-  useEffect(() => {
-    if (!onlineWorksheetId || !isSessionHydrated) return
-    let active = true
-
-    void loadParticipantResponse(onlineWorksheetId).then((savedResponse) => {
-      if (!active || savedResponse?.status !== 'submitted') return
-      setSubmittedOnlineResponse(savedResponse)
-      setResponses(savedResponse.answers.responses || {})
-      setStatus('Submitted')
-      setExportError('')
-    }).catch(() => {
-      // Autosave will surface any connectivity problem if the learner continues editing.
-    })
-
-    return () => {
-      active = false
-    }
-  }, [isSessionHydrated, onlineWorksheetId])
+  }, [definition.id, definition.version, responseId])
 
   useEffect(() => {
     if (definition.settings.autosave && responseId && isSessionHydrated) {
       saveSession(
-        { responseId, createdAt: responseCreatedAt, pageIndex, responses, updatedAt: new Date().toISOString() },
+        { responseId, pageIndex, responses, updatedAt: new Date().toISOString() },
         definition.id,
         definition.version,
         responseId,
-        onlineWorksheetId,
       )
     }
-  }, [definition, isSessionHydrated, onlineWorksheetId, pageIndex, responseCreatedAt, responseId, responses])
+  }, [definition, isSessionHydrated, pageIndex, responseId, responses])
 
   const visiblePages = useMemo(() => getVisiblePages(definition, responses), [definition, responses])
   const visiblePageIndexes = useMemo(() => visiblePages.map((page) => definition.pages.indexOf(page)), [definition.pages, visiblePages])
   const totalPages = visiblePages.length
   const currentPage = definition.pages[pageIndex]
   const currentVisiblePageIndex = visiblePageIndexes.indexOf(pageIndex)
-  const isRestrictedNavigation = definition.settings.navigation === 'sequential' || !definition.settings.allowPageJumping
   const visibleBlocks = currentPage
-    ? getVisibleBlocks(currentPage, responses, definition).filter((block) => previewMode || getBlockAudience(block) === 'student')
+    ? getVisibleBlocks(currentPage, responses).filter((block) => previewMode || getBlockAudience(block) === 'student')
     : []
   const currentTimer = currentPage?.timer ?? null
   const [pageRemainingSeconds, setPageRemainingSeconds] = useState<number | null>(null)
@@ -1663,44 +1446,23 @@ function WorksheetPlayer({ definition, previewMode = false, onlineWorksheetId, p
         ? configured
         : 'Your response has been sent to your teacher. You can now close this page.'
     }
-    if (configured) return configured
-    return isResponseJsonExportEnabled(definition)
-      ? 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
-      : 'Your response is complete. You can now close this page.'
-  }, [definition, onlineWorksheetId])
+    return configured || 'Your response JSON has been downloaded. Upload it wherever your teacher asked you to submit your work.'
+  }, [definition.settings.completionMessage, onlineWorksheetId])
   const missingRequiredBlocks = useMemo(
-    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses, definition) : []),
-    [currentPage, definition, responses],
-  )
-  const missingRequiredBlockLocations = useMemo(
-    () => getMissingRequiredBlockLocations(definition, responses),
-    [definition, responses],
+    () => (currentPage ? getMissingRequiredBlocks(currentPage, responses) : []),
+    [currentPage, responses],
   )
   const canLeaveCurrentPage = missingRequiredBlocks.length === 0
   const missingRequiredBlockIds = useMemo(() => new Set(missingRequiredBlocks.map((block) => block.id)), [missingRequiredBlocks])
 
-  const buildRequiredBlocksWarning = useCallback((blocks: WorksheetBlock[]) => {
-    if (blocks.length === 0) return ''
-    const labels = blocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
-    const remainingCount = Math.max(0, blocks.length - labels.length)
-    return `Please complete the required items before continuing:
-${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
-  }, [])
-
   const buildNavigationWarning = useCallback(() => {
     if (!currentPage || missingRequiredBlocks.length === 0) return ''
-    return buildRequiredBlocksWarning(missingRequiredBlocks)
-  }, [buildRequiredBlocksWarning, currentPage, missingRequiredBlocks])
+    const labels = missingRequiredBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
+    const remainingCount = Math.max(0, missingRequiredBlocks.length - labels.length)
+    return `Please complete the required items before continuing:
+${labels.map((label) => `��� ${label}`).join('\n')}${remainingCount > 0 ? `\nand ${remainingCount} more required item${remainingCount === 1 ? '' : 's'}.` : ''}`
+  }, [currentPage, missingRequiredBlocks])
 
-  const buildPageJumpingWarning = useCallback(() => {
-    if (definition.settings.navigation === 'sequential' && !definition.settings.allowPageJumping) {
-      return 'This worksheet is set to sequential navigation with page jumping turned off. Use Next to move through one page at a time.'
-    }
-    if (definition.settings.navigation === 'sequential') {
-      return 'This worksheet is set to sequential navigation. Use Next to move through one page at a time.'
-    }
-    return 'Page jumping is turned off for this worksheet. Use Next to move through one page at a time.'
-  }, [definition.settings.allowPageJumping, definition.settings.navigation])
   useEffect(() => {
     if (!isSessionHydrated || visiblePageIndexes.length === 0 || visiblePageIndexes.includes(pageIndex)) return
     const nearest = visiblePageIndexes.find((index) => index > pageIndex) ?? visiblePageIndexes[visiblePageIndexes.length - 1]
@@ -1708,6 +1470,25 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     setNavigationWarning('')
     setValidationAttempted(false)
   }, [isSessionHydrated, pageIndex, visiblePageIndexes])
+
+  useEffect(() => {
+    const nextDefaults = currentPage?.blocks.reduce<Record<string, any>>((accumulator, block) => {
+      if (responses[block.id] !== undefined) return accumulator
+      const defaultValue = getStructuredDefaultResponse(block)
+      if (defaultValue !== undefined) {
+        accumulator[block.id] = defaultValue
+      }
+      return accumulator
+    }, {}) || {}
+
+    if (Object.keys(nextDefaults).length === 0) return
+    setResponses((previous) => {
+      const missingDefaults = Object.fromEntries(
+        Object.entries(nextDefaults).filter(([blockId]) => previous[blockId] === undefined),
+      )
+      return Object.keys(missingDefaults).length > 0 ? { ...previous, ...missingDefaults } : previous
+    })
+  }, [currentPage, responses])
 
   useEffect(() => {
     if (!currentTimer?.enabled) {
@@ -1754,10 +1535,9 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
   }, [buildNavigationWarning, canLeaveCurrentPage, currentPage?.id, currentTimer, currentVisiblePageIndex, pageRemainingSeconds, totalPages, visiblePageIndexes])
 
   const updateResponse = (blockId: string, value: any) => {
-    if (hasSubmittedOnlineResponse) return
     setNavigationWarning('')
     setExportError('')
-    if (status === 'Required responses missing' || status === 'Page jumping disabled') {
+    if (status === 'Required responses missing') {
       setStatus('In progress')
     }
     setResponses((previous) => ({ ...previous, [blockId]: value }))
@@ -1772,15 +1552,6 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     focusTarget?.focus()
   }, [missingRequiredBlocks])
 
-  const focusMissingBlock = useCallback((blockId: string) => {
-    window.setTimeout(() => {
-      const wrapper = document.getElementById(getBlockWrapperId(blockId))
-      wrapper?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      const focusTarget = wrapper?.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')
-      focusTarget?.focus()
-    })
-  }, [])
-
   const buildDocument = useCallback((): WorksheetResponse => ({
     responseSchema: 'interactive-worksheet-response',
     schemaVersion: 1,
@@ -1791,20 +1562,13 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     updatedAt: new Date().toISOString(),
     group: String(responses['group-name'] || ''),
     subject: String(responses['tool-name'] || responses['subject-name'] || ''),
-    responses: reconcileWorksheetResponses(definition, responses),
-  }), [definition, responseCreatedAt, responseId, responses])
+    responses,
+  }), [definition.id, definition.version, responseCreatedAt, responseId, responses])
 
   useEffect(() => {
-    if (!onlineWorksheetId || !shouldAutosaveOnlineResponse(definition) || !isSessionHydrated || hasSubmittedOnlineResponse || status === 'Complete' || status === 'Submitting…') return
+    if (!onlineWorksheetId || !isSessionHydrated || status === 'Complete' || status === 'Submitting…') return
     const timeoutId = window.setTimeout(() => {
-      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then((savedResponse) => {
-        if (savedResponse.status === 'submitted') {
-          setSubmittedOnlineResponse(savedResponse)
-          setResponses(savedResponse.answers.responses || {})
-          setStatus('Submitted')
-          setExportError('')
-          return
-        }
+      void saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || '')).then(() => {
         setStatus('Saved online')
       }).catch(() => {
         setStatus('Saved on this device')
@@ -1812,7 +1576,7 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     }, 900)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildDocument, definition, hasSubmittedOnlineResponse, isSessionHydrated, onlineWorksheetId, responses, status])
+  }, [buildDocument, isSessionHydrated, onlineWorksheetId, responses, status])
 
   const tryLeaveCurrentPage = () => {
     if (canLeaveCurrentPage) {
@@ -1828,33 +1592,9 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     return false
   }
 
-  const tryCompleteWorksheet = () => {
-    const firstMissingLocation = missingRequiredBlockLocations[0]
-    if (!firstMissingLocation) return true
-
-    const pageMissingBlocks = missingRequiredBlockLocations
-      .filter((location) => location.pageIndex === firstMissingLocation.pageIndex)
-      .map((location) => location.block)
-    setPageIndex(firstMissingLocation.pageIndex)
-    setValidationAttempted(true)
-    setNavigationWarning(buildRequiredBlocksWarning(pageMissingBlocks))
-    setStatus('Required responses missing')
-    focusMissingBlock(firstMissingLocation.block.id)
-    return false
-  }
-
   const goToPage = (index: number) => {
-    const targetVisiblePageIndex = visiblePageIndexes.indexOf(index)
-    if (targetVisiblePageIndex < 0) return
-    if (targetVisiblePageIndex > currentVisiblePageIndex && !tryLeaveCurrentPage()) return
-    if (!canNavigateToVisiblePage(definition.settings, currentVisiblePageIndex, targetVisiblePageIndex)) {
-      setNavigationWarning(buildPageJumpingWarning())
-      setStatus('Page jumping disabled')
-      return
-    }
-    if (status === 'Page jumping disabled') {
-      setStatus('In progress')
-    }
+    if (!visiblePageIndexes.includes(index)) return
+    if (index > pageIndex && !tryLeaveCurrentPage()) return
     setPageIndex(index)
   }
 
@@ -1865,26 +1605,12 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
       setPageIndex(visiblePageIndexes[currentVisiblePageIndex + 1])
       return
     }
-    if (!tryCompleteWorksheet()) return
     if (onlineWorksheetId) {
-      if (hasSubmittedOnlineResponse) {
-        setExportError('This response has already been submitted. It is now read-only.')
-        setStatus('Submitted')
-        return
-      }
       setStatus('Submitting…')
       setExportError('')
       try {
         const saved = await saveOnlineResponse(onlineWorksheetId, buildDocument(), String(responses['group-name'] || ''))
-        if (saved.status === 'submitted') {
-          setSubmittedOnlineResponse(saved)
-          setResponses(saved.answers.responses || {})
-          setExportError('This response has already been submitted. It is now read-only.')
-          setStatus('Submitted')
-          return
-        }
-        const submitted = await submitOnlineResponse(saved.id)
-        setSubmittedOnlineResponse(submitted)
+        await submitOnlineResponse(saved.id)
         setStatus('Complete')
         setShowCompletionDialog(true)
       } catch {
@@ -1894,14 +1620,12 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
       return
     }
 
-    if (isResponseJsonExportEnabled(definition)) {
-      try {
-        exportResponseJson(buildDocument())
-      } catch {
-        setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
-        setStatus('Download failed')
-        return
-      }
+    try {
+      exportResponseJson(buildDocument())
+    } catch {
+      setExportError("We couldn't automatically download your response. Use Download JSON above to save your work.")
+      setStatus('Download failed')
+      return
     }
     setStatus('Complete')
     setShowCompletionDialog(true)
@@ -1916,37 +1640,28 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
   const handleStartNew = () => {
     if (!window.confirm('Start a new response? This will clear the current saved version.')) return
     const nextId = getDefaultResponseId()
-    const nextCreatedAt = new Date().toISOString()
     setShowCompletionDialog(false)
     setValidationAttempted(false)
     setNavigationWarning('')
     setExportError('')
-    setResponseCreatedAt(nextCreatedAt)
     setResponseId(nextId)
     setResponses({})
     setPageIndex(0)
     setStatus('New response started')
-    localStorage.setItem(responseIdStorageKey, nextId)
+    localStorage.setItem(`${BASE_RESPONSE_KEY}:${definition.id}:${definition.version}`, nextId)
   }
 
   const handleExportJson = () => {
-    if (!isResponseJsonExportEnabled(definition)) return
     exportResponseJson(buildDocument())
   }
 
   const handleExportPdf = () => {
-    if (!isResponsePdfExportEnabled(definition)) return
     const document = buildDocument()
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
     const generatedAt = new Date().toLocaleString()
-    const visiblePdfPages = getVisiblePagesWithBlocks(definition, document.responses)
-      .map(({ page, blocks }) => ({
-        page,
-        blocks: blocks.filter((block) => getBlockAudience(block) === 'student'),
-      }))
-    const responseBlocks = visiblePdfPages.flatMap(({ blocks }) => blocks.filter(isResponseProducingBlock))
+    const responseBlocks = getResponseProducingBlocks(definition).filter((block) => getBlockAudience(block) === 'student')
     const answeredCount = responseBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id])).length
     let y = 42
 
@@ -1956,42 +1671,33 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
       y = 52
     }
 
+    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
+      const lines = pdf.splitTextToSize(text, width)
+      pdf.text(lines, x, top)
+      return lines.length * lineHeight
+    }
+
     const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
       const innerWidth = pageWidth - 104
       const lineHeight = 12
       const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
-      let remainingLines = wrappedLines.length ? wrappedLines : ['']
-      let continued = false
-
-      while (remainingLines.length > 0) {
-        const fixedHeight = 34 + 14 + 10
-        let capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
-        if (capacity < 1) {
-          pdf.addPage()
-          y = 52
-          capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
-        }
-
-        const pageLines = remainingLines.slice(0, Math.max(1, capacity))
-        remainingLines = remainingLines.slice(pageLines.length)
-        const cardHeight = 34 + pageLines.length * lineHeight + 14
-        if (tone === 'section') {
-          pdf.setFillColor(248, 250, 252)
-          pdf.setDrawColor(203, 213, 225)
-        } else {
-          pdf.setFillColor(255, 255, 255)
-          pdf.setDrawColor(226, 232, 240)
-        }
-        pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
-        pdf.setTextColor(15, 23, 42)
-        pdf.setFontSize(11)
-        pdf.text(continued ? `${title} (continued)` : title, 64, y + 18)
-        pdf.setTextColor(71, 85, 105)
-        pdf.setFontSize(9)
-        pdf.text(pageLines, 64, y + 34)
-        y += cardHeight + 10
-        continued = true
+      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
+      ensurePdfSpace(cardHeight + 10)
+      if (tone === 'section') {
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(203, 213, 225)
+      } else {
+        pdf.setFillColor(255, 255, 255)
+        pdf.setDrawColor(226, 232, 240)
       }
+      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(11)
+      pdf.text(title, 64, y + 18)
+      pdf.setTextColor(71, 85, 105)
+      pdf.setFontSize(9)
+      pdf.text(wrappedLines, 64, y + 34)
+      y += cardHeight + 10
     }
 
     pdf.setFillColor(15, 23, 42)
@@ -2030,15 +1736,26 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     })
     y += 68
 
-    visiblePdfPages.forEach(({ page, blocks }) => {
-      const answeredBlocks = blocks
-        .filter(isResponseProducingBlock)
-        .filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
-      const contextText = getPageContextText({ ...page, blocks })
+    definition.pages.forEach((page) => {
+      const visibleBlocks = page.blocks.filter((block) => getBlockAudience(block) === 'student' && isResponseProducingBlock(block))
+      const answeredBlocks = visibleBlocks.filter((block) => hasMeaningfulResponseValue(document.responses[block.id]))
+      const contextText = getPageContextText(page)
 
       if (answeredBlocks.length === 0 && !contextText) return
 
-      drawPdfCard(page.title, contextText ? [contextText] : [], 'section')
+      ensurePdfSpace(80)
+      pdf.setFillColor(248, 250, 252)
+      pdf.setDrawColor(203, 213, 225)
+      pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(13)
+      pdf.text(page.title, 64, y + 20)
+      if (contextText) {
+        pdf.setFontSize(9)
+        pdf.setTextColor(71, 85, 105)
+        drawWrappedText(contextText, 64, y + 36, pageWidth - 136)
+      }
+      y += 72
 
       if (answeredBlocks.length === 0) {
         drawPdfCard('Responses', ['No recorded responses on this page.'])
@@ -2050,65 +1767,49 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
 
         if (block.type === 'radar' && value && typeof value === 'object') {
           const scores = value as Record<string, number>
-          const { min, max } = getNumericRange(block.config, 1, 10)
-          const scoreEntries = Object.entries(scores)
-            .map(([dimension, score]) => [dimension, numberInRange(score, min, max)] as const)
-            .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
+          const scoreEntries = Object.entries(scores).filter(([, score]) => Number.isFinite(Number(score)))
           if (!scoreEntries.length) return
-          const radarHeight = Math.max(122, 46 + scoreEntries.length * 12)
-          ensurePdfSpace(radarHeight + 10)
+          ensurePdfSpace(132)
           pdf.setFillColor(255, 255, 255)
           pdf.setDrawColor(226, 232, 240)
-          pdf.roundedRect(52, y, pageWidth - 104, radarHeight, 10, 10, 'FD')
+          pdf.roundedRect(52, y, pageWidth - 104, 122, 10, 10, 'FD')
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
-          drawPdfRadar(pdf, 118, y + 72, 34, Object.fromEntries(scoreEntries))
+          drawPdfRadar(pdf, 118, y + 72, 34, scores)
           pdf.setFontSize(9)
           pdf.setTextColor(71, 85, 105)
           scoreEntries.forEach(([label, score], index) => {
-            pdf.text(`${label}: ${score.toFixed(1)}`, 180, y + 34 + index * 12)
+            pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
           })
-          y += radarHeight + 12
+          y += 134
           return
         }
 
         if (block.type === 'quadrant' && value && typeof value === 'object') {
           const point = value as Record<string, unknown>
-          const pointX = numberInRange(point.x, 0, 100) ?? 0
-          const pointY = numberInRange(point.y, 0, 100) ?? 0
           const rationale = typeof point.rationale === 'string' && point.rationale.trim() ? String(point.rationale).trim() : 'No rationale recorded.'
-          const rationaleLines = pdf.splitTextToSize(rationale, pageWidth - 292)
-          const firstPageLineLimit = getPdfLineCapacity(pageHeight - 42 - y - 88 - 10, 12)
-          const firstPageLines = rationaleLines.slice(0, Math.max(1, firstPageLineLimit))
-          const remainingRationaleLines = rationaleLines.slice(firstPageLines.length)
-          const quadrantHeight = Math.max(134, 88 + firstPageLines.length * 12)
-          ensurePdfSpace(quadrantHeight + 10)
+          ensurePdfSpace(144)
           pdf.setFillColor(255, 255, 255)
           pdf.setDrawColor(226, 232, 240)
-          pdf.roundedRect(52, y, pageWidth - 104, quadrantHeight, 10, 10, 'FD')
+          pdf.roundedRect(52, y, pageWidth - 104, 134, 10, 10, 'FD')
           pdf.setTextColor(15, 23, 42)
           pdf.setFontSize(11)
           pdf.text(getBlockDisplayLabel(block), 64, y + 18)
-          drawPdfQuadrant(pdf, 64, y + 30, 92, pointX, pointY)
+          drawPdfQuadrant(pdf, 64, y + 30, 92, Number(point.x) || 0, Number(point.y) || 0)
           pdf.setFontSize(9)
           pdf.setTextColor(71, 85, 105)
-          pdf.text(`x: ${pointX.toFixed(1)}`, 172, y + 42)
-          pdf.text(`y: ${pointY.toFixed(1)}`, 172, y + 56)
-          pdf.text(firstPageLines, 172, y + 74)
-          y += quadrantHeight + 12
-          if (remainingRationaleLines.length) {
-            drawPdfCard(`${getBlockDisplayLabel(block)} rationale`, remainingRationaleLines)
-          }
+          pdf.text(`x: ${(Number(point.x) || 0).toFixed(1)}`, 172, y + 42)
+          pdf.text(`y: ${(Number(point.y) || 0).toFixed(1)}`, 172, y + 56)
+          drawWrappedText(rationale, 172, y + 74, pageWidth - 292)
+          y += 146
           return
         }
 
         if (block.type === 'matrix' && value && typeof value === 'object') {
-          const { min, max } = getNumericRange(block.config, 1, 5)
           const lines = Object.entries(value as Record<string, unknown>)
-            .map(([row, score]) => [row, numberInRange(score, min, max)] as const)
-            .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
-            .map(([row, score]) => `${row}: ${score.toFixed(1)}`)
+            .filter(([, score]) => Number.isFinite(Number(score)))
+            .map(([row, score]) => `${row}: ${Number(score).toFixed(1)}`)
           if (!lines.length) return
           drawPdfCard(getBlockDisplayLabel(block), lines)
           return
@@ -2157,10 +1858,6 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
     navigate('/builder')
   }
 
-  const closeCompletionDialog = useCallback(() => {
-    setShowCompletionDialog(false)
-  }, [])
-
   const handleReturnToStart = () => {
     setShowCompletionDialog(false)
     navigate('/')
@@ -2191,8 +1888,8 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
           {!previewMode && !onlineWorksheetId && (
             <>
               <button onClick={handleStartNew} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><Play className="h-4 w-4" />Start New</button>
-              {isResponseJsonExportEnabled(definition) && <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>}
-              {isResponsePdfExportEnabled(definition) && <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>}
+              <button onClick={handleExportJson} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:border-slate-400"><FileUp className="h-4 w-4" />Download JSON</button>
+              <button onClick={handleExportPdf} className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"><FileText className="h-4 w-4" />Download PDF</button>
             </>
           )}
           {onlineWorksheetId && <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800"><CloudUpload className="h-4 w-4" />Online workbook{publicCode ? ` · ${publicCode}` : ''}</span>}
@@ -2204,7 +1901,7 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
         <div className="mb-6">
           <div className="mb-2 flex justify-between text-sm text-slate-600">
             <span>Page {currentVisiblePageIndex + 1} of {totalPages}</span>
-            <span role="status">{status}</span>
+            <span>{status}</span>
           </div>
           {currentTimer?.enabled && (
             <div className="mb-3 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -2215,44 +1912,45 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
               <span>{formatTimerValue(pageRemainingSeconds ?? currentTimer.durationSeconds)}</span>
             </div>
           )}
+          {navigationWarning && (
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <p className="font-medium">Required responses are still missing.</p>
+              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
+            </div>
+          )}
+          {exportError && (
+            <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {exportError}
+            </div>
+          )}
           <div className="h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
           </div>
         </div>
       )}
 
-      {navigationWarning && (
-        <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          <p className="font-medium">Required responses are still missing.</p>
-          <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
-        </div>
-      )}
-      {exportError && (
-        <div role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {exportError}
-        </div>
-      )}
-
       <div className="grid gap-6 lg:grid-cols-[minmax(0,4fr)_minmax(260px,1fr)]">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-2xl font-semibold text-slate-900">{currentPage.title}</h2>
-          {hasSubmittedOnlineResponse && (
-            <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-              This response has already been submitted and is now read-only.
-            </div>
-          )}
-          <fieldset disabled={hasSubmittedOnlineResponse} className="space-y-6 disabled:opacity-75">
+          <div className="space-y-6">
             {visibleBlocks.map((block) => (
               <div key={block.id} id={getBlockWrapperId(block.id)}>{renderBlock(block, responses, updateResponse, {
                 showRequiredError: validationAttempted && missingRequiredBlockIds.has(block.id),
               })}</div>
             ))}
-          </fieldset>
+          </div>
+
+          {navigationWarning && (
+            <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <p className="font-medium">Please complete the required items before continuing.</p>
+              <p className="mt-1 whitespace-pre-line">{navigationWarning}</p>
+            </div>
+          )}
 
           <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-4">
             <button onClick={handleBack} disabled={currentVisiblePageIndex <= 0} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">Back</button>
-            <button onClick={() => void handleNext()} disabled={status === 'Submitting…' || hasSubmittedOnlineResponse} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
-              {status === 'Submitting…' ? 'Submitting…' : hasSubmittedOnlineResponse ? 'Submitted' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
+            <button onClick={() => void handleNext()} disabled={status === 'Submitting…'} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
+              {status === 'Submitting…' ? 'Submitting…' : currentVisiblePageIndex === totalPages - 1 ? onlineWorksheetId ? 'Submit' : 'Finish' : 'Next'}
             </button>
           </div>
         </section>
@@ -2262,7 +1960,7 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.15em] text-emerald-700">Quiz score</p>
               <p className="mt-2 text-2xl font-bold text-emerald-900">{quizSummary.totalScore}/{quizSummary.totalMax}</p>
-              <p className="text-sm text-emerald-700">{formatQuizPercent(quizSummary.percent)}% correct</p>
+              <p className="text-sm text-emerald-700">{quizSummary.percent.toFixed(0)}% correct</p>
             </div>
           )}
 
@@ -2271,16 +1969,12 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
             <ul className="space-y-2 text-sm text-slate-700">
               {visiblePages.map((page, visibleIndex) => {
                 const index = definition.pages.indexOf(page)
-                const isFutureJumpDisabled = isRestrictedNavigation && visibleIndex > currentVisiblePageIndex + 1
                 return (
                 <li key={page.id}>
                   <button
                     type="button"
                     onClick={() => goToPage(index)}
-                    disabled={isFutureJumpDisabled}
-                    aria-current={index === pageIndex ? 'page' : undefined}
-                    title={isFutureJumpDisabled ? buildPageJumpingWarning() : undefined}
-                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 disabled:cursor-not-allowed disabled:opacity-50 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100 disabled:hover:bg-white'}`}
+                    className={`flex w-full items-center justify-between rounded-lg px-3 py-2 ${index === pageIndex ? 'bg-blue-100 text-blue-900' : 'bg-white text-slate-700 hover:bg-slate-100'}`}
                   >
                     <span className="inline-flex items-center gap-2">
                       <FileText className="h-4 w-4" />
@@ -2298,10 +1992,11 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
         </aside>
       </div>
 
-      <ModalOverlay isOpen={showCompletionDialog} onClose={closeCompletionDialog} labelledBy="completion-dialog-title">
+      {showCompletionDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
           <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">Worksheet complete</p>
-            <h2 id="completion-dialog-title" className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
+            <h2 className="mt-2 text-2xl font-bold text-slate-900">{onlineWorksheetId ? 'Your response has been submitted' : 'Your response has been exported'}</h2>
             <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">{completionMessage}</p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -2313,28 +2008,29 @@ ${labels.map((label) => `• ${label}`).join('\n')}${remainingCount > 0 ? `\nand
               </button>
               <button
                 type="button"
-                data-modal-initial-focus
-                onClick={closeCompletionDialog}
+                onClick={() => setShowCompletionDialog(false)}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
               >
                 Close
               </button>
             </div>
           </div>
-      </ModalOverlay>
+        </div>
+      )}
     </main>
   )
 }
 
 function RadarBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const dimensions = getLabeledConfigItems(block.config?.dimensions, 'dimension')
+  const dimensions = block.config?.dimensions || []
   const valueMap: Record<string, number> = responses[block.id] || {}
-  const { min, max } = getNumericRange(block.config, 1, 10)
   const radius = 100
   const center = 150
-  const scores = dimensions.map((dimension, index) => {
+  const scores = dimensions.map((dimension: any) => {
+    const index = dimensions.indexOf(dimension)
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = numberInRange(valueMap[dimension.id] ?? valueMap[dimension.label], min, max) ?? Math.round((min + max) / 2)
+    const label = typeof dimension === 'string' ? dimension : dimension.label
+    const value = Number(valueMap[label] ?? 5)
     const distance = (value / 10) * radius
     return `${center + Math.cos(angle) * distance},${center + Math.sin(angle) * distance}`
   })
@@ -2354,14 +2050,16 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
           return <polygon key={ring} points={points} fill="none" stroke="#cbd5e1" strokeWidth="1" />
         })}
 
-        {dimensions.map((dimension, index: number) => {
+        {dimensions.map((dimension: any, index: number) => {
+          const label = typeof dimension === 'string' ? dimension : dimension.label
+          const key = typeof dimension === 'string' ? `${label}-${index}` : dimension.id
           const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
           const x = center + Math.cos(angle) * 120
           const y = center + Math.sin(angle) * 120
           return (
-            <g key={dimension.id}>
+            <g key={key}>
               <line x1={center} y1={center} x2={x} y2={y} stroke="#cbd5e1" strokeWidth="1" />
-              <text x={center + Math.cos(angle) * 138} y={center + Math.sin(angle) * 138} textAnchor="middle" fontSize="9" fill="#334155">{dimension.label}</text>
+              <text x={center + Math.cos(angle) * 138} y={center + Math.sin(angle) * 138} textAnchor="middle" fontSize="9" fill="#334155">{label}</text>
             </g>
           )
         })}
@@ -2369,23 +2067,23 @@ function RadarBlock({ block, responses, updateResponse, showRequiredError = fals
       </svg>
 
       <div className="space-y-3">
-        {dimensions.map((dimension) => {
-          const value = numberInRange(valueMap[dimension.id] ?? valueMap[dimension.label], min, max) ?? Math.round((min + max) / 2)
+        {dimensions.map((dimension: any, index: number) => {
+          const label = typeof dimension === 'string' ? dimension : dimension.label
+          const key = typeof dimension === 'string' ? `${label}-${index}` : dimension.id
           return (
-            <div key={dimension.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <div key={key} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="font-medium text-slate-700">{dimension.label}</span>
-                <span className="font-bold text-slate-900">{value}/10</span>
+                <span className="font-medium text-slate-700">{label}</span>
+                <span className="font-bold text-slate-900">{valueMap[label] ?? 5}/10</span>
               </div>
               <input
                 type="range"
                 min={1}
                 max={10}
-                value={value}
-                aria-label={`${block.label || 'Radar score'}: ${dimension.label}`}
+                value={valueMap[label] ?? 5}
                 aria-required={block.required ? true : undefined}
                 onChange={(event) => {
-                  const next = { ...(responses[block.id] || {}), [dimension.id]: Number(event.target.value) }
+                  const next = { ...(responses[block.id] || {}), [label]: Number(event.target.value) }
                   updateResponse(block.id, next)
                 }}
                 className="w-full"
@@ -2567,7 +2265,7 @@ function isYouTubeUrl(value: string) {
   if (!value) return false
   try {
     const parsed = new URL(value)
-    return ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(parsed.hostname)
+    return parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')
   } catch {
     return false
   }
@@ -2577,8 +2275,7 @@ function getYouTubeEmbedUrl(value: string) {
   if (!value) return ''
   try {
     const parsed = new URL(value)
-    if (!isYouTubeUrl(value)) return ''
-    if (parsed.hostname === 'youtu.be') {
+    if (parsed.hostname.includes('youtu.be')) {
       const id = parsed.pathname.replace('/', '')
       return `https://www.youtube.com/embed/${id}`
     }
@@ -2707,13 +2404,11 @@ function RichTextSurface({
   onChange,
   placeholder,
   editable = true,
-  ariaLabel,
 }: {
   value: string
   onChange: (value: string) => void
   placeholder: string
   editable?: boolean
-  ariaLabel?: string
 }) {
   const editor = useEditor({
     extensions: [
@@ -2734,12 +2429,9 @@ function RichTextSurface({
     ],
     content: value || '',
     editable,
-    editorProps: {
-      attributes: ariaLabel ? { 'aria-label': ariaLabel } : {},
-    },
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
-      onChange(normalizeRichTextResponse(editor.getHTML()))
+      onChange(editor.getHTML())
     },
   })
 
@@ -2780,7 +2472,7 @@ function RichTextSurface({
   ]
 
   const listActions = [
-    { label: 'Bullet list', shortLabel: '• List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
+    { label: 'Bullet list', shortLabel: '��� List', run: () => editor.chain().focus().toggleBulletList().run(), isActive: editor.isActive('bulletList'), canRun: editor.can().chain().focus().toggleBulletList().run() },
     { label: 'Numbered list', shortLabel: '1. List', run: () => editor.chain().focus().toggleOrderedList().run(), isActive: editor.isActive('orderedList'), canRun: editor.can().chain().focus().toggleOrderedList().run() },
   ]
 
@@ -2931,7 +2623,7 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
     )
   }
 
-  const currentValue = typeof responses[block.id] === 'string' ? normalizeRichTextResponse(responses[block.id]) : ''
+  const currentValue = typeof responses[block.id] === 'string' ? responses[block.id] : ''
 
   return (
     <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-slate-50'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
@@ -2943,7 +2635,6 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
         value={currentValue}
         onChange={(value) => updateResponse(block.id, value)}
         placeholder={block.config?.placeholder || 'Write and format your response here.'}
-        ariaLabel={block.label || 'Rich text response'}
         editable
       />
       {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
@@ -2952,11 +2643,7 @@ function RichTextEditorBlock({ block, responses, updateResponse, showRequiredErr
 }
 
 function RandomizerBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const configuredItems = block.config?.items
-  const items = useMemo(
-    () => Array.isArray(configuredItems) ? configuredItems.filter((item: unknown) => typeof item === 'string' && item.trim()) : [],
-    [configuredItems],
-  )
+  const items = Array.isArray(block.config?.items) ? block.config.items.filter((item: unknown) => typeof item === 'string' && item.trim()) : []
   const prompt = block.config?.prompt || 'Generate a random item from this list.'
   const currentValue = responses[block.id]
   const requireFirstGeneration = Boolean(block.config?.requireFirstGeneration)
@@ -2964,7 +2651,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const displayStyle: 'word-flicker' | 'wheel' | 'card-shuffle' = configuredDisplayStyle === 'wheel' || configuredDisplayStyle === 'card-shuffle' || configuredDisplayStyle === 'word-flicker'
     ? configuredDisplayStyle
     : 'word-flicker'
-  const animationDurationMs = normalizeRandomizerAnimationDuration(block.config?.animationDurationMs)
+  const animationDurationMs = Math.max(300, Number(block.config?.animationDurationMs ?? 1800))
   const hasCurrentValue = typeof currentValue === 'string' && items.includes(String(currentValue))
   const isLocked = requireFirstGeneration && hasCurrentValue
   const [displayValue, setDisplayValue] = useState<string>(currentValue ?? '')
@@ -2975,27 +2662,11 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const [cardDeckItems, setCardDeckItems] = useState<string[]>(items)
   const [cardPhase, setCardPhase] = useState<'preview' | 'flipping' | 'choosing' | 'revealed'>('preview')
   const [revealedCardIndex, setRevealedCardIndex] = useState<number | null>(null)
-  const animatedIntervalRef = useRef<number | null>(null)
-  const animatedTimeoutRef = useRef<number | null>(null)
-  const cardTimeoutRef = useRef<number | null>(null)
 
-  const clearAnimatedTimers = useCallback(() => {
-    if (animatedIntervalRef.current !== null) {
-      window.clearInterval(animatedIntervalRef.current)
-      animatedIntervalRef.current = null
-    }
-    if (animatedTimeoutRef.current !== null) {
-      window.clearTimeout(animatedTimeoutRef.current)
-      animatedTimeoutRef.current = null
-    }
-  }, [])
-
-  const clearCardTimer = useCallback(() => {
-    if (cardTimeoutRef.current !== null) {
-      window.clearTimeout(cardTimeoutRef.current)
-      cardTimeoutRef.current = null
-    }
-  }, [])
+  const getShuffledItems = () => {
+    if (block.config?.shuffle === false) return [...items]
+    return [...items].sort(() => Math.random() - 0.5)
+  }
 
   const cardCanPick = cardPhase === 'choosing'
   const cardHasGenerated = cardPhase !== 'preview'
@@ -3003,31 +2674,27 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const generateAnimatedValue = useCallback(() => {
     if (!items.length) return
 
-    clearAnimatedTimers()
-    const nextValue = block.config?.shuffle === false ? items[0] : selectRandomItem(items)
-    if (!nextValue) return
+    const nextValue = getShuffledItems()[0]
     const rollingIntervalMs = Math.max(80, Math.min(140, Math.round(animationDurationMs / 14)))
 
     setIsAnimating(true)
     const timer = window.setInterval(() => {
-      const rollingItem = selectRandomItem(items) || nextValue
+      const rollingItem = getShuffledItems()[Math.floor(Math.random() * getShuffledItems().length)] || nextValue
       setDisplayValue(rollingItem)
     }, rollingIntervalMs)
-    animatedIntervalRef.current = timer
 
-    animatedTimeoutRef.current = window.setTimeout(() => {
-      clearAnimatedTimers()
+    window.setTimeout(() => {
+      window.clearInterval(timer)
       setDisplayValue(nextValue)
       setIsAnimating(false)
       updateResponse(block.id, nextValue)
     }, animationDurationMs)
-  }, [animationDurationMs, block.config?.shuffle, block.id, clearAnimatedTimers, items, updateResponse])
+  }, [animationDurationMs, block.config?.shuffle, block.id, items, updateResponse])
 
   const generateWheelValue = useCallback(() => {
     if (!items.length) return
 
-    const nextValue = block.config?.shuffle === false ? items[0] : selectRandomItem(items)
-    if (!nextValue) return
+    const nextValue = getShuffledItems()[0]
     const nextIndex = items.indexOf(nextValue)
     if (nextIndex < 0) return
 
@@ -3041,27 +2708,17 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   const beginCardShuffle = useCallback(() => {
     if (!items.length) return
 
-    clearCardTimer()
-    const deckItems = block.config?.shuffle === false ? [...items] : shuffleRandomizerItems(items)
     setCardPhase('flipping')
     setRevealedCardIndex(null)
     setDisplayValue('')
-    setCardDeckItems(deckItems)
+    setCardDeckItems(getShuffledItems())
     setIsAnimating(true)
 
-    cardTimeoutRef.current = window.setTimeout(() => {
-      cardTimeoutRef.current = null
+    window.setTimeout(() => {
       setIsAnimating(false)
       setCardPhase('choosing')
     }, animationDurationMs)
-  }, [animationDurationMs, block.config?.shuffle, clearCardTimer, items])
-
-  useEffect(() => {
-    return () => {
-      clearAnimatedTimers()
-      clearCardTimer()
-    }
-  }, [clearAnimatedTimers, clearCardTimer])
+  }, [animationDurationMs, block.config?.shuffle, items])
 
   const handleGenerateClick = useCallback(() => {
     if (!items.length || isAnimating || isLocked) return
@@ -3114,8 +2771,6 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
 
   useEffect(() => {
     if (!items.length) {
-      clearAnimatedTimers()
-      clearCardTimer()
       setDisplayValue('')
       setIsAnimating(false)
       setWheelTargetIndex(null)
@@ -3153,7 +2808,7 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
     }
 
     setCardDeckItems(items)
-  }, [clearAnimatedTimers, clearCardTimer, currentValue, displayStyle, isAnimating, items, pendingWheelValue])
+  }, [currentValue, displayStyle, isAnimating, items, pendingWheelValue])
 
   const displayClasses = isAnimating
     ? {
@@ -3334,75 +2989,6 @@ function RandomizerBlock({ block, responses, updateResponse, showRequiredError =
   )
 }
 
-function clampHotspotPercent(value: number) {
-  return Math.max(0, Math.min(100, Math.round(value * 10) / 10))
-}
-
-function HotspotBlock({ block, responses, updateResponse, showRequiredError = false }: { block: WorksheetBlock; responses: Record<string, any>; updateResponse: (blockId: string, value: any) => void; showRequiredError?: boolean }) {
-  const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
-  const lastPoint = points[points.length - 1]
-  const imageRef = useRef<HTMLImageElement>(null)
-  const [keyboardPoint, setKeyboardPoint] = useState(() => ({
-    x: clampHotspotPercent(Number(lastPoint?.x ?? 50)),
-    y: clampHotspotPercent(Number(lastPoint?.y ?? 50)),
-  }))
-  const [showKeyboardPoint, setShowKeyboardPoint] = useState(false)
-  const statusId = `${block.id}-hotspot-status`
-  const instructionId = `${block.id}-hotspot-instructions`
-
-  const placePoint = (point: { x: number; y: number }) => {
-    updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
-  }
-
-  return (
-    <div className="space-y-3">
-      <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
-      {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-describedby={`${instructionId} ${statusId}`}
-        aria-label={`${getBlockDisplayLabel(block)} hotspot image`}
-        className={`relative w-fit max-w-full overflow-hidden rounded-xl border bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
-        onFocus={() => setShowKeyboardPoint(true)}
-        onBlur={() => setShowKeyboardPoint(false)}
-        onClick={(event) => {
-          const rect = imageRef.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect()
-          const point = { x: clampHotspotPercent(((event.clientX - rect.left) / rect.width) * 100), y: clampHotspotPercent(((event.clientY - rect.top) / rect.height) * 100) }
-          setKeyboardPoint(point)
-          placePoint(point)
-        }}
-        onKeyDown={(event) => {
-          const step = event.shiftKey ? 10 : 1
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            placePoint(keyboardPoint)
-            return
-          }
-          const deltas: Record<string, { x: number; y: number }> = {
-            ArrowUp: { x: 0, y: -step },
-            ArrowDown: { x: 0, y: step },
-            ArrowLeft: { x: -step, y: 0 },
-            ArrowRight: { x: step, y: 0 },
-          }
-          const delta = deltas[event.key]
-          if (!delta) return
-          event.preventDefault()
-          setShowKeyboardPoint(true)
-          setKeyboardPoint((current) => ({ x: clampHotspotPercent(current.x + delta.x), y: clampHotspotPercent(current.y + delta.y) }))
-        }}
-      >
-        <img ref={imageRef} src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto max-h-[70vh] min-h-48 max-w-full cursor-crosshair object-contain" />
-        {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
-        {showKeyboardPoint && <span className="pointer-events-none absolute h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-blue-700 bg-white/70 shadow" style={{ left: `${keyboardPoint.x}%`, top: `${keyboardPoint.y}%` }} />}
-      </div>
-      <p id={instructionId} className="text-xs text-slate-500">Click the image, or focus it and use arrow keys to move the target then Enter or Space to place a hotspot.</p>
-      <div id={statusId} className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'No hotspots placed.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
-      {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
-    </div>
-  )
-}
-
 export function renderBlock(block: WorksheetBlock, responses: Record<string, any>, updateResponse: (blockId: string, value: any) => void, options?: { showRequiredError?: boolean }) {
   const showRequiredError = options?.showRequiredError ?? false
 
@@ -3465,81 +3051,71 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         </label>
       )
     case 'singleSelect':
-      {
-      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {options.map((option) => (
-            <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={matchesOptionValue(responses[block.id], option)} onChange={() => updateResponse(block.id, option.id)} />
-              <span>{option.label}</span>
+          {(block.config?.options || []).map((option: string) => (
+            <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
+              <span>{option}</span>
             </label>
           ))}
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
-      }
     case 'randomizer': {
       return <RandomizerBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     }
     case 'multipleChoice':
     case 'quiz': {
       const allowMultiple = Boolean(block.config?.multipleAnswers)
-      const selectedValues = allowMultiple ? getSelectedOptionValues(responses[block.id]) : responses[block.id]
+      const selectedValues = allowMultiple ? (Array.isArray(responses[block.id]) ? responses[block.id] : []) : responses[block.id]
       const correctAnswer = block.config?.correctAnswer
       const showFeedback = block.config?.showFeedback !== false
-      const options = getLabeledConfigItems(block.config?.options, 'option')
-      const correctValues = getSelectedOptionValues(correctAnswer)
-      const isCorrectOption = (option: { id: string; label: string }) => correctValues.some((value) => matchesOptionValue(value, option))
-      const selectedIds = allowMultiple ? getSelectedOptionValues(selectedValues) : getSelectedOptionValues(selectedValues)
-      const correctIds = options.filter(isCorrectOption).map((option) => option.id)
 
       return (
-        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+        <fieldset className="space-y-3">
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Quiz question'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {allowMultiple ? (
-            options.map((option) => {
-              const checked = selectedValues.some((value: unknown) => matchesOptionValue(value, option))
-              const isCorrect = isCorrectOption(option)
+            (block.config?.options || []).map((option: string) => {
+              const checked = Array.isArray(selectedValues) && selectedValues.includes(option)
+              const isCorrect = Array.isArray(correctAnswer) && correctAnswer.includes(option)
               const isSelected = checked
               const showState = selectedValues !== undefined && isSelected
               return (
-                <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+                <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
                   <input
                     type="checkbox"
-                    aria-required={block.required ? true : undefined}
                     checked={checked}
                     onChange={() => {
                       const nextValues = Array.isArray(selectedValues) ? [...selectedValues] : []
-                      const index = nextValues.findIndex((value) => matchesOptionValue(value, option))
+                      const index = nextValues.indexOf(option)
                       if (index >= 0) nextValues.splice(index, 1)
-                      else nextValues.push(option.id)
+                      else nextValues.push(option)
                       updateResponse(block.id, nextValues)
                     }}
                   />
-                  <span>{option.label}</span>
+                  <span>{option}</span>
                 </label>
               )
             })
           ) : (
-            options.map((option) => {
-              const isCorrect = isCorrectOption(option)
-              const isSelected = matchesOptionValue(selectedValues, option)
+            (block.config?.options || []).map((option: string) => {
+              const isCorrect = option === correctAnswer
+              const isSelected = selectedValues === option
               const showState = selectedValues !== undefined && isSelected
               return (
-                <label key={option.id} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                  <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={isSelected} onChange={() => updateResponse(block.id, option.id)} />
-                  <span>{option.label}</span>
+                <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+                  <input type="radio" name={block.id} checked={selectedValues === option} onChange={() => updateResponse(block.id, option)} />
+                  <span>{option}</span>
                 </label>
               )
             })
           )}
-          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">{allowMultiple ? 'Select at least one answer to continue.' : 'Choose one answer to continue.'}</p>}
           {selectedValues !== undefined && showFeedback && (
-            <div className={`rounded-xl border px-3 py-2 text-sm ${JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
-              {JSON.stringify([...selectedIds].sort()) === JSON.stringify([...correctIds].sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String(options.filter(isCorrectOption).map((option) => option.label).join(', ') || 'Not set')}.`}
+            <div className={`rounded-xl border px-3 py-2 text-sm ${allowMultiple ? (JSON.stringify((Array.isArray(selectedValues) ? selectedValues : []).sort()) === JSON.stringify((Array.isArray(correctAnswer) ? correctAnswer : []).sort()) ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700') : (selectedValues === correctAnswer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700')}`}>
+              {allowMultiple ? (JSON.stringify((Array.isArray(selectedValues) ? selectedValues : []).sort()) === JSON.stringify((Array.isArray(correctAnswer) ? correctAnswer : []).sort()) ? 'Correct.' : `Incorrect. Correct answer: ${String((Array.isArray(correctAnswer) ? correctAnswer : []).join(', ') || 'Not set')}.`) : (selectedValues === correctAnswer ? 'Correct.' : `Incorrect. Correct answer: ${String(correctAnswer || 'Not set')}.`)}
               {block.config?.explanation && <p className="mt-2 text-sm text-slate-700">{block.config.explanation}</p>}
             </div>
           )}
@@ -3551,7 +3127,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const correctAnswer = block.config?.correctAnswer
       const showFeedback = block.config?.showFeedback !== false
       return (
-        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+        <fieldset className="space-y-3">
           <legend className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'True or false'}</legend>
           {block.config?.question && <p className="text-sm text-slate-600">{block.config.question}</p>}
           {['True', 'False'].map((option) => {
@@ -3561,12 +3137,11 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             const showState = selectedAnswer !== undefined && isSelected
             return (
               <label key={option} className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${showState && isCorrect ? 'border-emerald-300 bg-emerald-50' : showState && !isCorrect ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
-                <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={selectedAnswer === boolValue} onChange={() => updateResponse(block.id, boolValue)} />
+                <input type="radio" name={block.id} checked={selectedAnswer === boolValue} onChange={() => updateResponse(block.id, boolValue)} />
                 <span>{option}</span>
               </label>
             )
           })}
-          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose true or false to continue.</p>}
           {selectedAnswer !== undefined && showFeedback && (
             <div className={`rounded-xl border px-3 py-2 text-sm ${selectedAnswer === correctAnswer ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {selectedAnswer === correctAnswer ? 'Correct.' : `Incorrect. Correct answer: ${String(correctAnswer === true ? 'True' : 'False')}.`}
@@ -3583,18 +3158,15 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const normalizedSelected = selectedAnswer.trim().toLowerCase()
       const normalizedCorrect = correctAnswer.trim().toLowerCase()
       return (
-        <label className="block" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+        <label className="block">
           <span className="mb-2 block text-sm font-medium text-slate-700">{block.label || block.config?.question || 'Short answer'}</span>
           {block.config?.question && <p className="mb-2 text-xs text-slate-500">{block.config.question}</p>}
           <input
             value={selectedAnswer}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            aria-label={block.label || block.config?.question || 'Short answer'}
-            aria-required={block.required ? true : undefined}
-            className={`w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
+            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
             placeholder={block.config?.placeholder || 'Type your answer'}
           />
-          {showRequiredError && <p id={getBlockErrorId(block.id)} className="mt-2 text-sm font-medium text-red-700">This response is required.</p>}
           {selectedAnswer && showFeedback && (
             <div className={`mt-3 rounded-xl border px-3 py-2 text-sm ${normalizedSelected === normalizedCorrect ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'}`}>
               {normalizedSelected === normalizedCorrect ? 'Correct.' : `Incorrect. Correct answer: ${correctAnswer || 'Not set'}.`}
@@ -3608,19 +3180,18 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const pairs = Array.isArray(block.config?.pairs) ? block.config.pairs : []
       const options = Array.isArray(block.config?.options) ? block.config.options : []
       const currentSelection = (responses[block.id] && typeof responses[block.id] === 'object') ? responses[block.id] : {}
-      const correctAnswerMap = Object.fromEntries(pairs.map((pair: any, index: number) => [getMatchingPairKey(pair, index), String(pair.answer ?? '')]))
+      const correctAnswerMap = Object.fromEntries(pairs.map((pair: any) => [String(pair.id ?? pair.prompt), String(pair.answer ?? '')]))
       return (
         <div className="space-y-3">
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
           {pairs.map((pair: any, index: number) => {
-            const pairKey = getMatchingPairKey(pair, index)
+            const pairKey = String(pair.id ?? `${pair.prompt}-${index}`)
             const selected = currentSelection[pairKey] ?? ''
             return (
               <div key={pairKey} className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 md:grid-cols-[1fr_210px]">
                 <div className="text-sm font-medium text-slate-700">{pair.prompt || pair.left || `Item ${index + 1}`}</div>
                 <select
                   value={selected}
-                  aria-label={`${block.label || 'Matching'}: ${pair.prompt || pair.left || `Item ${index + 1}`}`}
                   onChange={(event) => {
                     const next = { ...(responses[block.id] || {}), [pairKey]: event.target.value }
                     updateResponse(block.id, next)
@@ -3673,25 +3244,24 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     }
     case 'checklist': {
       const selectedValues = Array.isArray(responses[block.id]) ? responses[block.id] : []
-      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {options.map((option) => {
-            const checked = selectedValues.some((value: unknown) => matchesOptionValue(value, option))
+          {(block.config?.options || []).map((option: string) => {
+            const checked = selectedValues.includes(option)
             return (
-              <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <input
                   type="checkbox"
                   checked={checked}
                   onChange={() => {
                     const next = checked
-                      ? selectedValues.filter((entry: unknown) => !matchesOptionValue(entry, option))
-                      : [...selectedValues, option.id]
+                      ? selectedValues.filter((entry: string) => entry !== option)
+                      : [...selectedValues, option]
                     updateResponse(block.id, next)
                   }}
                 />
-                <span>{option.label}</span>
+                <span>{option}</span>
               </label>
             )
           })}
@@ -3700,12 +3270,9 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'ranking': {
-      const currentOrder = reconcileRankingResponse(block.config?.options, responses[block.id])
-      const storedOrder: unknown[] = Array.isArray(responses[block.id]) ? responses[block.id] : []
-      const currentIds = currentOrder.map((item) => item.id)
-      const needsSave = currentIds.length > 0 && (storedOrder.length !== currentIds.length || storedOrder.some((entry, index) => entry !== currentIds[index]))
+      const currentOrder = Array.isArray(responses[block.id]) ? responses[block.id] : (block.config?.options || [])
       const moveOption = (index: number, direction: -1 | 1) => {
-        const next = [...currentIds]
+        const next = [...currentOrder]
         const targetIndex = index + direction
         if (targetIndex < 0 || targetIndex >= next.length) return
         const [moved] = next.splice(index, 1)
@@ -3713,36 +3280,34 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         updateResponse(block.id, next)
       }
       return (
-        <div className="space-y-2" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+        <div className="space-y-2">
           <p className="text-sm font-medium text-slate-700">{block.label}</p>
-          {currentOrder.map((option, index: number) => (
-            <div key={`${block.id}-${option.id}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+          {currentOrder.map((option: string, index: number) => (
+            <div key={`${block.id}-${option}-${index}`} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
-              <span className="flex-1 text-sm text-slate-700">{option.label}</span>
+              <span className="flex-1 text-sm text-slate-700">{option}</span>
               <div className="flex gap-1">
-                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} aria-label={`Move ${option.label} up`} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↑</button>
-                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} aria-label={`Move ${option.label} down`} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">↓</button>
+                <button type="button" onClick={() => moveOption(index, -1)} disabled={index === 0} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
+                <button type="button" onClick={() => moveOption(index, 1)} disabled={index === currentOrder.length - 1} className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-40">���</button>
               </div>
             </div>
           ))}
-          {needsSave && <button type="button" onClick={() => updateResponse(block.id, currentIds)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">Keep this order</button>}
-          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Rank the items or choose “Keep this order” to continue.</p>}
         </div>
       )
     }
     case 'categorize': {
-      const items = getLabeledConfigItems(block.config?.items, 'item')
-      const categories = Array.isArray(block.config?.categories) ? block.config.categories.map((category: any) => typeof category === 'object' ? String(category.label || '') : String(category)) : []
-      const assignments = reconcileCategorizeResponse(block, responses[block.id])
+      const items = Array.isArray(block.config?.items) ? block.config.items : []
+      const categories = Array.isArray(block.config?.categories) ? block.config.categories : []
+      const assignments = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError}>
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <div className="grid gap-2">
-            {items.map((item) => (
-              <label key={item.id} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
-                <span className="text-sm font-medium text-slate-700">{item.label}</span>
-                <select value={assignments[item.id] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item.id]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            {items.map((item: string) => (
+              <label key={item} className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_180px] sm:items-center">
+                <span className="text-sm font-medium text-slate-700">{item}</span>
+                <select value={assignments[item] || ''} onChange={(event) => updateResponse(block.id, { ...assignments, [item]: event.target.value })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
                   <option value="">Choose a category</option>
                   {categories.map((category: string) => <option key={category} value={category}>{category}</option>)}
                 </select>
@@ -3754,7 +3319,26 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'hotspot': {
-      return <HotspotBlock block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
+      const points = Array.isArray(responses[block.id]) ? responses[block.id] : []
+      return (
+        <div className="space-y-3">
+          <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
+          {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
+          <div
+            className={`relative overflow-hidden rounded-xl border bg-slate-100 ${showRequiredError ? 'border-red-300' : 'border-slate-200'}`}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              const point = { x: Math.round(((event.clientX - rect.left) / rect.width) * 1000) / 10, y: Math.round(((event.clientY - rect.top) / rect.height) * 1000) / 10 }
+              updateResponse(block.id, block.config?.allowMultiple ? [...points, point] : [point])
+            }}
+          >
+            <img src={block.config?.imageUrl || ''} alt={block.config?.altText || block.label || 'Hotspot activity'} className="block h-auto min-h-48 w-full cursor-crosshair object-cover" />
+            {points.map((point: any, index: number) => <span key={`${point.x}-${point.y}-${index}`} className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow" style={{ left: `${point.x}%`, top: `${point.y}%` }} />)}
+          </div>
+          <div className="flex items-center justify-between text-xs text-slate-500"><span>{points.length ? `${points.length} hotspot${points.length === 1 ? '' : 's'} placed` : 'Click the image to place a hotspot.'}</span>{points.length > 0 && <button type="button" onClick={() => updateResponse(block.id, [])} className="font-medium text-blue-700">Clear</button>}</div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Place at least one hotspot to continue.</p>}
+        </div>
+      )
     }
     case 'numeric': {
       const value = responses[block.id] ?? ''
@@ -3772,7 +3356,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'wordCloud': {
-      const maxEntries = Math.min(10, Math.max(1, Number(block.config?.maxEntries || 3)))
+      const maxEntries = Math.max(1, Number(block.config?.maxEntries || 3))
       const values = Array.isArray(responses[block.id]) ? responses[block.id] : []
       return (
         <fieldset className="space-y-2">
@@ -3785,38 +3369,37 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'confidence': {
-      const options = getLabeledConfigItems(block.config?.options, 'option')
+      const options = Array.isArray(block.config?.options) ? block.config.options : []
       return (
-        <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+        <fieldset className="space-y-3">
           <legend className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          <div className="grid gap-2 sm:grid-cols-3">{options.map((option, index: number) => <button type="button" key={option.id} aria-pressed={matchesOptionValue(responses[block.id], option)} onClick={() => updateResponse(block.id, option.id)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${matchesOptionValue(responses[block.id], option) ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option.label}</button>)}</div>
-          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
+          <div className="grid gap-2 sm:grid-cols-3">{options.map((option: string, index: number) => <button type="button" key={option} onClick={() => updateResponse(block.id, option)} className={`rounded-xl border px-3 py-3 text-left text-sm transition ${responses[block.id] === option ? 'border-blue-600 bg-blue-600 font-semibold text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300'}`}><span className="mb-1 block text-xs opacity-70">{index + 1}</span>{option}</button>)}</div>
+          {showRequiredError && <p className="text-sm font-medium text-red-700">Choose a confidence level.</p>}
         </fieldset>
       )
     }
     case 'matrix': {
-      const rows = getLabeledConfigItems(block.config?.rows, 'row')
+      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
       const values = responses[block.id] || {}
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       return (
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>
-          {rows.map((row) => (
-            <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          {rows.map((row: string) => (
+            <div key={`${block.id}-${row}`} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-sm font-medium text-slate-700">{row.label}</span>
-                <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min}</span>
+                <span className="text-sm font-medium text-slate-700">{row}</span>
+                <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{values[row] ?? block.config?.defaultValue ?? min}</span>
               </div>
               <input
                 type="range"
                 min={min}
                 max={max}
                 step={1}
-                value={Number(values[row.id] ?? values[row.label] ?? block.config?.defaultValue ?? min)}
-                aria-label={`${block.label || 'Matrix rating'}: ${row.label}`}
+                value={Number(values[row] ?? block.config?.defaultValue ?? min)}
                 aria-required={block.required ? true : undefined}
-                onChange={(event) => updateResponse(block.id, { ...values, [row.id]: Number(event.target.value) })}
+                onChange={(event) => updateResponse(block.id, { ...values, [row]: Number(event.target.value) })}
                 className="w-full"
               />
             </div>
@@ -3831,7 +3414,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       const containSizeClass = imageSize === 'small' ? 'max-h-48' : imageSize === 'medium' ? 'max-h-72' : imageSize === 'full' ? 'max-h-none' : 'max-h-[32rem]'
       const coverSizeClass = imageSize === 'small' ? 'h-48' : imageSize === 'medium' ? 'h-72' : imageSize === 'full' ? 'aspect-video' : 'h-[32rem]'
       return (
-        <div className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
+        <div className="space-y-3">
           {block.config?.imageUrl && (
             <div className={`flex w-full justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 ${imageFit === 'cover' ? coverSizeClass : ''}`}>
               <img
@@ -3846,12 +3429,9 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
           <textarea
             value={responses[block.id] || ''}
             onChange={(event) => updateResponse(block.id, event.target.value)}
-            aria-label={block.label || 'Image response'}
-            aria-required={block.required ? true : undefined}
-            className={`min-h-24 w-full rounded-xl border bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500 ${showRequiredError ? 'border-red-300' : 'border-slate-300'}`}
+            className="min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-blue-500"
             placeholder={block.config?.placeholder || 'Add your notes here'}
           />
-          {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">This response is required.</p>}
         </div>
       )
       }
@@ -3905,7 +3485,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
         <div className={`space-y-3 rounded-2xl border p-4 ${showRequiredError ? 'border-red-300 bg-red-50/40' : 'border-slate-200 bg-white'}`} aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></span>
-            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '–'}</span>
+            <span className="rounded-full bg-blue-100 px-2 py-1 text-sm font-semibold text-blue-700">{responses[block.id] ?? block.config?.defaultValue ?? '���'}</span>
           </div>
           {block.description && <p className="text-xs text-slate-500">{block.description}</p>}
           <input
@@ -3914,7 +3494,6 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
             max={block.config?.max ?? 10}
             step={block.config?.step ?? 1}
             value={responses[block.id] ?? block.config?.defaultValue ?? 5}
-            aria-label={block.label || 'Rating'}
             aria-required={block.required ? true : undefined}
             onChange={(event) => updateResponse(block.id, Number(event.target.value))}
             className="w-full"
@@ -3956,8 +3535,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
       )
     }
     case 'decisionMatrix': {
-      const matrixOptions = getLabeledConfigItems(block.config?.options, 'option')
-      const criteria = getLabeledConfigItems(block.config?.criteria, 'criterion')
+      const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
+      const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
       const min = Number(block.config?.min ?? 1)
       const max = Number(block.config?.max ?? 5)
       const values = responses[block.id] && typeof responses[block.id] === 'object' ? responses[block.id] : {}
@@ -3966,8 +3545,8 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
           <div><p className="text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></p>{block.description && <p className="mt-1 text-xs text-slate-500">{block.description}</p>}</div>
           <div className="space-y-4">
             {matrixOptions.map((option: any) => {
-              const optionValues = values[option.id] || values[option.label] || {}
-              const completed = criteria.map((criterion) => Number(optionValues[criterion.id] ?? optionValues[criterion.label])).filter(Number.isFinite)
+              const optionValues = values[option.id] || {}
+              const completed = criteria.map((criterion: any) => Number(optionValues[criterion.id])).filter(Number.isFinite)
               const total = completed.reduce((sum: number, value: number) => sum + value, 0)
               return (
                 <section key={option.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -3976,7 +3555,7 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
                     {criteria.map((criterion: any) => <div key={criterion.id} className="grid gap-2 sm:grid-cols-[minmax(140px,1fr)_auto] sm:items-center">
                       <span className="text-sm text-slate-700">{criterion.label}</span>
                       <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label={`${option.label}: ${criterion.label}`}>
-                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={(optionValues[criterion.id] ?? optionValues[criterion.label]) === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${(optionValues[criterion.id] ?? optionValues[criterion.label]) === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
+                        {Array.from({ length: Math.max(1, max - min + 1) }, (_, index) => min + index).map((score) => <button type="button" role="radio" aria-checked={optionValues[criterion.id] === score} key={score} onClick={() => updateResponse(block.id, { ...values, [option.id]: { ...optionValues, [criterion.id]: score } })} className={`h-9 w-9 rounded-lg border text-sm font-semibold ${optionValues[criterion.id] === score ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>{score}</button>)}
                       </div>
                     </div>)}
                   </div>
@@ -4027,21 +3606,18 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
     case 'quadrant':
       return <QuadrantBoard block={block} responses={responses} updateResponse={updateResponse} showRequiredError={showRequiredError} />
     case 'verdict':
-      {
-      const options = getLabeledConfigItems(block.config?.options, 'option')
       return (
         <fieldset className="space-y-3" aria-invalid={showRequiredError} aria-describedby={showRequiredError ? getBlockErrorId(block.id) : undefined}>
           <legend className="mb-2 block text-sm font-medium text-slate-700"><BlockFieldLabel block={block} /></legend>
-          {options.map((option) => (
-            <label key={option.id} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={matchesOptionValue(responses[block.id], option)} onChange={() => updateResponse(block.id, option.id)} />
-              <span>{option.label}</span>
+          {(block.config?.options || []).map((option: string) => (
+            <label key={option} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <input type="radio" name={block.id} aria-required={block.required ? true : undefined} checked={responses[block.id] === option} onChange={() => updateResponse(block.id, option)} />
+              <span>{option}</span>
             </label>
           ))}
           {showRequiredError && <p id={getBlockErrorId(block.id)} className="text-sm font-medium text-red-700">Choose one option to continue.</p>}
         </fieldset>
       )
-      }
     default:
       return null
   }
@@ -4049,40 +3625,17 @@ export function renderBlock(block: WorksheetBlock, responses: Record<string, any
 
 function formatBlockValue(block: WorksheetBlock, value: any) {
   if (value === undefined || value === null || value === '') return ''
-  if (block.type === 'richText') return stripHtml(sanitizeRichTextHtml(String(value)))
-  if (['singleSelect', 'confidence', 'verdict'].includes(block.type)) {
-    const option = getLabeledConfigItems(block.config?.options, 'option').find((item) => matchesOptionValue(value, item))
-    return option?.label || String(value)
-  }
-  if (block.type === 'checklist' || block.type === 'multipleChoice' || block.type === 'quiz') {
-    const options = getLabeledConfigItems(block.config?.options, 'option')
-    const values = getSelectedOptionValues(value)
-    return values.map((entry) => options.find((option) => matchesOptionValue(entry, option))?.label || String(entry)).join(', ')
-  }
   if (typeof value === 'string') return value
   if (typeof value === 'number') return String(value)
   if (block.type === 'wordCloud') return value.filter(Boolean).join(', ')
   if (block.type === 'hotspot') return value.map((point: any) => `(${point.x}%, ${point.y}%)`).join(', ')
-  if (block.type === 'categorize') {
-    const itemLabels = Object.fromEntries(getLabeledConfigItems(block.config?.items, 'item').map((item) => [item.id, item.label]))
-    return Object.entries(reconcileCategorizeResponse(block, value)).filter(([, category]) => String(category).trim()).map(([item, category]) => `${itemLabels[item] || item}: ${category}`).join('; ')
-  }
-  if (block.type === 'ranking') {
-    return reconcileRankingResponse(block.config?.options, value).map((item) => item.label).join(', ')
-  }
-  if (block.type === 'matrix') {
-    const rowLabels = Object.fromEntries(getLabeledConfigItems(block.config?.rows, 'row').map((row) => [row.id, row.label]))
-    return Object.entries(value as Record<string, number>).map(([row, score]) => `${rowLabels[row] || row}: ${score}`).join(', ')
-  }
-  if (block.type === 'radar') {
-    const dimensionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.dimensions, 'dimension').map((dimension) => [dimension.id, dimension.label]))
-    return `Radar: ${Object.entries(value as Record<string, number>).map(([dimension, score]) => `${dimensionLabels[dimension] || dimension}: ${score}`).join(', ')}`
-  }
+  if (block.type === 'categorize') return Object.entries(value).map(([item, category]) => `${item}: ${category}`).join('; ')
+  if (block.type === 'radar') return `Radar: ${Object.entries(value as Record<string, number>).map(([label, score]) => `${label}: ${score}`).join(', ')}`
   if (block.type === 'quadrant') return `Quadrant: x=${value.x}, y=${value.y}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'continuum') return `Position: ${value.position}. Rationale: ${value.rationale || 'No rationale recorded'}`
   if (block.type === 'decisionMatrix') {
-    const optionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.options, 'option').map((option) => [option.id, option.label]))
-    const criterionLabels = Object.fromEntries(getLabeledConfigItems(block.config?.criteria, 'criterion').map((criterion) => [criterion.id, criterion.label]))
+    const optionLabels = Object.fromEntries((block.config?.options || []).map((option: any) => [option.id, option.label]))
+    const criterionLabels = Object.fromEntries((block.config?.criteria || []).map((criterion: any) => [criterion.id, criterion.label]))
     return Object.entries(value as Record<string, any>).map(([option, ratings]) => `${optionLabels[option] || option}: ${Object.entries(ratings).map(([criterion, score]) => `${criterionLabels[criterion] || criterion}: ${score}`).join(', ')}`).join(' | ')
   }
   if (block.type === 'board') {
@@ -4109,7 +3662,7 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
 
   const points = dimensions.map((_, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = numberInRange(values[index], 0, 10) ?? 0
+    const value = Number(values[index] ?? 0)
     const distance = (value / 10) * radius
     const x = center + Math.cos(angle) * distance
     const y = center + Math.sin(angle) * distance
@@ -4149,19 +3702,17 @@ function RadarSummaryChart({ data }: { data: Record<string, number> }) {
   )
 }
 
-export function QuadrantMiniChart({ x, y, xLeft = 'Time', xRight = 'Learning', yBottom = 'Low risk', yTop = 'High risk' }: { x: number; y: number; xLeft?: string; xRight?: string; yBottom?: string; yTop?: string }) {
-  const safeX = numberInRange(x, 0, 100) ?? 0
-  const safeY = numberInRange(y, 0, 100) ?? 0
+function QuadrantMiniChart({ x, y }: { x: number; y: number }) {
   return (
     <svg viewBox="0 0 220 220" className="h-48 w-full max-w-[260px]">
       <rect x="0" y="0" width="220" height="220" fill="#f8fafc" rx="18" />
       <line x1="110" y1="0" x2="110" y2="220" stroke="#cbd5e1" strokeWidth="2" />
       <line x1="0" y1="110" x2="220" y2="110" stroke="#cbd5e1" strokeWidth="2" />
-      <circle cx={(safeX / 100) * 220} cy={220 - (safeY / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
-      <text x="18" y="112" fontSize="11" fill="#475569">{xLeft}</text>
-      <text x="160" y="112" fontSize="11" fill="#475569">{xRight}</text>
-      <text x="92" y="210" fontSize="11" fill="#475569">{yBottom}</text>
-      <text x="92" y="18" fontSize="11" fill="#475569">{yTop}</text>
+      <circle cx={(x / 100) * 220} cy={220 - (y / 100) * 220} r="7" fill="#f59e0b" stroke="#fff" strokeWidth="2" />
+      <text x="18" y="112" fontSize="11" fill="#475569">Time</text>
+      <text x="160" y="112" fontSize="11" fill="#475569">Learning</text>
+      <text x="92" y="210" fontSize="11" fill="#475569">Low risk</text>
+      <text x="92" y="18" fontSize="11" fill="#475569">High risk</text>
     </svg>
   )
 }
@@ -4173,7 +3724,7 @@ function drawPdfRadar(pdf: jsPDF, centreX: number, centreY: number, radius: numb
 
   const points = dimensions.map((_, index) => {
     const angle = (-Math.PI / 2) + (index * (Math.PI * 2)) / dimensions.length
-    const value = numberInRange(values[index], 0, 10) ?? 0
+    const value = Number(values[index] ?? 0)
     const distance = (value / 10) * radius
     const x = centreX + Math.cos(angle) * distance
     const y = centreY + Math.sin(angle) * distance
@@ -4230,7 +3781,7 @@ function drawPdfQuadrant(pdf: jsPDF, left: number, top: number, size: number, x:
   pdf.circle(pointX, pointY, 4, 'FD')
 }
 
-export function SynthesisViewer({ definition, initialMode = 'student', initialResponses, initialNotice, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; initialNotice?: string; backTo?: string }) {
+function SynthesisViewer({ definition, initialMode = 'student', initialResponses, backTo = '/' }: { definition: WorksheetDefinition; initialMode?: 'student' | 'teacher'; initialResponses?: WorksheetResponse[]; backTo?: string }) {
   const [responses, setResponses] = useState<WorksheetResponse[]>(initialResponses || [])
   const [error, setError] = useState('')
   const [importInfo, setImportInfo] = useState('')
@@ -4369,7 +3920,7 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
 
   const renderResponseValue = (block: WorksheetBlock, value: any) => {
     if (block.type === 'richText') {
-      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: sanitizeRichTextHtml(String(value)) }} />
+      return <div className="prose prose-slate mt-2 max-w-none text-sm" dangerouslySetInnerHTML={{ __html: String(value) }} />
     }
 
     if (block.type === 'checklist') {
@@ -4384,13 +3935,13 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     }
 
     if (block.type === 'ranking') {
-      const items = reconcileRankingResponse(block.config?.options, value)
+      const items = Array.isArray(value) ? value : []
       return (
         <ol className="mt-2 space-y-2 text-sm text-slate-700">
           {items.map((item, index) => (
-            <li key={`${block.id}-${item.id}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <li key={`${block.id}-${String(item)}-${index}`} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{index + 1}</span>
-              <span>{item.label}</span>
+              <span>{String(item)}</span>
             </li>
           ))}
         </ol>
@@ -4407,12 +3958,12 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     const title = getBlockDisplayLabel(block)
 
     if (block.type === 'radar') {
-      const configuredDimensionItems = getLabeledConfigItems(block.config?.dimensions, 'dimension')
-      const configuredDimensions = configuredDimensionItems.map((dimension) => dimension.id)
-      const dimensionLabels = Object.fromEntries(configuredDimensionItems.map((dimension) => [dimension.id, dimension.label]))
+      const configuredDimensions = Array.isArray(block.config?.dimensions)
+        ? block.config.dimensions.map((dimension: any) => (typeof dimension === 'string' ? dimension : String(dimension?.label || ''))).filter(Boolean)
+        : []
       const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
       const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
-      const averages = Object.fromEntries(Object.entries(aggregateRadarValues(groupingResponses, dimensions, block.id, getNumericRange(block.config, 1, 10))).map(([dimension, score]) => [dimensionLabels[dimension] || dimension, score]))
+      const averages = aggregateRadarValues(groupingResponses, dimensions, block.id)
 
       return (
         <>
@@ -4456,7 +4007,7 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} xLeft={block.config?.xLeft} xRight={block.config?.xRight} yBottom={block.config?.yBottom} yTop={block.config?.yTop} />
+              <QuadrantMiniChart x={averagePoint.x} y={averagePoint.y} />
               <div className="mt-3 flex justify-between text-sm text-slate-700">
                 <span>x: {averagePoint.x.toFixed(1)}</span>
                 <span>y: {averagePoint.y.toFixed(1)}</span>
@@ -4490,7 +4041,7 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     if (block.type === 'decisionMatrix') {
       const matrixOptions = Array.isArray(block.config?.options) ? block.config.options : []
       const criteria = Array.isArray(block.config?.criteria) ? block.config.criteria : []
-      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria, getNumericRange(block.config, 1, 5))
+      const summary = aggregateDecisionMatrix(groupingResponses, block.id, matrixOptions, criteria)
       return <><div className="flex items-center justify-between gap-3"><div><h4 className="text-base font-semibold text-slate-900">{title}</h4><p className="mt-1 text-sm text-slate-500">Average ratings by option and criterion. Counts reflect valid submitted values.</p></div><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-violet-700">Decision matrix</span></div><div className="mt-4 overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-slate-200"><th className="p-2">Option</th>{criteria.map((criterion: any) => <th key={criterion.id} className="p-2">{criterion.label}</th>)}<th className="p-2">Overall</th></tr></thead><tbody>{summary.map((option) => <tr key={option.id} className="border-b border-slate-100"><th className="p-2 font-medium text-slate-800">{option.label}<span className="block text-xs font-normal text-slate-500">{option.count} response(s)</span></th>{option.criteria.map((criterion) => <td key={criterion.id} className="p-2">{criterion.count ? criterion.average.toFixed(1) : '—'}<span className="block text-[10px] text-slate-400">n={criterion.count}</span></td>)}<td className="p-2 font-semibold">{option.overallMean.toFixed(1)}</td></tr>)}</tbody></table></div></>
     }
 
@@ -4547,12 +4098,11 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     }
 
     if (block.type === 'matrix') {
-      const rows = getLabeledConfigItems(block.config?.rows, 'row')
-      const { min, max } = getNumericRange(block.config, 1, 5)
-      const averages = rows.map((row) => {
+      const rows = Array.isArray(block.config?.rows) ? block.config.rows : []
+      const averages = rows.map((row: string) => {
         const values = groupingResponses
-          .map((response) => numberInRange(response.responses?.[block.id]?.[row.id] ?? response.responses?.[block.id]?.[row.label], min, max))
-          .filter((value): value is number => value !== undefined)
+          .map((response) => Number(response.responses?.[block.id]?.[row]))
+          .filter((value) => Number.isFinite(value))
         return {
           row,
           average: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
@@ -4571,8 +4121,8 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
           </div>
           <div className="mt-4 space-y-2">
             {averages.map(({ row, average }) => (
-              <div key={`${block.id}-${row.id}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                <span className="text-sm text-slate-700">{row.label}</span>
+              <div key={`${block.id}-${row}`} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-sm text-slate-700">{row}</span>
                 <span className="text-sm font-semibold text-slate-900">{average.toFixed(1)}</span>
               </div>
             ))}
@@ -4582,10 +4132,9 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     }
 
     if (block.type === 'rating') {
-      const { min, max } = getNumericRange(block.config, 0, 10)
       const numericEntries = entries
         .map(({ response, label, value }) => ({ response, label, value: Number(value) }))
-        .filter((entry) => numberInRange(entry.value, min, max) !== undefined)
+        .filter((entry) => Number.isFinite(entry.value))
       const average = numericEntries.length ? numericEntries.reduce((sum, entry) => sum + entry.value, 0) / numericEntries.length : 0
 
       return (
@@ -4815,8 +4364,8 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
   useEffect(() => {
     if (!initialResponses) return
     setResponses(initialResponses)
-    setImportInfo(initialNotice || `Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
-  }, [initialNotice, initialResponses])
+    setImportInfo(`Loaded ${initialResponses.length} submitted response${initialResponses.length === 1 ? '' : 's'} from this workbook.`)
+  }, [initialResponses])
 
   const handleFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
@@ -4828,10 +4377,14 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
       try {
         const text = await file.text()
         const json = JSON.parse(text) as WorksheetResponse
-        const importError = getWorksheetResponseImportError(definition, json)
-        if (importError) {
+        if (json.worksheetId !== definition.id) {
           rejected += 1
-          setError(`Rejected ${file.name}: ${importError}`)
+          setError(`Rejected ${file.name}: worksheet ID must match ${definition.id}.`)
+          continue
+        }
+        if (json.responseSchema !== 'interactive-worksheet-response') {
+          rejected += 1
+          setError(`Rejected ${file.name}: invalid response schema.`)
           continue
         }
         parsed.push(json)
@@ -4842,17 +4395,15 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     }
 
     if (parsed.length > 0) {
-      const sanitised = sanitiseWorksheetResponses(definition, parsed)
       setResponses((current) => {
-        const combined = [...current, ...sanitised.responses]
+        const combined = [...current, ...parsed]
         const uniqueByResponseId = new Map<string, WorksheetResponse>()
         combined.forEach((response) => {
           uniqueByResponseId.set(response.responseId, response)
         })
         return Array.from(uniqueByResponseId.values())
       })
-      const totalRejected = rejected + sanitised.rejectedResponses
-      setImportInfo(`Imported ${sanitised.responses.length} response file(s) for ${definition.title}.${totalRejected ? ` ${totalRejected} rejected.` : ''}${sanitised.rejectedValues ? ` ${sanitised.rejectedValues} malformed answer value(s) ignored.` : ''}`)
+      setImportInfo(`Imported ${parsed.length} response file(s) for ${definition.title}.${rejected ? ` ${rejected} rejected.` : ''}`)
     } else if (files.length > 0) {
       setImportInfo(`No files imported.${rejected ? ` ${rejected} rejected.` : ''}`)
     }
@@ -4873,52 +4424,43 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
       y = 52
     }
 
+    const drawWrappedText = (text: string, x: number, top: number, width: number, lineHeight = 12) => {
+      const lines = pdf.splitTextToSize(text, width)
+      pdf.text(lines, x, top)
+      return lines.length * lineHeight
+    }
+
     const drawPdfCard = (title: string, lines: string[], tone: 'default' | 'section' = 'default') => {
       const innerWidth = pageWidth - 104
       const lineHeight = 12
       const wrappedLines = lines.flatMap((line) => pdf.splitTextToSize(line, innerWidth - 24))
-      let remainingLines = wrappedLines.length ? wrappedLines : ['']
-      let continued = false
-
-      while (remainingLines.length > 0) {
-        const fixedHeight = 34 + 14 + 10
-        let capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
-        if (capacity < 1) {
-          pdf.addPage()
-          y = 52
-          capacity = getPdfLineCapacity(pageHeight - 42 - y - fixedHeight, lineHeight)
-        }
-
-        const pageLines = remainingLines.slice(0, Math.max(1, capacity))
-        remainingLines = remainingLines.slice(pageLines.length)
-        const cardHeight = 34 + pageLines.length * lineHeight + 14
-        if (tone === 'section') {
-          pdf.setFillColor(248, 250, 252)
-          pdf.setDrawColor(203, 213, 225)
-        } else {
-          pdf.setFillColor(255, 255, 255)
-          pdf.setDrawColor(226, 232, 240)
-        }
-        pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
-        pdf.setTextColor(15, 23, 42)
-        pdf.setFontSize(11)
-        pdf.text(continued ? `${title} (continued)` : title, 64, y + 18)
-        pdf.setTextColor(71, 85, 105)
-        pdf.setFontSize(9)
-        pdf.text(pageLines, 64, y + 34)
-        y += cardHeight + 10
-        continued = true
+      const cardHeight = 34 + wrappedLines.length * lineHeight + 14
+      ensurePdfSpace(cardHeight + 10)
+      if (tone === 'section') {
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(203, 213, 225)
+      } else {
+        pdf.setFillColor(255, 255, 255)
+        pdf.setDrawColor(226, 232, 240)
       }
+      pdf.roundedRect(52, y, innerWidth, cardHeight, 10, 10, 'FD')
+      pdf.setTextColor(15, 23, 42)
+      pdf.setFontSize(11)
+      pdf.text(title, 64, y + 18)
+      pdf.setTextColor(71, 85, 105)
+      pdf.setFontSize(9)
+      pdf.text(wrappedLines, 64, y + 34)
+      y += cardHeight + 10
     }
 
     pdf.setFillColor(15, 23, 42)
     pdf.rect(0, 0, pageWidth, 78, 'F')
     pdf.setTextColor(255, 255, 255)
     pdf.setFontSize(22)
-    pdf.text(`${definition.title} · Class Evaluation Report`, 52, 40)
+    pdf.text(`${definition.title} ��� Class Evaluation Report`, 52, 40)
     pdf.setFontSize(10)
     pdf.setTextColor(191, 219, 254)
-    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ·   Evaluations: ${filteredResponseCount}   ·   ${groupingLabelPlural}: ${filteredGroupings.length}   ·   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
+    pdf.text(`Worksheet: ${definition.id} v${definition.version}   ���   Evaluations: ${filteredResponseCount}   ���   ${groupingLabelPlural}: ${filteredGroupings.length}   ���   Response labels: ${new Set(filteredGroupings.flatMap((grouping) => grouping.responses.map((response) => responseLabelLookup[response.responseId]))).size}`, 52, 60)
 
     y = 102
     pdf.setTextColor(15, 23, 42)
@@ -4942,14 +4484,10 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
     y += 66
 
     filteredGroupings.forEach((grouping) => {
-      const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
-      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
-      const metrics = Object.entries(avgRadar)
-      const radarCardHeight = Math.max(120, 64 + metrics.length * 12)
-      ensurePdfSpace(radarCardHeight + 6)
+      ensurePdfSpace(126)
       pdf.setFillColor(255, 255, 255)
       pdf.setDrawColor(226, 232, 240)
-      pdf.roundedRect(52, y, 500, radarCardHeight, 12, 12, 'FD')
+      pdf.roundedRect(52, y, 500, 120, 12, 12, 'FD')
       pdf.setTextColor(15, 23, 42)
       pdf.setFontSize(15)
       pdf.text(grouping.label, 68, y + 24)
@@ -4957,10 +4495,13 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
       pdf.setTextColor(100, 116, 139)
       pdf.text(`${formatCountLabel(grouping.responses.length, 'evaluation')} in this ${synthesisConfig.groupLabel.toLowerCase()}`, 68, y + 38)
 
+      const radarDimensions = structure.radarDimensions.length ? structure.radarDimensions : ['Score']
+      const avgRadar = aggregateRadarValues(grouping.responses, radarDimensions, structure.radarBlockId)
       drawPdfRadar(pdf, 190, y + 80, 46, avgRadar)
 
       pdf.setTextColor(51, 65, 85)
       pdf.setFontSize(9)
+      const metrics = Object.entries(avgRadar)
       metrics.forEach(([label, value], idx) => {
         const rowY = y + 52 + idx * 12
         pdf.text(label, 325, rowY)
@@ -4969,11 +4510,23 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
         pdf.line(325, rowY + 3, 470, rowY + 3)
       })
 
-      y += radarCardHeight + 12
+      y += 132
 
       const visibleSections = getVisiblePageSections(grouping.responses)
       visibleSections.forEach((section) => {
-        drawPdfCard(section.page.title, section.contextText ? [section.contextText] : [], 'section')
+        ensurePdfSpace(78)
+        pdf.setFillColor(248, 250, 252)
+        pdf.setDrawColor(203, 213, 225)
+        pdf.roundedRect(52, y, pageWidth - 104, 58, 10, 10, 'FD')
+        pdf.setTextColor(15, 23, 42)
+        pdf.setFontSize(13)
+        pdf.text(section.page.title, 64, y + 20)
+        if (section.contextText) {
+          pdf.setFontSize(9)
+          pdf.setTextColor(71, 85, 105)
+          drawWrappedText(section.contextText, 64, y + 36, pageWidth - 136)
+        }
+        y += 72
 
         section.visibleBlocks.forEach((block) => {
           const entries = getBlockEntries(block, grouping.responses)
@@ -4986,11 +4539,10 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
             const fallbackDimensions = Array.from(new Set(entries.flatMap(({ value }) => Object.keys((value as Record<string, number>) || {}))))
             const dimensions = configuredDimensions.length ? configuredDimensions : fallbackDimensions
             const averages = aggregateRadarValues(grouping.responses, dimensions, block.id)
-            const radarHeight = Math.max(118, 46 + Object.keys(averages).length * 12)
-            ensurePdfSpace(radarHeight + 10)
+            ensurePdfSpace(128)
             pdf.setFillColor(255, 255, 255)
             pdf.setDrawColor(226, 232, 240)
-            pdf.roundedRect(52, y, pageWidth - 104, radarHeight, 10, 10, 'FD')
+            pdf.roundedRect(52, y, pageWidth - 104, 118, 10, 10, 'FD')
             pdf.setTextColor(15, 23, 42)
             pdf.setFontSize(11)
             pdf.text(getBlockDisplayLabel(block), 64, y + 18)
@@ -5000,7 +4552,7 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
             Object.entries(averages).forEach(([label, score], index) => {
               pdf.text(`${label}: ${Number(score).toFixed(1)}`, 180, y + 34 + index * 12)
             })
-            y += radarHeight + 12
+            y += 130
             return
           }
 
@@ -5088,8 +4640,8 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" aria-pressed={mode === 'student'} onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
-            <button type="button" aria-pressed={mode === 'teacher'} onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
+            <button type="button" onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
+            <button type="button" onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
           </div>
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800">
             <Upload className="h-4 w-4" />
@@ -5189,8 +4741,8 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
         </div>
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex gap-2 rounded-xl bg-slate-100 p-1">
-            <button type="button" aria-pressed={mode === 'student'} onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
-            <button type="button" aria-pressed={mode === 'teacher'} onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
+            <button type="button" onClick={() => setMode('student')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'student' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Student synthesis</button>
+            <button type="button" onClick={() => setMode('teacher')} className={`rounded-lg px-3 py-2 text-sm font-medium ${mode === 'teacher' ? 'bg-slate-900 text-white' : 'text-slate-700'}`}>Teacher report</button>
           </div>
           <div className="flex gap-3">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800">
@@ -5259,6 +4811,12 @@ export function SynthesisViewer({ definition, initialMode = 'student', initialRe
   return mode === 'student' ? renderStudentView() : renderTeacherView()
 }
 
+function getConditionOptions(block: WorksheetBlock) {
+  if (block.type === 'trueFalse') return [{ label: 'True', value: true }, { label: 'False', value: false }]
+  const configured = Array.isArray(block.config?.options) ? block.config.options : []
+  return configured.map((option: unknown) => ({ label: String(option), value: String(option) }))
+}
+
 function ConditionalDisplayEditor({
   condition,
   candidates,
@@ -5312,7 +4870,7 @@ function ConditionalDisplayEditor({
               }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 {expectedOptions.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
               </select>
-            ) : <input type={source?.type === 'numeric' ? 'number' : 'text'} value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: source?.type === 'numeric' && event.target.value !== '' ? Number(event.target.value) : event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
+            ) : <input value={String(condition.value)} onChange={(event) => onChange({ ...condition, value: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
           </label>
           <button type="button" onClick={() => onChange(undefined)} className="justify-self-start text-xs font-medium text-red-700">Remove condition</button>
         </div>
@@ -5328,7 +4886,7 @@ function BuilderPage({
 }: {
   definition: WorksheetDefinition
   setDefinition: WorksheetBuilderSetter
-  importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<string | null>
+  importWorksheetDefinition: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
 }) {
   const { user, loading: authLoading } = useTeacherAuth()
   const blockLibrary: Array<{ type: string; label?: string; description: string }> = [
@@ -5391,15 +4949,10 @@ function BuilderPage({
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState('')
   const [publishedWorkbook, setPublishedWorkbook] = useState<OnlineWorksheetRow | null>(null)
-  const [publishedDefinitionJson, setPublishedDefinitionJson] = useState<string | null>(null)
   const [shareCopied, setShareCopied] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
   const [pastedJson, setPastedJson] = useState('')
   const [pastedJsonError, setPastedJsonError] = useState('')
-  const [importFileError, setImportFileError] = useState('')
-  const closeImportDialog = useCallback(() => {
-    setShowImportDialog(false)
-  }, [])
 
   const [selectedPageId, setSelectedPageId] = useState(definition.pages[0]?.id || '')
   const [selectedBlockId, setSelectedBlockId] = useState(definition.pages[0]?.blocks[0]?.id || '')
@@ -5427,17 +4980,18 @@ function BuilderPage({
   const priorPageResponseBlocks = definition.pages
     .slice(0, Math.max(0, selectedPageIndex))
     .flatMap((page) => page.blocks)
-    .filter(isConditionSourceBlock)
+    .filter(isResponseProducingBlock)
   const priorBlockResponseBlocks = selectedPage && selectedBlock
-    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isConditionSourceBlock)]
+    ? [...priorPageResponseBlocks, ...selectedPage.blocks.slice(0, selectedPage.blocks.findIndex((block) => block.id === selectedBlock.id)).filter(isResponseProducingBlock)]
     : priorPageResponseBlocks
 
   const addPage = () => {
+    const timestamp = Date.now()
     const nextPage: WorksheetPage = {
-      id: createBuilderId('page'),
+      id: `page-${timestamp}`,
       title: `Page ${definition.pages.length + 1}`,
       timer: getDefaultPageTimer(),
-      blocks: [{ id: createBuilderId('block'), type: 'content', title: 'New content block' }],
+      blocks: [{ id: `block-${timestamp}`, type: 'content', title: 'New content block' }],
     }
     setDefinition((previous) => ({ ...previous, pages: [...previous.pages, nextPage] }))
     setSelectedPageId(nextPage.id)
@@ -5450,13 +5004,13 @@ function BuilderPage({
     const templateBlocks: WorksheetBlock[] = template === 'quiz'
       ? [
           {
-            id: createBuilderId('block'),
+            id: `block-${timestamp}-1`,
             type: 'content',
             title: 'Quiz introduction',
             description: 'Add instructions for learners before they begin.',
           },
           {
-            id: createBuilderId('block'),
+            id: `block-${timestamp}-2`,
             type: 'multipleChoice',
             label: 'Question 1',
             required: true,
@@ -5466,13 +5020,13 @@ function BuilderPage({
       : template === 'reflection'
         ? [
             {
-              id: createBuilderId('block'),
+              id: `block-${timestamp}-1`,
               type: 'content',
               title: 'Reflection',
               description: 'Introduce the activity and explain what learners should reflect on.',
             },
             {
-              id: createBuilderId('block'),
+              id: `block-${timestamp}-2`,
               type: 'longText',
               label: 'What did you learn?',
               required: true,
@@ -5482,7 +5036,7 @@ function BuilderPage({
         : []
 
     const page: WorksheetPage = {
-      id: createBuilderId('page'),
+      id: `page-${timestamp}`,
       title: template === 'quiz' ? 'Quiz' : template === 'reflection' ? 'Reflection' : 'Page 1',
       timer: getDefaultPageTimer(),
       blocks: templateBlocks,
@@ -5504,12 +5058,7 @@ function BuilderPage({
       const nextPages = [...previous.pages]
       const [moved] = nextPages.splice(currentIndex, 1)
       nextPages.splice(targetIndex, 0, moved)
-      const nextDefinition = { ...previous, pages: nextPages }
-      if (getFirstConditionOrderViolation(nextDefinition)) {
-        window.alert('This move would put conditional content before the question it depends on. Remove or update the condition first.')
-        return previous
-      }
-      return nextDefinition
+      return { ...previous, pages: nextPages }
     })
   }
 
@@ -5518,21 +5067,17 @@ function BuilderPage({
     const pageIndex = definition.pages.findIndex((page) => page.id === selectedPage.id)
     if (pageIndex < 0) return
 
-    const blockIdMap: Record<string, string> = {}
-    const duplicatedBlocks = selectedPage.blocks.map((block) => {
-      const id = createBuilderId('block')
-      blockIdMap[block.id] = id
-      return {
-        ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
-        id,
-      }
-    })
+    const baseTime = Date.now()
+    const duplicatedBlocks = selectedPage.blocks.map((block, blockIndex) => ({
+      ...JSON.parse(JSON.stringify(block)) as WorksheetBlock,
+      id: `block-${baseTime}-${blockIndex + 1}`,
+    }))
 
     const duplicatePage: WorksheetPage = {
       ...JSON.parse(JSON.stringify(selectedPage)) as WorksheetPage,
-      id: createBuilderId('page'),
+      id: `page-${baseTime}`,
       title: `${selectedPage.title} (Copy)`,
-      blocks: remapBlockConditions(duplicatedBlocks, blockIdMap),
+      blocks: duplicatedBlocks,
     }
 
     setDefinition((previous) => {
@@ -5550,41 +5095,30 @@ function BuilderPage({
     if (definition.pages.length === 1) {
       if (!window.confirm('Delete the only page? This will create a new blank page.')) return
       const replacementPage: WorksheetPage = {
-        id: createBuilderId('page'),
+        id: `page-${Date.now()}`,
         title: 'Page 1',
         timer: getDefaultPageTimer(),
         blocks: [],
       }
-      setDefinition((previous) => {
-        const removedBlockIds = selectedPage.blocks.map((block) => block.id)
-        return {
-          ...clearConditionsReferencingBlocks(previous, removedBlockIds),
-          synthesis: clearRemovedBlockReferences(previous.synthesis, removedBlockIds),
-          pages: [replacementPage],
-        }
-      })
+      setDefinition((previous) => ({
+        ...previous,
+        synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
+        pages: [replacementPage],
+      }))
       setSelectedPageId(replacementPage.id)
       setSelectedBlockId('')
       return
     }
 
-    const dependentConditions = getConditionReferenceCount(definition, selectedPage.blocks.map((block) => block.id))
-    const deleteMessage = dependentConditions > 0
-      ? `Delete this page and all of its blocks? This will also remove ${formatCountLabel(dependentConditions, 'condition')} that depends on its blocks.`
-      : 'Delete this page and all of its blocks?'
-    if (!window.confirm(deleteMessage)) return
+    if (!window.confirm('Delete this page and all of its blocks?')) return
     const currentIndex = definition.pages.findIndex((page) => page.id === selectedPage.id)
     const fallbackPage = definition.pages[Math.max(0, currentIndex - 1)]
 
-    setDefinition((previous) => {
-      const removedBlockIds = selectedPage.blocks.map((block) => block.id)
-      const nextDefinition = clearConditionsReferencingBlocks(previous, removedBlockIds)
-      return {
-        ...nextDefinition,
-        synthesis: clearRemovedBlockReferences(previous.synthesis, removedBlockIds),
-        pages: nextDefinition.pages.filter((page) => page.id !== selectedPage.id),
-      }
-    })
+    setDefinition((previous) => ({
+      ...previous,
+      synthesis: clearRemovedBlockReferences(previous.synthesis, selectedPage.blocks.map((block) => block.id)),
+      pages: previous.pages.filter((page) => page.id !== selectedPage.id),
+    }))
     if (fallbackPage) {
       setSelectedPageId(fallbackPage.id)
       setSelectedBlockId(fallbackPage.blocks[0]?.id || '')
@@ -5608,7 +5142,7 @@ function BuilderPage({
         : `New ${type} block`
 
     return {
-      id: createBuilderId('block'),
+      id: `block-${timestamp}`,
       type,
       label,
       title: type === 'content' ? 'New content block' : type === 'section' ? 'Section heading' : undefined,
@@ -5643,23 +5177,23 @@ function BuilderPage({
   }
 
   const moveBlockWithinPage = (blockId: string, insertIndex: number) => {
-    if (!selectedPage || !selectedPage.blocks.some((block) => block.id === blockId)) return
+    if (!selectedPage) return
+    const fromIndex = selectedPage.blocks.findIndex((block) => block.id === blockId)
+    if (fromIndex < 0) return
 
-    setDefinition((previous) => {
-      const nextDefinition = {
-        ...previous,
-        pages: previous.pages.map((page) => {
-          if (page.id !== selectedPage.id) return page
-          const nextBlocks = reorderBlocks(page.blocks, blockId, insertIndex)
-          return nextBlocks === page.blocks ? page : { ...page, blocks: nextBlocks }
-        }),
-      }
-      if (getFirstConditionOrderViolation(nextDefinition)) {
-        window.alert('This move would put conditional content before the question it depends on. Remove or update the condition first.')
-        return previous
-      }
-      return nextDefinition
-    })
+    setDefinition((previous) => ({
+      ...previous,
+      pages: previous.pages.map((page) => {
+        if (page.id !== selectedPage.id) return page
+        const nextBlocks = [...page.blocks]
+        const [moved] = nextBlocks.splice(fromIndex, 1)
+        if (!moved) return page
+        const adjustedIndex = insertIndex > fromIndex ? insertIndex - 1 : insertIndex
+        const boundedIndex = Math.max(0, Math.min(adjustedIndex, nextBlocks.length))
+        nextBlocks.splice(boundedIndex, 0, moved)
+        return { ...page, blocks: nextBlocks }
+      }),
+    }))
     setSelectedBlockId(blockId)
   }
 
@@ -5754,28 +5288,20 @@ function BuilderPage({
       definition.synthesis?.responseLabelBlockId === selectedBlock.id ? 'label individual responses in synthesis' : '',
     ].filter(Boolean)
 
-    const dependentConditions = getConditionReferenceCount(definition, [selectedBlock.id])
-    if (synthesisEffects.length > 0 || dependentConditions > 0) {
-      const effects = [
-        synthesisEffects.length > 0 ? `remove the ${synthesisEffects.join(' and ')} synthesis setting` : '',
-        dependentConditions > 0 ? `remove ${formatCountLabel(dependentConditions, 'condition')} that depends on it` : '',
-      ].filter(Boolean)
-      const warningText = `This block is currently used elsewhere. Deleting it will ${effects.join(' and ')}.`
+    if (synthesisEffects.length > 0) {
+      const warningText = `This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`
       if (!window.confirm(warningText)) return
     }
 
-    setDefinition((previous) => {
-      const nextDefinition = clearConditionsReferencingBlocks(previous, [selectedBlock.id])
-      return {
-        ...nextDefinition,
-        synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
-        pages: nextDefinition.pages.map((page) => (
-          page.id === selectedPage.id
-            ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
-            : page
-        )),
-      }
-    })
+    setDefinition((previous) => ({
+      ...previous,
+      synthesis: clearRemovedBlockReferences(previous.synthesis, [selectedBlock.id]),
+      pages: previous.pages.map((page) => (
+        page.id === selectedPage.id
+          ? { ...page, blocks: page.blocks.filter((block) => block.id !== selectedBlock.id) }
+          : page
+      )),
+    }))
   }
 
   const duplicateBlockAtIndex = (pageId: string, blockId: string, index: number) => {
@@ -5786,7 +5312,7 @@ function BuilderPage({
 
     const duplicateBlock: WorksheetBlock = {
       ...JSON.parse(JSON.stringify(blockToDuplicate)) as WorksheetBlock,
-      id: createBuilderId('block'),
+      id: `block-${Date.now()}`,
     }
 
     setDefinition((previous) => ({
@@ -5816,36 +5342,26 @@ function BuilderPage({
       definition.synthesis?.groupByBlockId === blockId ? 'group synthesis results' : '',
       definition.synthesis?.responseLabelBlockId === blockId ? 'label individual responses in synthesis' : '',
     ].filter(Boolean)
-    const dependentConditions = getConditionReferenceCount(definition, [blockId])
-    if (synthesisEffects.length > 0 || dependentConditions > 0) {
-      const effects = [
-        synthesisEffects.length > 0 ? `remove the ${synthesisEffects.join(' and ')} synthesis setting` : '',
-        dependentConditions > 0 ? `remove ${formatCountLabel(dependentConditions, 'condition')} that depends on it` : '',
-      ].filter(Boolean)
-      if (!window.confirm(`This block is currently used elsewhere. Deleting it will ${effects.join(' and ')}.`)) return
-    }
+    if (synthesisEffects.length > 0 && !window.confirm(`This block is currently used to ${synthesisEffects.join(' and ')}. Deleting it will remove that synthesis setting.`)) return
 
-    setDefinition((previous) => {
-      const nextDefinition = clearConditionsReferencingBlocks(previous, [blockId])
-      return {
-        ...nextDefinition,
-        synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
-        pages: nextDefinition.pages.map((page) => page.id === pageId
-          ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
-          : page),
-      }
-    })
+    setDefinition((previous) => ({
+      ...previous,
+      synthesis: clearRemovedBlockReferences(previous.synthesis, [blockId]),
+      pages: previous.pages.map((page) => page.id === pageId
+        ? { ...page, blocks: page.blocks.filter((candidate) => candidate.id !== blockId) }
+        : page),
+    }))
     if (selectedBlockId === blockId) setSelectedBlockId('')
     setOpenBlockMenuId(null)
   }
 
   const selectedConfig = (selectedBlock?.config || {}) as Record<string, any>
-  const optionList = getLabeledConfigItems(selectedConfig.options, 'option')
+  const optionList = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
   const randomizerItems = Array.isArray(selectedConfig.items) ? (selectedConfig.items as string[]) : []
-  const rankingOptions = getLabeledConfigItems(selectedConfig.options, 'option')
-  const matrixRows = getLabeledConfigItems(selectedConfig.rows, 'row')
-  const decisionOptions = getLabeledConfigItems(selectedConfig.options, 'option')
-  const decisionCriteria = getLabeledConfigItems(selectedConfig.criteria, 'criterion')
+  const rankingOptions = Array.isArray(selectedConfig.options) ? (selectedConfig.options as string[]) : []
+  const matrixRows = Array.isArray(selectedConfig.rows) ? (selectedConfig.rows as string[]) : []
+  const decisionOptions = Array.isArray(selectedConfig.options) ? selectedConfig.options as Array<{ id: string; label: string }> : []
+  const decisionCriteria = Array.isArray(selectedConfig.criteria) ? selectedConfig.criteria as Array<{ id: string; label: string }> : []
   const boardColumns = Array.isArray(selectedConfig.columns) ? selectedConfig.columns as Array<{ id: string; label: string; description?: string }> : []
   const radarDimensions = Array.isArray(selectedConfig.dimensions)
     ? (selectedConfig.dimensions as any[]).map((dimension, index) => {
@@ -5866,7 +5382,7 @@ function BuilderPage({
 
   const updateSelectedConfig = (partial: Record<string, any>) => {
     if (!selectedBlock) return
-    setDefinition((previous) => sanitizeWorksheetDefinition(updateBlockConfigWithOptionReferences(previous, selectedBlock.id, partial)))
+    updateSelectedBlock({ config: { ...selectedConfig, ...partial } })
   }
 
   const updateWorksheetDefinition = (partial: Partial<WorksheetDefinition>) => {
@@ -5892,37 +5408,22 @@ function BuilderPage({
   const shareLink = publishedWorkbook
     ? `${window.location.origin}${window.location.pathname}#/join/${publishedWorkbook.public_code}`
     : ''
-  const currentDefinitionJson = useMemo(() => JSON.stringify(definition), [definition])
-  const publishCardState = getPublishCardState(publishError, publishedWorkbook, publishedDefinitionJson, currentDefinitionJson)
 
   const handlePublish = async () => {
-    const definitionToPublish = definition
-    const definitionToPublishJson = JSON.stringify(definitionToPublish)
     setPublishError('')
-    setPublishedWorkbook(null)
-    setPublishedDefinitionJson(null)
-    setShareCopied(false)
     if (!user) {
       setPublishError('Sign in with a teacher account before publishing.')
       return
     }
-    if (!definitionToPublish.title.trim() || definitionToPublish.pages.length === 0) {
+    if (!definition.title.trim() || definition.pages.length === 0) {
       setPublishError('Add a title and at least one page before publishing.')
-      return
-    }
-    const unanswerableBlocks = getUnanswerableRequiredBlocks(definitionToPublish)
-    if (unanswerableBlocks.length > 0) {
-      const labels = unanswerableBlocks.slice(0, 3).map((block) => getBlockDisplayLabel(block))
-      const remainingCount = unanswerableBlocks.length - labels.length
-      setPublishError(`Required blocks need answerable choices before publishing: ${labels.join(', ')}${remainingCount > 0 ? ` and ${remainingCount} more` : ''}.`)
       return
     }
 
     setPublishing(true)
     try {
-      const workbook = await publishWorksheet(definitionToPublish)
+      const workbook = await publishWorksheet(definition)
       setPublishedWorkbook(workbook)
-      setPublishedDefinitionJson(definitionToPublishJson)
     } catch (error) {
       setPublishError(error instanceof Error ? error.message : 'The workbook could not be published. Please try again.')
     } finally {
@@ -5943,18 +5444,16 @@ function BuilderPage({
 
   const importPastedJson = () => {
     setPastedJsonError('')
-    setImportFileError('')
     try {
       const parsed = JSON.parse(pastedJson) as unknown
       if (!isWorksheetDefinition(parsed)) {
-        setPastedJsonError('This is valid JSON, but every page needs id, title, and blocks, and every block needs id and type.')
+        setPastedJsonError('This is valid JSON, but it is not a complete workbook definition.')
         return
       }
-      const sanitized = sanitizeWorksheetDefinition(normalizeWorksheetDefinitionStableIds(parsed))
-      setDefinition(sanitized)
-      setSelectedPageId(sanitized.pages[0]?.id || '')
-      setSelectedBlockId(sanitized.pages[0]?.blocks[0]?.id || '')
-      setBuilderMode(sanitized.pages.length > 0 ? 'pages' : 'setup')
+      setDefinition(parsed)
+      setSelectedPageId(parsed.pages[0]?.id || '')
+      setSelectedBlockId(parsed.pages[0]?.blocks[0]?.id || '')
+      setBuilderMode(parsed.pages.length > 0 ? 'pages' : 'setup')
       setPastedJson('')
       setShowImportDialog(false)
     } catch {
@@ -6039,7 +5538,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <Link to="/" title="Back to start" aria-label="Back to start" className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400"><ArrowLeft className="h-3.5 w-3.5" />Back</Link>
-          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setImportFileError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
+          <button type="button" title="Load worksheet JSON" onClick={() => { setPastedJsonError(''); setShowImportDialog(true) }} className="inline-flex h-9 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-400">
             <Upload className="h-4 w-4" />
             Load JSON
           </button>
@@ -6063,9 +5562,9 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </div>
       </div>
 
-      {publishCardState !== 'hidden' && (
-        <section role={publishCardState === 'error' ? 'alert' : 'status'} className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishCardState === 'published' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
-          {publishCardState === 'published' && publishedWorkbook ? (
+      {(publishError || publishedWorkbook) && (
+        <section className={`mb-6 rounded-2xl border p-5 shadow-sm ${publishedWorkbook ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+          {publishedWorkbook ? (
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">Published and ready to share</p>
@@ -6077,15 +5576,6 @@ Make the language concise and appropriate for the learners. Do not include Markd
               </div>
               <button type="button" onClick={() => void copyShareLink()} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600"><Copy className="h-4 w-4" />{shareCopied ? 'Link copied' : 'Copy invite link'}</button>
             </div>
-          ) : publishCardState === 'unpublished' && publishedWorkbook ? (
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="text-amber-900">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em]">Unpublished changes</p>
-                <h2 className="mt-1 text-xl font-bold">Republish to update learners</h2>
-                <p className="mt-2 text-sm">Learners still see the last published version of {publishedWorkbook.title}.</p>
-              </div>
-              <button type="button" onClick={() => void handlePublish()} disabled={publishing || authLoading} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-60"><CloudUpload className="h-4 w-4" />{publishing ? 'Publishing…' : 'Republish'}</button>
-            </div>
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-amber-900">
               <p>{publishError}</p>
@@ -6095,7 +5585,8 @@ Make the language concise and appropriate for the learners. Do not include Markd
         </section>
       )}
 
-      <ModalOverlay isOpen={showImportDialog} onClose={closeImportDialog} labelledBy="import-json-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8">
+      {showImportDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8" role="dialog" aria-modal="true" aria-labelledby="import-json-title">
           <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -6103,28 +5594,13 @@ Make the language concise and appropriate for the learners. Do not include Markd
                 <h2 id="import-json-title" className="mt-1 text-2xl font-bold text-slate-900">Load JSON</h2>
                 <p className="mt-2 text-sm text-slate-600">Upload a JSON file or paste the full workbook definition below.</p>
               </div>
-              <button type="button" data-modal-initial-focus aria-label="Close JSON import" onClick={closeImportDialog} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
+              <button type="button" aria-label="Close JSON import" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-slate-400">Close</button>
             </div>
 
             <label className="mt-6 flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50">
               <Upload className="h-4 w-4" />Choose a JSON file
-              <input
-                type="file"
-                accept="application/json"
-                className="hidden"
-                onChange={async (event) => {
-                  setImportFileError('')
-                  setPastedJsonError('')
-                  const error = await importWorksheetDefinition(event)
-                  if (error) {
-                    setImportFileError(error)
-                    return
-                  }
-                  setShowImportDialog(false)
-                }}
-              />
+              <input type="file" accept="application/json" className="hidden" onChange={async (event) => { await importWorksheetDefinition(event); setShowImportDialog(false) }} />
             </label>
-            {importFileError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{importFileError}</p>}
 
             <div className="my-5 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-400"><span className="h-px flex-1 bg-slate-200" />or paste JSON<span className="h-px flex-1 bg-slate-200" /></div>
 
@@ -6132,7 +5608,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
               Workbook JSON
               <textarea
                 value={pastedJson}
-                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError(''); setImportFileError('') }}
+                onChange={(event) => { setPastedJson(event.target.value); setPastedJsonError('') }}
                 placeholder={'{\n  "id": "my-workbook",\n  "version": 1,\n  ...\n}'}
                 spellCheck={false}
                 className="mt-2 min-h-64 w-full resize-y rounded-xl border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
@@ -6141,14 +5617,15 @@ Make the language concise and appropriate for the learners. Do not include Markd
             {pastedJsonError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{pastedJsonError}</p>}
 
             <div className="mt-5 flex justify-end gap-3">
-              <button type="button" onClick={closeImportDialog} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
+              <button type="button" onClick={() => setShowImportDialog(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700">Cancel</button>
               <button type="button" onClick={importPastedJson} disabled={!pastedJson.trim()} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">Import pasted JSON</button>
             </div>
           </div>
-      </ModalOverlay>
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[260px_1fr_360px]">
-        <aside className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${builderMode === 'setup' ? 'order-2 xl:order-none' : ''}`}>
+        <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 inline-flex items-center gap-2 text-lg font-semibold text-slate-900">
             <Wrench className="h-5 w-5" />
             Block library
@@ -6228,7 +5705,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
           </div>
         </aside>
 
-        <section className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm ${builderMode === 'setup' ? 'order-1 xl:order-none' : ''}`}>
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           {builderMode === 'pages' && !selectedPage && (
             <div className="mb-4 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50 via-white to-indigo-50 p-6 text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm">
@@ -6622,32 +6099,6 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       <p className="mt-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
                         Drag block to reorder
                       </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            moveBlockWithinPage(block.id, index - 1)
-                          }}
-                          disabled={index === 0}
-                          aria-label={`Move ${block.label || block.title || block.type} up`}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          Move up
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            moveBlockWithinPage(block.id, index + 2)
-                          }}
-                          disabled={index === selectedPage.blocks.length - 1}
-                          aria-label={`Move ${block.label || block.title || block.type} down`}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          Move down
-                        </button>
-                      </div>
                     </div>
                   </div>
                 ))}
@@ -6930,18 +6381,14 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   {(selectedBlock.type === 'multipleChoice' || selectedBlock.type === 'singleSelect' || selectedBlock.type === 'verdict' || selectedBlock.type === 'checklist' || selectedBlock.type === 'ranking' || selectedBlock.type === 'quiz' || selectedBlock.type === 'trueFalse' || selectedBlock.type === 'matching' || selectedBlock.type === 'confidence') && (
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">{selectedBlock.type === 'ranking' ? 'Ranking options' : selectedBlock.type === 'trueFalse' ? 'True/false choices' : selectedBlock.type === 'matching' ? 'Matching choices' : selectedBlock.type === 'quiz' ? 'Quiz options' : 'Options'}</p>
-                      {(selectedBlock.type === 'trueFalse'
-                        ? ['True', 'False'].map((label, index) => ({ id: `option-${index + 1}`, label }))
-                        : selectedBlock.type === 'matching'
-                          ? getLabeledConfigItems(selectedConfig.options || ['Option 1', 'Option 2'], 'option')
-                          : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option, index: number) => (
-                        <div key={`${selectedBlock.id}-${option.id}`} className="flex items-center gap-2">
+                      {(selectedBlock.type === 'trueFalse' ? ['True', 'False'] : selectedBlock.type === 'matching' ? (selectedConfig.options || ['Option 1', 'Option 2']) : selectedBlock.type === 'ranking' ? rankingOptions : optionList).map((option: string, index: number) => (
+                        <div key={`${selectedBlock.id}-option-${index}`} className="flex items-center gap-2">
                           <input
-                            value={option.label}
+                            value={option}
                             onChange={(event) => {
                               const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
                               const next = [...current]
-                              next[index] = { ...option, label: event.target.value }
+                              next[index] = event.target.value
                               updateSelectedConfig({ options: next })
                             }}
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -6950,11 +6397,9 @@ Make the language concise and appropriate for the learners. Do not include Markd
                             type="button"
                             onClick={() => {
                               const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
-                              if (selectedBlock.type === 'trueFalse' || current.length <= 1) return
                               const next = current.filter((_, optionIndex) => optionIndex !== index)
                               updateSelectedConfig({ options: next })
                             }}
-                            disabled={selectedBlock.type === 'trueFalse' || (selectedBlock.type === 'ranking' ? rankingOptions : optionList).length <= 1}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
@@ -6963,10 +6408,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ))}
                       <button
                         type="button"
-                        onClick={() => {
-                          const current = selectedBlock.type === 'ranking' ? rankingOptions : optionList
-                          updateSelectedConfig({ options: [...current, { id: `option-${Date.now()}`, label: `Option ${current.length + 1}` }] })
-                        }}
+                        onClick={() => updateSelectedConfig({ options: [...(selectedBlock.type === 'ranking' ? rankingOptions : optionList), `Option ${(selectedBlock.type === 'ranking' ? rankingOptions : optionList).length + 1}`] })}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
                       >
                         Add option
@@ -6976,10 +6418,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
                   {selectedBlock.type === 'categorize' && (
                     <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={getLabeledConfigItems(selectedConfig.items, 'item').map((item) => item.label).join('\n')} onChange={(event) => {
-                        const current = getLabeledConfigItems(selectedConfig.items, 'item')
-                        updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean).map((label, index) => ({ id: current[index]?.id || `item-${Date.now()}-${index}`, label })) })
-                      }} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Items, one per line<textarea value={(selectedConfig.items || []).join('\n')} onChange={(event) => updateSelectedConfig({ items: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Categories, one per line<textarea value={(selectedConfig.categories || []).join('\n')} onChange={(event) => updateSelectedConfig({ categories: event.target.value.split('\n').filter(Boolean) })} className="mt-1 min-h-32 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                     </div>
                   )}
@@ -6993,7 +6432,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
 
                   {selectedBlock.type === 'numeric' && (
                     <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={selectedConfig.correctAnswer ?? ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value === '' ? undefined : Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                      <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Correct answer<input type="number" value={Number(selectedConfig.correctAnswer ?? 0)} onChange={(event) => updateSelectedConfig({ correctAnswer: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Tolerance<input type="number" min={0} step="any" value={Number(selectedConfig.tolerance || 0)} onChange={(event) => updateSelectedConfig({ tolerance: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Unit<input value={selectedConfig.unit || ''} onChange={(event) => updateSelectedConfig({ unit: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Points<input type="number" min={0} value={Number(selectedConfig.points ?? 1)} onChange={(event) => updateSelectedConfig({ points: Number(event.target.value) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
@@ -7017,15 +6456,15 @@ Make the language concise and appropriate for the learners. Do not include Markd
                             Correct answer
                             {selectedConfig.multipleAnswers ? (
                               <select multiple value={Array.isArray(selectedConfig.correctAnswer) ? selectedConfig.correctAnswer : (selectedConfig.correctAnswer ? [selectedConfig.correctAnswer] : [])} onChange={(event) => updateSelectedConfig({ correctAnswer: Array.from(event.target.selectedOptions, (option) => option.value) })} className="mt-1 min-h-28 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
-                                {optionList.map((option) => (
-                                  <option key={option.id} value={option.id}>{option.label}</option>
+                                {(selectedConfig.options || []).map((option: string) => (
+                                  <option key={option} value={option}>{option}</option>
                                 ))}
                               </select>
                             ) : (
                               <select value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case">
                                 <option value="">Select an answer</option>
-                                {optionList.map((option) => (
-                                  <option key={option.id} value={option.id}>{option.label}</option>
+                                {(selectedConfig.options || []).map((option: string) => (
+                                  <option key={option} value={option}>{option}</option>
                                 ))}
                               </select>
                             )}
@@ -7055,19 +6494,16 @@ Make the language concise and appropriate for the learners. Do not include Markd
                                   nextPairs[index] = { ...nextPairs[index], answer: event.target.value }
                                   updateSelectedConfig({ pairs: nextPairs })
                                 }} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Match" />
-                                <button type="button" disabled={(selectedConfig.pairs || []).length <= 1} onClick={() => {
-                                  if ((selectedConfig.pairs || []).length <= 1) return
-                                  updateSelectedConfig({ pairs: (selectedConfig.pairs || []).filter((_: any, itemIndex: number) => itemIndex !== index) })
-                                }} className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Remove</button>
+                                <button type="button" onClick={() => updateSelectedConfig({ pairs: (selectedConfig.pairs || []).filter((_: any, itemIndex: number) => itemIndex !== index) })} className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">Remove</button>
                               </div>
                             </div>
                           ))}
-                          <button type="button" onClick={() => updateSelectedConfig(addMatchingPairConfig(selectedConfig))} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add pair</button>
+                          <button type="button" onClick={() => updateSelectedConfig({ pairs: [...(selectedConfig.pairs || []), { id: `pair-${Date.now()}`, prompt: 'New prompt', answer: 'New match' }] })} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Add pair</button>
                         </div>
                       ) : (
                         <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
                           Correct answer
-                          <input value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig(selectedBlock.type === 'fillBlank' ? getFillBlankCorrectAnswerPatch(event.target.value) : { correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
+                          <input value={selectedConfig.correctAnswer || ''} onChange={(event) => updateSelectedConfig({ correctAnswer: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" />
                         </label>
                       )}
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -7112,7 +6548,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                   {selectedBlock.type === 'board' && (
                     <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Start from a preset<select defaultValue="" onChange={(event) => { const preset = event.target.value as Parameters<typeof getBoardPresetColumns>[0]; if (!preset) return; const isBlank = boardColumns.map((column) => column.label).join('|') === 'Column 1|Column 2|Column 3'; if (!isBlank && !window.confirm('Replace the current board columns with this preset?')) { event.target.value = ''; return } updateSelectedConfig({ columns: getBoardPresetColumns(preset) }); event.target.value = '' }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case"><option value="">Choose preset…</option><option value="blank">Blank board</option><option value="pmi">PMI</option><option value="kwl">KWL</option><option value="start-stop-continue">Start / Stop / Continue</option><option value="pros-cons">Pros / Cons</option><option value="rose-bud-thorn">Rose / Bud / Thorn</option><option value="what-so-what-now-what">What? / So What? / Now What?</option></select></label>
-                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" disabled={boardColumns.length <= 1} onClick={() => { if (boardColumns.length <= 1) return; updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) }) }} className="rounded border border-red-200 px-2 text-xs text-red-700 disabled:opacity-40">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
+                      <div><p className="text-sm font-semibold text-slate-800">Columns</p>{boardColumns.map((column, index) => <div key={column.id} className="mt-2 rounded-lg border border-slate-200 bg-white p-2"><div className="flex gap-1"><input value={column.label} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, label: event.target.value }; updateSelectedConfig({ columns: next }) }} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" disabled={index === 0} onClick={() => { const next = [...boardColumns]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↑</button><button type="button" disabled={index === boardColumns.length - 1} onClick={() => { const next = [...boardColumns]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; updateSelectedConfig({ columns: next }) }} className="rounded border px-2 text-xs disabled:opacity-30">↓</button><button type="button" onClick={() => updateSelectedConfig({ columns: boardColumns.filter((item) => item.id !== column.id) })} className="rounded border border-red-200 px-2 text-xs text-red-700">Remove</button></div><input value={column.description || ''} onChange={(event) => { const next = [...boardColumns]; next[index] = { ...column, description: event.target.value }; updateSelectedConfig({ columns: next }) }} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" placeholder="Optional column description" /></div>)}<button type="button" disabled={boardColumns.length >= 6} onClick={() => updateSelectedConfig({ columns: [...boardColumns, { id: `board-column-${Date.now()}`, label: `Column ${boardColumns.length + 1}` }] })} className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium disabled:opacity-40">Add column</button></div>
                       <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Entry placeholder<input value={selectedConfig.placeholder || ''} onChange={(event) => updateSelectedConfig({ placeholder: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>
                       <label className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500"><input type="checkbox" checked={selectedConfig.allowMultipleEntries !== false} onChange={(event) => updateSelectedConfig({ allowMultipleEntries: event.target.checked })} />Allow multiple entries</label>
                       {selectedConfig.allowMultipleEntries !== false && <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">Maximum per column (0 = unlimited)<input type="number" min={0} value={Number(selectedConfig.maxEntriesPerColumn || 0)} onChange={(event) => updateSelectedConfig({ maxEntriesPerColumn: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm normal-case" /></label>}
@@ -7123,12 +6559,12 @@ Make the language concise and appropriate for the learners. Do not include Markd
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-sm font-semibold text-slate-800">Matrix rows</p>
                       {matrixRows.map((row, index) => (
-                        <div key={row.id} className="flex items-center gap-2">
+                        <div key={`${selectedBlock.id}-row-${index}`} className="flex items-center gap-2">
                           <input
-                            value={row.label}
+                            value={row}
                             onChange={(event) => {
                               const next = [...matrixRows]
-                              next[index] = { ...row, label: event.target.value }
+                              next[index] = event.target.value
                               updateSelectedConfig({ rows: next })
                             }}
                             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -7147,7 +6583,7 @@ Make the language concise and appropriate for the learners. Do not include Markd
                       ))}
                       <button
                         type="button"
-                        onClick={() => updateSelectedConfig({ rows: [...matrixRows, { id: `row-${Date.now()}`, label: `Criteria ${matrixRows.length + 1}` }] })}
+                        onClick={() => updateSelectedConfig({ rows: [...matrixRows, `Criteria ${matrixRows.length + 1}`] })}
                         className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
                       >
                         Add row
@@ -7248,11 +6684,9 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           <button
                             type="button"
                             onClick={() => {
-                              if (radarDimensions.length <= 3) return
                               const next = radarDimensions.filter((_, dimensionIndex) => dimensionIndex !== index)
                               updateSelectedConfig({ dimensions: next })
                             }}
-                            disabled={radarDimensions.length <= 3}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
@@ -7317,11 +6751,9 @@ Make the language concise and appropriate for the learners. Do not include Markd
                           <button
                             type="button"
                             onClick={() => {
-                              if (swotCategories.length <= 1) return
                               const next = swotCategories.filter((_, categoryIndex) => categoryIndex !== index)
                               updateSelectedConfig({ categories: next })
                             }}
-                            disabled={swotCategories.length <= 1}
                             className="rounded-lg border border-red-300 bg-red-50 px-2 py-2 text-xs font-medium text-red-700"
                           >
                             Remove
